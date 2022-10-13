@@ -16,3 +16,8 @@
 
 # Config file containing juicy secrets
 config.json
+
+# .idea files created by Goland
+.idea/**
+**/.idea/**
+
