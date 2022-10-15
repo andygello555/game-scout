@@ -7,10 +7,10 @@ import (
 )
 
 var DB *gorm.DB
-var models []interface{}
+var models []any
 
 func init() {
-	models = make([]interface{}, 0)
+	models = make([]any, 0)
 }
 
 // Open and initialise the DB global variable and run AutoMigrate for all the registered models.
@@ -40,6 +40,6 @@ func Close() {
 
 // RegisterModel will add the given model to the models global variable that will be passed to AutoMigrate when the DB
 // connection is opened.
-func RegisterModel(model interface{}) {
+func RegisterModel(model any) {
 	models = append(models, model)
 }

@@ -39,7 +39,9 @@ func main() {
 	defer db.Close()
 
 	// Set up the twitter API client
-	twitter.ClientCreate(globalConfig.Twitter)
+	if err := twitter.ClientCreate(globalConfig.Twitter); err != nil {
+		panic(err)
+	}
 
 	// Set the CLI app commands
 	app.Commands = []cli.Command{
@@ -70,6 +72,14 @@ func main() {
 				}
 			},
 		},
+		{
+			Name:  "tweetcap",
+			Usage: "gets the Tweet cap from the twitter client",
+			Action: func(c *cli.Context) error {
+				fmt.Println(twitter.Client.TweetCap)
+				return nil
+			},
+		},
 	}
 
 	// Run the CLI app
@@ -90,26 +100,26 @@ func sendOne(taskName string, args ...string) error {
 	// Parse the arguments to a list of tasks.Args
 	sigArgs := make([]tasks.Arg, len(args))
 	for i, arg := range args {
-		var parsed interface{}
+		var parsed any
 		var ok bool
 		var typeName string
-		var convert func(parse string) (interface{}, bool)
-		for typeName, convert = range map[string]func(parse string) (interface{}, bool){
-			"float64": func(parse string) (interface{}, bool) {
+		var convert func(parse string) (any, bool)
+		for typeName, convert = range map[string]func(parse string) (any, bool){
+			"float64": func(parse string) (any, bool) {
 				if value, err := strconv.ParseFloat(parse, 64); err != nil {
 					return nil, false
 				} else {
 					return value, true
 				}
 			},
-			"int64": func(parse string) (interface{}, bool) {
+			"int64": func(parse string) (any, bool) {
 				if value, err := strconv.ParseInt(parse, 10, 64); err != nil {
 					return nil, false
 				} else {
 					return value, true
 				}
 			},
-			"string": func(parse string) (interface{}, bool) {
+			"string": func(parse string) (any, bool) {
 				return parse, true
 			},
 		} {

@@ -1,7 +1,6 @@
 package tasks
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	myTwitter "github.com/andygello555/game-scout/twitter"
@@ -17,10 +16,18 @@ func TwitterClientTest(query string) (val string, err error) {
 			twitter.ExpansionReferencedTweetsID,
 			twitter.ExpansionReferencedTweetsIDAuthorID,
 		},
-		TweetFields: []twitter.TweetField{twitter.TweetFieldCreatedAt, twitter.TweetFieldConversationID, twitter.TweetFieldAttachments},
+		TweetFields: []twitter.TweetField{
+			twitter.TweetFieldCreatedAt,
+			twitter.TweetFieldConversationID,
+			twitter.TweetFieldAttachments,
+			twitter.TweetFieldPublicMetrics,
+			twitter.TweetFieldOrganicMetrics,
+			twitter.TweetFieldReferencedTweets,
+		},
+		SortOrder: twitter.TweetSearchSortOrderRelevancy,
 	}
 	var tweetResponse *twitter.TweetRecentSearchResponse
-	if tweetResponse, err = myTwitter.Client.TweetRecentSearch(context.Background(), query, opts); err != nil {
+	if tweetResponse, err = myTwitter.Client.RecentSearch(query, opts, myTwitter.TweetsPerSecond); err != nil {
 		return "", err
 	}
 

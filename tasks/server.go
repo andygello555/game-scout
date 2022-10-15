@@ -6,10 +6,10 @@ import (
 	"github.com/RichardKnop/machinery/v1/config"
 )
 
-var registeredTasks map[string]interface{}
+var registeredTasks map[string]any
 
 func init() {
-	registeredTasks = make(map[string]interface{})
+	registeredTasks = make(map[string]any)
 	RegisterTask("add", exampletasks.Add)
 	RegisterTask("multiply", exampletasks.Multiply)
 	RegisterTask("sum_ints", exampletasks.SumInts)
@@ -45,6 +45,6 @@ func StartServer(tasksConfig Config) (*machinery.Server, error) {
 	return server, server.RegisterTasks(registeredTasks)
 }
 
-func RegisterTask(name string, function interface{}) {
+func RegisterTask(name string, function any) {
 	registeredTasks[name] = function
 }

@@ -66,14 +66,20 @@ func (c *TaskConfig) TasksResultBackend() string   { return c.ResultBackend }
 func (c *TaskConfig) TasksRedis() task.RedisConfig { return c.Redis }
 
 type TwitterConfig struct {
-	APIKey       string `json:"api_key"`
-	APIKeySecret string `json:"api_key_secret"`
-	BearerToken  string `json:"bearer_token"`
+	APIKey       string   `json:"api_key"`
+	APIKeySecret string   `json:"api_key_secret"`
+	BearerToken  string   `json:"bearer_token"`
+	Username     string   `json:"username"`
+	Password     string   `json:"password"`
+	Hashtags     []string `json:"hashtags"`
 }
 
 func (c *TwitterConfig) TwitterAPIKey() string       { return c.APIKey }
 func (c *TwitterConfig) TwitterAPIKeySecret() string { return c.APIKeySecret }
 func (c *TwitterConfig) TwitterBearerToken() string  { return c.BearerToken }
+func (c *TwitterConfig) TwitterUsername() string     { return c.Username }
+func (c *TwitterConfig) TwitterPassword() string     { return c.Password }
+func (c *TwitterConfig) TwitterHashtags() []string   { return c.Hashtags }
 
 // Config contains the sub-configs for the various parts of the game-scout system. Such as the DBConfig.
 type Config struct {
