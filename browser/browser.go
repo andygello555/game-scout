@@ -305,7 +305,6 @@ func (b *Browser) Flow(pageNumber int, commands ...Command) ([]string, error) {
 	page := b.Pages[pageNumber]
 	for i, command := range commands {
 		if result, err = command.Execute(page, result); err != nil {
-			fmt.Println(b.Pages[pageNumber].Content())
 			return result.InnerTexts, errors.Wrap(err, fmt.Sprintf("flow failed on command %d", i))
 		}
 	}

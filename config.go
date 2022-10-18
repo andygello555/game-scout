@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	task "github.com/andygello555/game-scout/tasks"
 	"os"
+	"strings"
 )
 
 const ConfigDefaultPath = "config.json"
@@ -80,6 +81,16 @@ func (c *TwitterConfig) TwitterBearerToken() string  { return c.BearerToken }
 func (c *TwitterConfig) TwitterUsername() string     { return c.Username }
 func (c *TwitterConfig) TwitterPassword() string     { return c.Password }
 func (c *TwitterConfig) TwitterHashtags() []string   { return c.Hashtags }
+
+// TwitterQuery constructs a query from the Hashtags array by first prefixing each hashtag with a hash ("#"), then joining
+// the list with the " OR " separator.
+func (c *TwitterConfig) TwitterQuery() string {
+	hashtags := make([]string, len(c.Hashtags))
+	for i, hashtag := range c.Hashtags {
+		hashtags[i] = "#" + hashtag
+	}
+	return strings.Join(hashtags, " OR ")
+}
 
 // Config contains the sub-configs for the various parts of the game-scout system. Such as the DBConfig.
 type Config struct {

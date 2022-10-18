@@ -18,7 +18,6 @@ func init() {
 	RegisterTask("split", exampletasks.Split)
 	RegisterTask("panic_task", exampletasks.PanicTask)
 	RegisterTask("long_running_task", exampletasks.LongRunningTask)
-	RegisterTask("twitter_search_test", TwitterClientTest)
 }
 
 func StartServer(tasksConfig Config) (*machinery.Server, error) {

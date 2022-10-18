@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/backends/result"
@@ -8,7 +9,8 @@ import (
 	"github.com/RichardKnop/machinery/v1/tasks"
 	"github.com/andygello555/game-scout/db"
 	task "github.com/andygello555/game-scout/tasks"
-	"github.com/andygello555/game-scout/twitter"
+	myTwitter "github.com/andygello555/game-scout/twitter"
+	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/urfave/cli"
 	"os"
 	"reflect"
@@ -39,7 +41,7 @@ func main() {
 	defer db.Close()
 
 	// Set up the twitter API client
-	if err := twitter.ClientCreate(globalConfig.Twitter); err != nil {
+	if err := myTwitter.ClientCreate(globalConfig.Twitter); err != nil {
 		panic(err)
 	}
 
@@ -76,7 +78,102 @@ func main() {
 			Name:  "tweetcap",
 			Usage: "gets the Tweet cap from the twitter client",
 			Action: func(c *cli.Context) error {
-				fmt.Println(twitter.Client.TweetCap)
+				fmt.Println(myTwitter.Client.TweetCap)
+				return nil
+			},
+		},
+		{
+			Name:  "recentTweets",
+			Usage: "gets the recent tweets for the hashtags in config.json",
+			Action: func(c *cli.Context) (err error) {
+				total := 10
+				if c.Args().Present() {
+					var total64 int64
+					if total64, err = strconv.ParseInt(c.Args().First(), 10, 32); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+					total = int(total64)
+				}
+				opts := twitter.TweetRecentSearchOpts{
+					Expansions: []twitter.Expansion{
+						twitter.ExpansionEntitiesMentionsUserName,
+						twitter.ExpansionAuthorID,
+						twitter.ExpansionReferencedTweetsID,
+						twitter.ExpansionReferencedTweetsIDAuthorID,
+						twitter.ExpansionInReplyToUserID,
+					},
+					TweetFields: []twitter.TweetField{
+						twitter.TweetFieldCreatedAt,
+						twitter.TweetFieldConversationID,
+						twitter.TweetFieldAttachments,
+						twitter.TweetFieldPublicMetrics,
+						twitter.TweetFieldReferencedTweets,
+						twitter.TweetFieldContextAnnotations,
+						twitter.TweetFieldEntities,
+						twitter.TweetFieldAuthorID,
+					},
+					UserFields: []twitter.UserField{
+						twitter.UserFieldDescription,
+						twitter.UserFieldEntities,
+						twitter.UserFieldPublicMetrics,
+						twitter.UserFieldVerified,
+						twitter.UserFieldPinnedTweetID,
+					},
+					SortOrder: twitter.TweetSearchSortOrderRelevancy,
+				}
+				var response myTwitter.BindingResult
+				query := globalConfig.Twitter.TwitterQuery()
+				if response, err = myTwitter.Client.ExecuteBinding(myTwitter.RecentSearch, &myTwitter.BindingOptions{Total: total}, query, opts); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+
+				var enc []byte
+				if enc, err = json.MarshalIndent(response.Raw().(*twitter.TweetRaw).TweetDictionaries(), "", "    "); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+				fmt.Println(string(enc))
+				return nil
+			},
+		},
+		{
+			Name:  "userLookup",
+			Usage: "looks up the user with the given ID",
+			Action: func(c *cli.Context) (err error) {
+				if !c.Args().Present() {
+					return cli.NewExitError("no lookup given", 1)
+				}
+				id := c.Args().First()
+				opts := twitter.UserLookupOpts{
+					Expansions: []twitter.Expansion{
+						twitter.ExpansionPinnedTweetID,
+					},
+					TweetFields: []twitter.TweetField{
+						twitter.TweetFieldCreatedAt,
+						twitter.TweetFieldConversationID,
+						twitter.TweetFieldAttachments,
+						twitter.TweetFieldPublicMetrics,
+						twitter.TweetFieldReferencedTweets,
+						twitter.TweetFieldContextAnnotations,
+						twitter.TweetFieldEntities,
+					},
+					UserFields: []twitter.UserField{
+						twitter.UserFieldDescription,
+						twitter.UserFieldEntities,
+						twitter.UserFieldPublicMetrics,
+						twitter.UserFieldVerified,
+						twitter.UserFieldPinnedTweetID,
+					},
+				}
+				var response myTwitter.BindingResult
+				if response, err = myTwitter.Client.ExecuteBinding(myTwitter.UserRetrieve, nil, []string{id}, opts); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+
+				var enc []byte
+				if enc, err = json.MarshalIndent(response.Raw().(*twitter.UserRaw).UserDictionaries(), "", "    "); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+				fmt.Println(string(enc))
 				return nil
 			},
 		},

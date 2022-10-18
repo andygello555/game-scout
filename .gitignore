@@ -15,13 +15,12 @@
 # vendor/
 
 # Config file containing juicy secrets
-config.json
+# tweetCap JSON file containing the cached TweetCap
+*.json
 
 # .idea files created by Goland
 .idea/**
 **/.idea/**
-
-
 
 # Smommit ignore
 .smommit/

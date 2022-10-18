@@ -16,8 +16,8 @@ const (
 )
 
 const (
-	MaxTweetsPerRequest = 100
-	TimePerRequest      = time.Millisecond * 500
+	TimePerRequest          = time.Millisecond * 500
+	DefaultTweetCapLocation = "tweetCap.json"
 )
 
 // GetRateLimitFromDuration will return the upper RateLimit bound when given a time.Duration.
