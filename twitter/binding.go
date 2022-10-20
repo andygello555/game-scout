@@ -35,8 +35,10 @@ type BindingType int
 const (
 	// RecentSearch binds to the twitter.Client.TweetRecentSearch method.
 	RecentSearch BindingType = iota
-	// UserRetrieve binds to the twitter.Client.
+	// UserRetrieve binds to the twitter.Client.UserLookup method.
 	UserRetrieve
+	// UserNameRetrieve binds to the twitter.Client.UserNameLookup method.
+	UserNameRetrieve
 )
 
 // String returns the name of the BindingType.
@@ -46,6 +48,8 @@ func (bt BindingType) String() string {
 		return "RecentSearch"
 	case UserRetrieve:
 		return "UserRetrieve"
+	case UserNameRetrieve:
+		return "UserNameRetrieve"
 	default:
 		return "<nil>"
 	}
@@ -72,12 +76,12 @@ func (bt BindingType) WrapResponse(response any) (result BindingResult, err erro
 			return resultMeta
 		}
 		bindingResult.rateLimitMethod = func() *twitter.RateLimit { return tweetRecentSearchResponse.RateLimit }
-	case UserRetrieve:
+	case UserRetrieve, UserNameRetrieve:
 		userLookupResponse := response.(*twitter.UserLookupResponse)
 		bindingResult.rawMethod = func() any { return userLookupResponse.Raw }
 		bindingResult.rateLimitMethod = func() *twitter.RateLimit { return userLookupResponse.RateLimit }
 	default:
-		return nil, fmt.Errorf("cannot find RecentSearch %d", bt)
+		return nil, fmt.Errorf("cannot find BindingType no. %d", bt)
 	}
 	return bindingResult, nil
 }
@@ -430,8 +434,30 @@ var clientBindings = map[BindingType]Binding{
 			}
 			return response, nil
 		},
-		RequestRateLimit:            RequestRateLimit{Requests: 900, Every: time.Minute * 15},
+		RequestRateLimit:            RequestRateLimit{Requests: 300, Every: time.Minute * 15},
 		Type:                        UserRetrieve,
+		ResourceType:                User,
+		MinResourcesPerRequest:      1,
+		MaxResourcesPerRequest:      1,
+		SetOptionsForNextRequest:    nil,
+		SetOptionsForCurrentRequest: nil,
+		ClampMaxResults: func(binding *Binding, args ...any) (int, []any) {
+			return 1, args
+		},
+	},
+	UserNameRetrieve: {
+		Request: func(client *ClientWrapper, options *BindingOptions, args ...any) (response any, err error) {
+			if response, err = client.Client.UserNameLookup(
+				context.Background(),
+				args[0].([]string),
+				args[1].(twitter.UserLookupOpts),
+			); err != nil {
+				return response, err
+			}
+			return response, nil
+		},
+		RequestRateLimit:            RequestRateLimit{Requests: 300, Every: time.Minute * 15},
+		Type:                        UserNameRetrieve,
 		ResourceType:                User,
 		MinResourcesPerRequest:      1,
 		MaxResourcesPerRequest:      1,

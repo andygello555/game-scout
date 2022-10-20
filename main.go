@@ -11,7 +11,9 @@ import (
 	task "github.com/andygello555/game-scout/tasks"
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	"github.com/g8rswimmer/go-twitter/v2"
+	"github.com/google/uuid"
 	"github.com/urfave/cli"
+	"github.com/volatiletech/null/v9"
 	"os"
 	"reflect"
 	"strconv"
@@ -118,6 +120,7 @@ func main() {
 						twitter.UserFieldPublicMetrics,
 						twitter.UserFieldVerified,
 						twitter.UserFieldPinnedTweetID,
+						twitter.UserFieldCreatedAt,
 					},
 					SortOrder: twitter.TweetSearchSortOrderRelevancy,
 				}
@@ -137,12 +140,11 @@ func main() {
 		},
 		{
 			Name:  "userLookup",
-			Usage: "looks up the user with the given ID",
+			Usage: "looks up the users with the given IDs",
 			Action: func(c *cli.Context) (err error) {
 				if !c.Args().Present() {
 					return cli.NewExitError("no lookup given", 1)
 				}
-				id := c.Args().First()
 				opts := twitter.UserLookupOpts{
 					Expansions: []twitter.Expansion{
 						twitter.ExpansionPinnedTweetID,
@@ -162,10 +164,14 @@ func main() {
 						twitter.UserFieldPublicMetrics,
 						twitter.UserFieldVerified,
 						twitter.UserFieldPinnedTweetID,
+						twitter.UserFieldCreatedAt,
 					},
 				}
 				var response myTwitter.BindingResult
-				if response, err = myTwitter.Client.ExecuteBinding(myTwitter.UserRetrieve, nil, []string{id}, opts); err != nil {
+				ids := make([]string, 0, len(c.Args()))
+				ids = append(ids, c.Args().First())
+				ids = append(ids, c.Args().Tail()...)
+				if response, err = myTwitter.Client.ExecuteBinding(myTwitter.UserRetrieve, nil, ids, opts); err != nil {
 					return cli.NewExitError(err.Error(), 1)
 				}
 
@@ -175,6 +181,128 @@ func main() {
 				}
 				fmt.Println(string(enc))
 				return nil
+			},
+		},
+		{
+			Name:  "usernameLookup",
+			Usage: "looks up the users with the given usernames",
+			Action: func(c *cli.Context) (err error) {
+				if !c.Args().Present() {
+					return cli.NewExitError("no lookup given", 1)
+				}
+				opts := twitter.UserLookupOpts{
+					Expansions: []twitter.Expansion{
+						twitter.ExpansionPinnedTweetID,
+					},
+					TweetFields: []twitter.TweetField{
+						twitter.TweetFieldCreatedAt,
+						twitter.TweetFieldConversationID,
+						twitter.TweetFieldAttachments,
+						twitter.TweetFieldPublicMetrics,
+						twitter.TweetFieldReferencedTweets,
+						twitter.TweetFieldContextAnnotations,
+						twitter.TweetFieldEntities,
+					},
+					UserFields: []twitter.UserField{
+						twitter.UserFieldDescription,
+						twitter.UserFieldEntities,
+						twitter.UserFieldPublicMetrics,
+						twitter.UserFieldVerified,
+						twitter.UserFieldPinnedTweetID,
+						twitter.UserFieldCreatedAt,
+					},
+				}
+				var response myTwitter.BindingResult
+				usernames := make([]string, 0, len(c.Args()))
+				usernames = append(usernames, c.Args().First())
+				usernames = append(usernames, c.Args().Tail()...)
+				if response, err = myTwitter.Client.ExecuteBinding(myTwitter.UserNameRetrieve, nil, usernames, opts); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+
+				var enc []byte
+				if enc, err = json.MarshalIndent(response.Raw().(*twitter.UserRaw).UserDictionaries(), "", "    "); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+				fmt.Println(string(enc))
+				return nil
+			},
+		},
+		{
+			Name:        "testDB",
+			Description: "test insertion into DB",
+			Action: func(c *cli.Context) (err error) {
+				opts := twitter.TweetRecentSearchOpts{
+					Expansions: []twitter.Expansion{
+						twitter.ExpansionEntitiesMentionsUserName,
+						twitter.ExpansionAuthorID,
+						twitter.ExpansionReferencedTweetsID,
+						twitter.ExpansionReferencedTweetsIDAuthorID,
+						twitter.ExpansionInReplyToUserID,
+					},
+					TweetFields: []twitter.TweetField{
+						twitter.TweetFieldCreatedAt,
+						twitter.TweetFieldConversationID,
+						twitter.TweetFieldAttachments,
+						twitter.TweetFieldPublicMetrics,
+						twitter.TweetFieldReferencedTweets,
+						twitter.TweetFieldContextAnnotations,
+						twitter.TweetFieldEntities,
+						twitter.TweetFieldAuthorID,
+					},
+					UserFields: []twitter.UserField{
+						twitter.UserFieldDescription,
+						twitter.UserFieldEntities,
+						twitter.UserFieldPublicMetrics,
+						twitter.UserFieldVerified,
+						twitter.UserFieldPinnedTweetID,
+						twitter.UserFieldCreatedAt,
+					},
+					SortOrder: twitter.TweetSearchSortOrderRelevancy,
+				}
+				var response myTwitter.BindingResult
+				query := globalConfig.Twitter.TwitterQuery()
+				if response, err = myTwitter.Client.ExecuteBinding(myTwitter.RecentSearch, &myTwitter.BindingOptions{Total: 10}, query, opts); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+
+				var i int
+				developerIDs := make([]string, 10)
+				developerSnapshotIDs := make([]uuid.UUID, 10)
+				for _, tweet := range response.Raw().(*twitter.TweetRaw).TweetDictionaries() {
+					var createdAt time.Time
+					if createdAt, err = time.Parse("2006-01-02T15:04:05.000Z", tweet.Author.CreatedAt); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+
+					developerSnapshot := db.DeveloperSnapshot{
+						Developer: &db.Developer{
+							ID:             tweet.Author.ID,
+							Name:           tweet.Author.Name,
+							Username:       tweet.Author.UserName,
+							Description:    tweet.Author.Description,
+							ProfileCreated: createdAt,
+							PublicMetrics:  tweet.Author.PublicMetrics,
+						},
+						Tweets:                       null.Int32From(1),
+						TweetTimeRange:               db.NullDurationFromPtr(nil),
+						AverageDurationBetweenTweets: db.NullDurationFromPtr(nil),
+						TweetsPublicMetrics:          tweet.Tweet.PublicMetrics,
+						UserPublicMetrics:            tweet.Author.PublicMetrics,
+						ContextAnnotationSet:         myTwitter.NewContextAnnotationSet(tweet.Tweet.ContextAnnotations),
+					}
+					fmt.Printf("%d: %v\n", i+1, developerSnapshot)
+					if tx := db.DB.Create(&developerSnapshot); tx.Error != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+					developerIDs[i] = developerSnapshot.DeveloperID
+					developerSnapshotIDs[i] = developerSnapshot.ID
+					i++
+				}
+				if tx := db.DB.Where("id IN ?", developerIDs).Delete(&db.Developer{}); tx.Error != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+				return
 			},
 		},
 	}

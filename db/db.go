@@ -11,6 +11,9 @@ var models []any
 
 func init() {
 	models = make([]any, 0)
+	RegisterModel(&Developer{})
+	RegisterModel(&DeveloperSnapshot{})
+	RegisterModel(&Game{})
 }
 
 // Open and initialise the DB global variable and run AutoMigrate for all the registered models.
