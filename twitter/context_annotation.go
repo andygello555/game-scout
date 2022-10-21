@@ -281,6 +281,28 @@ func (cam ContextAnnotationDomain) String() string {
 	}
 }
 
+// Value returns the value of each domain in respect to their appropriateness towards Indie game posts on Twitter.
+func (cam ContextAnnotationDomain) Value() float64 {
+	switch cam {
+	case VideoGamePublisher:
+		return -500
+	case Brand, Product, ViralAccounts, DigitalCreator, ESportsTeam, ESportsPlayer, ESportsLeague:
+		return -5
+	case TvChannels, RadioStation, Podcast, Events, Community, Person, BrandVertical, BrandCategory,
+		EntertainmentPersonality, InterestsAndHobbiesVertical, ReoccurringTrends, MultimediaFranchise, FanCommunity,
+		PointsOfInterest, FieldsOfStudy, Animals, LocalNews:
+		return 5
+	case InterestsAndHobbiesCategory, InterestsAndHobbies, VideoGameTournament, VideoGamePersonality:
+		return 20
+	case Technology, VideoGame:
+		return 50
+	case VideoGameHardware, VideoGameConference:
+		return 500
+	default:
+		return 0.0
+	}
+}
+
 // ContextAnnotationSet represents a set of ContextAnnotation.
 type ContextAnnotationSet struct {
 	mapset.Set[ContextAnnotation]

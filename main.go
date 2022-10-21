@@ -8,12 +8,14 @@ import (
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/RichardKnop/machinery/v1/tasks"
 	"github.com/andygello555/game-scout/db"
+	"github.com/andygello555/game-scout/db/models"
 	task "github.com/andygello555/game-scout/tasks"
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/google/uuid"
 	"github.com/urfave/cli"
 	"github.com/volatiletech/null/v9"
+	"math/rand"
 	"os"
 	"reflect"
 	"strconv"
@@ -229,7 +231,14 @@ func main() {
 			},
 		},
 		{
-			Name:        "testDB",
+			Name: "testDB",
+			Flags: []cli.Flag{
+				cli.BoolFlag{
+					Name:     "no-delete",
+					Usage:    "whether to not delete the create Developers and DeveloperSnapshots",
+					Required: false,
+				},
+			},
 			Description: "test insertion into DB",
 			Action: func(c *cli.Context) (err error) {
 				opts := twitter.TweetRecentSearchOpts{
@@ -266,41 +275,85 @@ func main() {
 					return cli.NewExitError(err.Error(), 1)
 				}
 
+				rand.Seed(time.Now().Unix())
 				var i int
 				developerIDs := make([]string, 10)
 				developerSnapshotIDs := make([]uuid.UUID, 10)
+				gameIDs := make([]uuid.UUID, 10)
 				for _, tweet := range response.Raw().(*twitter.TweetRaw).TweetDictionaries() {
 					var createdAt time.Time
 					if createdAt, err = time.Parse("2006-01-02T15:04:05.000Z", tweet.Author.CreatedAt); err != nil {
 						return cli.NewExitError(err.Error(), 1)
 					}
 
-					developerSnapshot := db.DeveloperSnapshot{
-						Developer: &db.Developer{
-							ID:             tweet.Author.ID,
-							Name:           tweet.Author.Name,
-							Username:       tweet.Author.UserName,
-							Description:    tweet.Author.Description,
-							ProfileCreated: createdAt,
-							PublicMetrics:  tweet.Author.PublicMetrics,
-						},
-						Tweets:                       null.Int32From(1),
-						TweetTimeRange:               db.NullDurationFromPtr(nil),
-						AverageDurationBetweenTweets: db.NullDurationFromPtr(nil),
+					developer := models.Developer{
+						ID:             tweet.Author.ID,
+						Name:           tweet.Author.Name,
+						Username:       tweet.Author.UserName,
+						Description:    tweet.Author.Description,
+						ProfileCreated: createdAt,
+						PublicMetrics:  tweet.Author.PublicMetrics,
+					}
+					// Create the developer first...
+					if tx := db.DB.Create(&developer); tx.Error != nil {
+						return cli.NewExitError(tx.Error.Error(), 1)
+					}
+
+					publishers := []null.String{
+						null.StringFromPtr(nil),
+						null.StringFrom("fake"),
+					}
+					totalReviews := int32(rand.Intn(5000))
+					positiveReviews := int32(rand.Intn(int(totalReviews)))
+					game := models.Game{
+						Name:            null.StringFrom("fake"),
+						Storefront:      models.SteamStorefront,
+						Website:         null.StringFrom("https://store.steampowered.com/app/240"),
+						DeveloperID:     developer.ID,
+						Publisher:       publishers[rand.Intn(len(publishers))],
+						TotalReviews:    null.Int32From(totalReviews),
+						PositiveReviews: null.Int32From(positiveReviews),
+						NegativeReviews: null.Int32From(totalReviews - positiveReviews),
+					}
+					// Then the game...
+					if tx := db.DB.Create(&game); tx.Error != nil {
+						return cli.NewExitError(tx.Error.Error(), 1)
+					}
+
+					developerSnapshot := models.DeveloperSnapshot{
+						DeveloperID:                  developer.ID,
+						Tweets:                       1,
+						TweetTimeRange:               models.NullDurationFromPtr(nil),
+						AverageDurationBetweenTweets: models.NullDurationFromPtr(nil),
 						TweetsPublicMetrics:          tweet.Tweet.PublicMetrics,
 						UserPublicMetrics:            tweet.Author.PublicMetrics,
 						ContextAnnotationSet:         myTwitter.NewContextAnnotationSet(tweet.Tweet.ContextAnnotations),
 					}
-					fmt.Printf("%d: %v\n", i+1, developerSnapshot)
+					// Then finally the snapshot
 					if tx := db.DB.Create(&developerSnapshot); tx.Error != nil {
-						return cli.NewExitError(err.Error(), 1)
+						return cli.NewExitError(tx.Error.Error(), 1)
 					}
+
+					// We add the IDs to their respective arrays so we can delete them later...
 					developerIDs[i] = developerSnapshot.DeveloperID
 					developerSnapshotIDs[i] = developerSnapshot.ID
+					gameIDs[i] = game.ID
+
+					var tweetBytes []byte
+					if tweetBytes, err = json.MarshalIndent(tweet, "", "    "); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+					fmt.Printf("\n\n%d: %s\nWeighted score: %f\n", i+1, string(tweetBytes), developerSnapshot.WeightedScore)
 					i++
 				}
-				if tx := db.DB.Where("id IN ?", developerIDs).Delete(&db.Developer{}); tx.Error != nil {
-					return cli.NewExitError(err.Error(), 1)
+
+				if !c.Bool("no-delete") {
+					if tx := db.DB.Where("id IN ?", developerIDs).Delete(&models.Developer{}); tx.Error != nil {
+						return cli.NewExitError(tx.Error.Error(), 1)
+					}
+					if tx := db.DB.Where("id IN ?", gameIDs).Delete(&models.Game{}); tx.Error != nil {
+						return cli.NewExitError(tx.Error.Error(), 1)
+					}
 				}
 				return
 			},
