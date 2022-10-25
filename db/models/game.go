@@ -93,8 +93,8 @@ type gameWeight float64
 
 const (
 	PublisherWeight    gameWeight = 0.55
-	TotalReviewsWeight gameWeight = -0.75
-	ReviewScoreWeight  gameWeight = 0.65
+	TotalReviewsWeight gameWeight = -0.75 * 1000000.0
+	ReviewScoreWeight  gameWeight = 0.65 * 1000.0
 )
 
 // gameWeightedField represents a field that can have a weighting calculation applied to it in Game.
@@ -146,7 +146,7 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 		nullFloat64 := f.Interface().(null.Float64)
 		var val float64
 		if nullFloat64.IsValid() {
-			val = (*nullFloat64.Ptr()) * 1000.0
+			val = *nullFloat64.Ptr()
 		}
 		return []float64{val}
 	case null.Int32:
@@ -157,7 +157,7 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 			if valInt > 5000 {
 				valInt = 5000
 			}
-			val = float64(valInt) / 1000000.0
+			val = float64(valInt)
 		}
 		return []float64{val}
 	default:

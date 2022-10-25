@@ -49,6 +49,9 @@ func main() {
 		panic(err)
 	}
 
+	// Register any additional tasks for machinery
+	task.RegisterTask("scout", Scout)
+
 	// Set the CLI app commands
 	app.Commands = []cli.Command{
 		{
@@ -282,7 +285,7 @@ func main() {
 				gameIDs := make([]uuid.UUID, 10)
 				for _, tweet := range response.Raw().(*twitter.TweetRaw).TweetDictionaries() {
 					var createdAt time.Time
-					if createdAt, err = time.Parse("2006-01-02T15:04:05.000Z", tweet.Author.CreatedAt); err != nil {
+					if createdAt, err = time.Parse(myTwitter.CreatedAtFormat, tweet.Author.CreatedAt); err != nil {
 						return cli.NewExitError(err.Error(), 1)
 					}
 

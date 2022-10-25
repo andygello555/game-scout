@@ -55,6 +55,12 @@ func (bt BindingType) String() string {
 	}
 }
 
+// Binding returns the Binding for the BindingType using the clientBindings.
+func (bt BindingType) Binding() *Binding {
+	binding := clientBindings[bt]
+	return &binding
+}
+
 // WrapResponse wraps the given response from twitter.Client in a prototype that implements the BindingResult interface.
 func (bt BindingType) WrapResponse(response any) (result BindingResult, err error) {
 	bindingResult := &struct{ bindingResultProto }{}
