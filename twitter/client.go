@@ -227,7 +227,7 @@ func (w *ClientWrapper) GetTweetCap() (err error) {
 		var used, total, month, t, tz string
 		var day int
 		if _, err = fmt.Sscanf(tweetCapString, "%s Tweets pulled of %s\nResets on %s %d at %s %s", &used, &total, &month, &day, &t, &tz); err != nil {
-			return errors.Wrap(err, fmt.Sprintf("could not parse Tweet Cap string \"%s\"", tweetCapString))
+			return errors.Wrapf(err, "could not parse Tweet Cap string \"%s\"", tweetCapString)
 		}
 		tweetCap := &TweetCap{}
 		var usedInt, totalInt int64
@@ -266,15 +266,15 @@ func (w *ClientWrapper) WriteTweetCap() (err error) {
 	}
 	var file *os.File
 	if file, err = os.Create(DefaultTweetCapLocation); err != nil {
-		return errors.Wrap(err, fmt.Sprintf("could not create TweetCap file %s", DefaultTweetCapLocation))
+		return errors.Wrapf(err, "could not create TweetCap file %s", DefaultTweetCapLocation)
 	}
 	defer func(file *os.File) {
 		if err = file.Close(); err != nil {
-			err = errors.Wrap(err, fmt.Sprintf("could not close TweetCap file %s", DefaultTweetCapLocation))
+			err = errors.Wrapf(err, "could not close TweetCap file %s", DefaultTweetCapLocation)
 		}
 	}(file)
 	if _, err = file.Write(jsonBytes); err != nil {
-		return errors.Wrap(err, fmt.Sprintf("could not write to TweetCap file %s", DefaultTweetCapLocation))
+		return errors.Wrapf(err, "could not write to TweetCap file %s", DefaultTweetCapLocation)
 	}
 	return nil
 }
@@ -412,26 +412,26 @@ func (w *ClientWrapper) ExecuteBinding(bindingType BindingType, options *Binding
 
 			// Then we check the rate limit to make sure we can actually make this request.
 			if err = w.CheckRateLimit(&binding, offset); err != nil {
-				return bindingResult, errors.Wrap(err, fmt.Sprintf("rate limit check failed for request no. %d", requestNo))
+				return bindingResult, errors.Wrapf(err, "rate limit check failed for request no. %d", requestNo)
 			}
 
 			// Set the options for the current request. This usually just updates the resources returned by this
 			// request.
 			if args, err = binding.SetOptionsForCurrentRequest(offset, args...); err != nil {
-				return bindingResult, errors.Wrap(err, fmt.Sprintf("could not set options for current request no. %d", requestNo))
+				return bindingResult, errors.Wrapf(err, "could not set options for current request no. %d", requestNo)
 			}
 
 			log.INFO.Printf("\tExecuteBinding is on batch %d with offset: %d", requestNo, offset)
 
 			// Then we make the request itself, passing in the client, options and args.
 			if response, err = binding.Request(w, options, args...); err != nil {
-				return bindingResult, errors.Wrap(err, fmt.Sprintf("could not make %s request no. %d", binding.Type.String(), requestNo))
+				return bindingResult, errors.Wrapf(err, "could not make %s request no. %d", binding.Type.String(), requestNo)
 			}
 
 			// Then we wrap the response in a BindingResult instance.
 			var nextBindingResult BindingResult
 			if nextBindingResult, err = binding.Type.WrapResponse(response); err != nil {
-				return bindingResult, errors.Wrap(err, fmt.Sprintf("could not wrap response from request no. %d", requestNo))
+				return bindingResult, errors.Wrapf(err, "could not wrap response from request no. %d", requestNo)
 			}
 
 			// If the accumulator bindingResult has not yet been set, because it is the initial request, then we will
@@ -442,7 +442,7 @@ func (w *ClientWrapper) ExecuteBinding(bindingType BindingType, options *Binding
 				// Otherwise, if it's not the initial request, then we will merge the newly wrapped result with the
 				// accumulated response: bindingResult.
 				if err = bindingResult.MergeNext(nextBindingResult, &binding); err != nil {
-					return bindingResult, errors.Wrap(err, fmt.Sprintf("could not merge response from request no. %d and %d", requestNo-1, requestNo))
+					return bindingResult, errors.Wrapf(err, "could not merge response from request no. %d and %d", requestNo-1, requestNo)
 				}
 			}
 
@@ -450,13 +450,13 @@ func (w *ClientWrapper) ExecuteBinding(bindingType BindingType, options *Binding
 			// new list of arguments to pass to the Binding.Request method.
 			requestNo++
 			if args, err = binding.SetOptionsForNextRequest(bindingResult, args...); err != nil {
-				return bindingResult, errors.Wrap(err, fmt.Sprintf("could not set options for next request no. %d", requestNo))
+				return bindingResult, errors.Wrapf(err, "could not set options for next request no. %d", requestNo)
 			}
 
 			// Finally, we update the rate limits. First up it's the Tweet cap (if the BindingResourceType is Tweet)
 			if binding.ResourceType == Tweet {
 				if err = w.SetTweetCap(w.TweetCap.Used+offset, w.TweetCap.Remaining-offset, w.TweetCap.Total, w.TweetCap.Resets, w.TweetCap.LastFetched); err != nil {
-					return bindingResult, errors.Wrap(err, fmt.Sprintf("could not set TweetCap after request no. %d", requestNo-1))
+					return bindingResult, errors.Wrapf(err, "could not set TweetCap after request no. %d", requestNo-1)
 				}
 			}
 			// Next it's the request rate limit
@@ -475,23 +475,23 @@ func (w *ClientWrapper) ExecuteBinding(bindingType BindingType, options *Binding
 			maxResults, args = binding.ClampMaxResults(&binding, args...)
 		}
 		if err = w.CheckRateLimit(&binding, maxResults); err != nil {
-			return bindingResult, errors.Wrap(err, fmt.Sprintf("rate limit check failed for singleton %s request", binding.Type.String()))
+			return bindingResult, errors.Wrapf(err, "rate limit check failed for singleton %s request", binding.Type.String())
 		}
 
 		// Then we make the Request itself.
 		if response, err = binding.Request(w, options, args...); err != nil {
-			return bindingResult, errors.Wrap(err, fmt.Sprintf("could not make singleton %s request", binding.Type.String()))
+			return bindingResult, errors.Wrapf(err, "could not make singleton %s request", binding.Type.String())
 		}
 
 		// And then we wrap the response in a BindingResult.
 		if bindingResult, err = binding.Type.WrapResponse(response); err != nil {
-			return bindingResult, errors.Wrap(err, fmt.Sprintf("could not wrap response from singleton %s request", binding.Type.String()))
+			return bindingResult, errors.Wrapf(err, "could not wrap response from singleton %s request", binding.Type.String())
 		}
 
 		// Finally, we update the rate limits. First up it's the Tweet cap (if the BindingResourceType is Tweet)
 		if binding.ResourceType == Tweet {
 			if err = w.SetTweetCap(w.TweetCap.Used+maxResults, w.TweetCap.Remaining-maxResults, w.TweetCap.Total, w.TweetCap.Resets, w.TweetCap.LastFetched); err != nil {
-				return bindingResult, errors.Wrap(err, fmt.Sprintf("could not set TweetCap after singleton %s request", binding.Type.String()))
+				return bindingResult, errors.Wrapf(err, "could not set TweetCap after singleton %s request", binding.Type.String())
 			}
 		}
 		// Next it's the request rate limit

@@ -184,25 +184,28 @@ func (ds *DeveloperSnapshot) calculateGameField(tx *gorm.DB) (err error) {
 	var count int64
 	games := tx.Model(&Game{}).Where("developer_id = ?", ds.DeveloperID)
 	if games.Error != nil {
-		return errors.Wrap(games.Error, fmt.Sprintf(
+		return errors.Wrapf(
+			games.Error,
 			"could not get Games for developer_id = %s in DeveloperSnapshot.BeforeCreate",
 			ds.DeveloperID,
-		))
+		)
 	}
 	// Get the number of Games
 	if queryCount := games.Count(&count); queryCount.Error == nil {
 		ds.Games = int32(count)
 	} else if queryCount.Error != nil {
-		return errors.Wrap(queryCount.Error, fmt.Sprintf(
+		return errors.Wrapf(
+			queryCount.Error,
 			"could not count the number of Games for developer_id = %s in DeveloperSnapshot.BeforeCreate",
 			ds.DeveloperID,
-		))
+		)
 	}
 	if err = games.Where("weighted_score IS NOT NULL").Select("sum(weighted_score)").Row().Scan(&ds.GameWeightedScoresSum); err != nil {
-		return errors.Wrap(err, fmt.Sprintf(
+		return errors.Wrapf(
+			err,
 			"could not sum the weighted_scores of Games for developer_id = %s in DeveloperSnapshot.BeforeCreate",
 			ds.DeveloperID,
-		))
+		)
 	}
 	return
 }
@@ -219,27 +222,30 @@ func (ds *DeveloperSnapshot) BeforeCreate(tx *gorm.DB) (err error) {
 	// Then we calculate the version by looking at the other snapshots for this developer
 	developerSnapshots := tx.Model(&DeveloperSnapshot{}).Where("developer_id = ?", ds.DeveloperID)
 	if developerSnapshots.Error != nil {
-		return errors.Wrap(developerSnapshots.Error, fmt.Sprintf(
+		return errors.Wrapf(
+			developerSnapshots.Error,
 			"could not get DeveloperSnapshots for developer_id = %s in DeveloperSnapshot.BeforeCreate",
 			ds.DeveloperID,
-		))
+		)
 	}
 	var count int64
 	ds.Version = 0
 	if queryCount := developerSnapshots.Count(&count); count > 0 {
 		mostRecent := DeveloperSnapshot{}
 		if developerSnapshots = developerSnapshots.Order("created_at desc").First(&mostRecent); developerSnapshots.Error != nil {
-			return errors.Wrap(developerSnapshots.Error, fmt.Sprintf(
+			return errors.Wrapf(
+				developerSnapshots.Error,
 				"could not find the most recent DeveloperSnapshot for developer_id = %s in DeveloperSnapshot.BeforeCreate",
 				ds.DeveloperID,
-			))
+			)
 		}
 		ds.Version = mostRecent.Version + 1
 	} else if queryCount.Error != nil {
-		return errors.Wrap(queryCount.Error, fmt.Sprintf(
+		return errors.Wrapf(
+			queryCount.Error,
 			"could not count the number of DeveloperSnapshots for developer_id = %s in DeveloperSnapshot.BeforeCreate",
 			ds.DeveloperID,
-		))
+		)
 	}
 	return
 }

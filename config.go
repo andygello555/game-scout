@@ -24,6 +24,7 @@ func (c *DBConfig) DBHost() string     { return c.Host }
 func (c *DBConfig) DBUser() string     { return c.User }
 func (c *DBConfig) DBPassword() string { return c.Password }
 func (c *DBConfig) DBName() string     { return c.Name }
+func (c *DBConfig) TestDBName() string { return "test_" + c.DBName() }
 func (c *DBConfig) DBPort() int        { return c.Port }
 func (c *DBConfig) DBSSLMode() string {
 	sslMode := "disable"

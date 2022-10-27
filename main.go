@@ -7,10 +7,12 @@ import (
 	"github.com/RichardKnop/machinery/v1/backends/result"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/RichardKnop/machinery/v1/tasks"
+	"github.com/andygello555/game-scout/browser"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
 	task "github.com/andygello555/game-scout/tasks"
 	myTwitter "github.com/andygello555/game-scout/twitter"
+	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/google/uuid"
 	"github.com/urfave/cli"
@@ -39,18 +41,34 @@ func init() {
 
 func main() {
 	// We set up the global DB instance...
+	start := time.Now().UTC()
+	log.INFO.Printf("Setting up DB at %s", start.String())
 	if err := db.Open(globalConfig.DB); err != nil {
 		panic(err)
 	}
 	defer db.Close()
+	log.INFO.Printf("Done setting up DB in %s", time.Now().UTC().Sub(start).String())
 
 	// Set up the twitter API client
+	start = time.Now().UTC()
+	log.INFO.Printf("Setting up Twitter client at %s", start.String())
 	if err := myTwitter.ClientCreate(globalConfig.Twitter); err != nil {
 		panic(err)
 	}
+	log.INFO.Printf("Done setting up Twitter client in %s", time.Now().UTC().Sub(start).String())
 
 	// Register any additional tasks for machinery
-	task.RegisterTask("scout", Scout)
+	start = time.Now().UTC()
+	log.INFO.Printf("Registering additional tasks:")
+	for i, t := range []struct {
+		name string
+		fun  any
+	}{
+		{"scout", Scout},
+	} {
+		log.INFO.Printf("\tRegistering task no. %d: \"%s\"", i+1, t.name)
+		task.RegisterTask(t.name, t.fun)
+	}
 
 	// Set the CLI app commands
 	app.Commands = []cli.Command{
@@ -308,6 +326,9 @@ func main() {
 					}
 					totalReviews := int32(rand.Intn(5000))
 					positiveReviews := int32(rand.Intn(int(totalReviews)))
+					totalUpvotes := int32(rand.Intn(5000))
+					totalDownvotes := int32(rand.Intn(5000))
+					totalComments := int32(rand.Intn(3000))
 					game := models.Game{
 						Name:            null.StringFrom("fake"),
 						Storefront:      models.SteamStorefront,
@@ -317,6 +338,9 @@ func main() {
 						TotalReviews:    null.Int32From(totalReviews),
 						PositiveReviews: null.Int32From(positiveReviews),
 						NegativeReviews: null.Int32From(totalReviews - positiveReviews),
+						TotalUpvotes:    null.Int32From(totalUpvotes),
+						TotalDownvotes:  null.Int32From(totalDownvotes),
+						TotalComments:   null.Int32From(totalComments),
 					}
 					// Then the game...
 					if tx := db.DB.Create(&game); tx.Error != nil {
@@ -330,7 +354,7 @@ func main() {
 						AverageDurationBetweenTweets: models.NullDurationFromPtr(nil),
 						TweetsPublicMetrics:          tweet.Tweet.PublicMetrics,
 						UserPublicMetrics:            tweet.Author.PublicMetrics,
-						ContextAnnotationSet:         myTwitter.NewContextAnnotationSet(tweet.Tweet.ContextAnnotations),
+						ContextAnnotationSet:         myTwitter.NewContextAnnotationSet(tweet.Tweet.ContextAnnotations...),
 					}
 					// Then finally the snapshot
 					if tx := db.DB.Create(&developerSnapshot); tx.Error != nil {
@@ -358,6 +382,59 @@ func main() {
 						return cli.NewExitError(tx.Error.Error(), 1)
 					}
 				}
+				return
+			},
+		},
+		{
+			Name: "aggregateCommunityPosts",
+			Flags: []cli.Flag{
+				cli.Int64Flag{
+					Name:  "appid",
+					Usage: "the appid of the game to aggregate community posts for",
+					Value: 477160,
+				},
+			},
+			Description: "gets the total upvotes, downvotes, and comments for all community posts for a game",
+			Action: func(c *cli.Context) (err error) {
+				const batchSize = 50
+				appID := c.Int64("appid")
+				totalUpvotes := 0
+				totalDownvotes := 0
+				totalComments := 0
+				gidEvent := "0"
+				gidAnnouncement := "0"
+				gids := mapset.NewSet[string]()
+
+				for {
+					var jsonBody map[string]any
+					if jsonBody, err = browser.SteamCommunityPosts.JSON(appID, 0, batchSize, gidEvent, gidAnnouncement); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+					eventsProcessed := 0
+
+					for _, event := range jsonBody["events"].([]interface{}) {
+						eventBody := event.(map[string]any)
+						gid := eventBody["gid"].(string)
+						gidEvent = gid
+						if !gids.Contains(gid) {
+							gids.Add(gid)
+							announcementBody := eventBody["announcement_body"].(map[string]any)
+							gidAnnouncement = announcementBody["gid"].(string)
+							totalUpvotes += int(announcementBody["voteupcount"].(float64))
+							totalDownvotes += int(announcementBody["votedowncount"].(float64))
+							totalComments += int(announcementBody["commentcount"].(float64))
+							eventsProcessed++
+						}
+					}
+
+					if eventsProcessed == 0 {
+						break
+					}
+				}
+
+				fmt.Println("Total upvotes:", totalUpvotes)
+				fmt.Println("Total downvotes:", totalDownvotes)
+				fmt.Println("Total comments:", totalComments)
 				return
 			},
 		},

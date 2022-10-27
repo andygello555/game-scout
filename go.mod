@@ -18,6 +18,7 @@ require (
 require (
 	cloud.google.com/go v0.76.0 // indirect
 	cloud.google.com/go/pubsub v1.10.0 // indirect
+	github.com/DATA-DOG/go-sqlmock v1.5.0 // indirect
 	github.com/RichardKnop/logging v0.0.0-20190827224416-1a693bdd4fae // indirect
 	github.com/anaskhan96/soup v1.2.5 // indirect
 	github.com/aws/aws-sdk-go v1.37.16 // indirect

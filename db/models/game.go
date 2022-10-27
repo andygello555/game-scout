@@ -1,7 +1,6 @@
 package models
 
 import (
-	"database/sql/driver"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/volatiletech/null/v9"
@@ -9,49 +8,6 @@ import (
 	"math"
 	"reflect"
 )
-
-type Storefront string
-
-const (
-	UnknownStorefront Storefront = "U"
-	SteamStorefront   Storefront = "S"
-	ItchIOStorefront  Storefront = "I"
-)
-
-// String returns the formal name of the Storefront.
-func (sf Storefront) String() string {
-	switch sf {
-	case UnknownStorefront:
-		return "Unknown"
-	case SteamStorefront:
-		return "Steam"
-	case ItchIOStorefront:
-		return "itch.io"
-	default:
-		return "<nil>"
-	}
-}
-
-func (sf *Storefront) Scan(value interface{}) error {
-	*sf = Storefront(value.([]byte))
-	return nil
-}
-
-func (sf Storefront) Value() (driver.Value, error) {
-	return string(sf), nil
-}
-
-func (sf Storefront) Type() string {
-	return "storefront_type"
-}
-
-func (sf Storefront) Values() []string {
-	return []string{
-		string(UnknownStorefront),
-		string(SteamStorefront),
-		string(ItchIOStorefront),
-	}
-}
 
 // Game represents a game (supposedly) being developed by a Developer.
 type Game struct {
@@ -69,21 +25,27 @@ type Game struct {
 	// Publisher is the publisher for this game. Usually found via the Steam store API. If this cannot be found it is
 	// set to nil. If this is set then it negatively contributes to the Game's WeightedScore.
 	Publisher null.String
-	// TotalReviews for this game. Only set when Storefront is SteamStoreFront. If this cannot be found it is set to
+	// TotalReviews for this game. Only set when Storefront is SteamStorefront. If this cannot be found it is set to
 	// nil.
 	TotalReviews null.Int32
-	// PositiveReviews for this game. Only set when Storefront is SteamStoreFront. If this cannot be found it is set to
+	// PositiveReviews for this game. Only set when Storefront is SteamStorefront. If this cannot be found it is set to
 	// nil.
 	PositiveReviews null.Int32
-	// NegativeReviews for this game. Only set when Storefront is SteamStoreFront. If this cannot be found it is set to
+	// NegativeReviews for this game. Only set when Storefront is SteamStorefront. If this cannot be found it is set to
 	// nil.
 	NegativeReviews null.Int32
-	// ReviewScore for this game (PositiveReviews / TotalReviews). Only set when Storefront is SteamStoreFront,
+	// ReviewScore for this game (PositiveReviews / TotalReviews). Only set when Storefront is SteamStorefront,
 	// PositiveReviews is set, and NegativeReviews is set. This is a computed field, no need to set it before saving.
 	ReviewScore null.Float64
-	// WeightedScore is a weighted average comprised of the values taken from Publisher, TotalReviews, and ReviewScore
-	// for this game. If Game.checkCalculateWeightedScore is false then this will be nil. This is a computed field, no
-	// need to set it before saving.
+	// TotalUpvotes for this game. Only set when Storefront is SteamStorefront.
+	TotalUpvotes null.Int32
+	// TotalDownvotes for this game. Only set when Storefront is SteamStorefront.
+	TotalDownvotes null.Int32
+	// TotalComments for this game. Only set when Storefront is SteamStorefront or ItchIOStorefront.
+	TotalComments null.Int32
+	// WeightedScore is a weighted average comprised of the values taken from Publisher, TotalReviews, ReviewScore,
+	// TotalUpvotes, TotalDownvotes, and TotalComments for this game. If Game.checkCalculateWeightedScore is false then
+	// this will be nil. This is a computed field, no need to set it before saving.
 	WeightedScore null.Float64
 }
 
@@ -92,18 +54,24 @@ type Game struct {
 type gameWeight float64
 
 const (
-	PublisherWeight    gameWeight = 0.55
-	TotalReviewsWeight gameWeight = -0.75 * 1000000.0
-	ReviewScoreWeight  gameWeight = 0.65 * 1000.0
+	PublisherWeight      gameWeight = 0.55
+	TotalReviewsWeight   gameWeight = -0.75
+	ReviewScoreWeight    gameWeight = 0.65
+	TotalUpvotesWeight   gameWeight = 0.45
+	TotalDownvotesWeight gameWeight = -0.35
+	TotalCommentsWeight  gameWeight = 0.35
 )
 
 // gameWeightedField represents a field that can have a weighting calculation applied to it in Game.
 type gameWeightedField string
 
 const (
-	Publisher    gameWeightedField = "Publisher"
-	TotalReviews gameWeightedField = "TotalReviews"
-	ReviewScore  gameWeightedField = "ReviewScore"
+	Publisher      gameWeightedField = "Publisher"
+	TotalReviews   gameWeightedField = "TotalReviews"
+	ReviewScore    gameWeightedField = "ReviewScore"
+	TotalUpvotes   gameWeightedField = "TotalUpvotes"
+	TotalDownvotes gameWeightedField = "TotalDownvotes"
+	TotalComments  gameWeightedField = "TotalComments"
 )
 
 // String returns the string value of the gameWeightedField.
@@ -119,6 +87,12 @@ func (gf gameWeightedField) Weight() (w float64, inverse bool) {
 		w = float64(TotalReviewsWeight)
 	case ReviewScore:
 		w = float64(ReviewScoreWeight)
+	case TotalUpvotes:
+		w = float64(TotalUpvotesWeight)
+	case TotalDownvotes:
+		w = float64(TotalDownvotesWeight)
+	case TotalComments:
+		w = float64(TotalCommentsWeight)
 	default:
 		panic(fmt.Errorf("\"%s\" is not a gameWeightedField", gf))
 	}
@@ -132,8 +106,8 @@ func (gf gameWeightedField) Weight() (w float64, inverse bool) {
 func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []float64 {
 	r := reflect.ValueOf(model)
 	f := reflect.Indirect(r).FieldByName(gf.String())
-	switch f.Interface().(type) {
-	case null.String:
+	switch gf {
+	case Publisher:
 		nullString := f.Interface().(null.String)
 		var val float64
 		if nullString.IsValid() {
@@ -142,14 +116,14 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 			val = 3000.0
 		}
 		return []float64{val}
-	case null.Float64:
+	case ReviewScore:
 		nullFloat64 := f.Interface().(null.Float64)
 		var val float64
 		if nullFloat64.IsValid() {
-			val = *nullFloat64.Ptr()
+			val = (*nullFloat64.Ptr()) * 1000.0
 		}
 		return []float64{val}
-	case null.Int32:
+	case TotalReviews:
 		nullInt32 := f.Interface().(null.Int32)
 		var val float64
 		if nullInt32.IsValid() {
@@ -157,14 +131,18 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 			if valInt > 5000 {
 				valInt = 5000
 			}
-			val = float64(valInt)
+			val = float64(valInt) / 1000000.0
+		}
+		return []float64{val}
+	case TotalUpvotes, TotalDownvotes, TotalComments:
+		nullInt32 := f.Interface().(null.Int32)
+		var val float64
+		if nullInt32.IsValid() {
+			val = float64(*nullInt32.Ptr())
 		}
 		return []float64{val}
 	default:
-		panic(fmt.Errorf(
-			"gameWeightedField has type %s, and cannot be converted to []float64",
-			f.Type().String(),
-		))
+		panic(fmt.Errorf("gameWeightedField %s is not recognized, and cannot be converted to []float64", gf))
 	}
 }
 
@@ -173,14 +151,16 @@ func (gf gameWeightedField) Fields() []WeightedField {
 		Publisher,
 		TotalReviews,
 		ReviewScore,
+		TotalUpvotes,
+		TotalDownvotes,
+		TotalComments,
 	}
 }
 
 // checkCalculateWeightedScore checks if we can calculate the WeightedScore for this Game. This is dependent on the
-// Website, Storefront, Publisher, TotalReviews, and ReviewScore fields.
+// Website field being set and the Storefront not being UnknownStorefront.
 func (g *Game) checkCalculateWeightedScore() bool {
-	return g.Website.IsValid() && g.Storefront != UnknownStorefront && g.TotalReviews.IsValid() &&
-		g.ReviewScore.IsValid()
+	return g.Website.IsValid() && g.Storefront != UnknownStorefront
 }
 
 // checkCalculateReviewScore checks if we can calculate the ReviewScore for this Game. This is dependent on the

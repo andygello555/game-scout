@@ -99,7 +99,7 @@ func (ct CommandType) Execute(page playwright.Page, command *Command, previousRe
 		for i, element := range previousResult.Elements {
 			text := ""
 			if text, err = element.InnerText(); err != nil {
-				err = errors.Wrap(err, fmt.Sprintf("could not get the InnerText of element %d", i))
+				err = errors.Wrapf(err, "could not get the InnerText of element %d", i)
 				break
 			} else {
 				if command.FindFunc(text) {
@@ -115,7 +115,7 @@ func (ct CommandType) Execute(page playwright.Page, command *Command, previousRe
 			}
 		}
 		if err = previousResult.Elements[0].Type(command.Value, options...); err != nil {
-			err = errors.Wrap(err, fmt.Sprintf("cannot type \"%s\" into the first element", command.Value))
+			err = errors.Wrapf(err, "cannot type \"%s\" into the first element", command.Value)
 		}
 	case Click:
 		options := make([]playwright.ElementHandleClickOptions, len(command.Options))
@@ -131,7 +131,7 @@ func (ct CommandType) Execute(page playwright.Page, command *Command, previousRe
 		for i, element := range previousResult.Elements {
 			text := ""
 			if text, err = element.InnerText(); err != nil {
-				err = errors.Wrap(err, fmt.Sprintf("could not get the InnerText of element %d", i))
+				err = errors.Wrapf(err, "could not get the InnerText of element %d", i)
 				break
 			} else {
 				result.InnerTexts = append(result.InnerTexts, text)
@@ -145,7 +145,7 @@ func (ct CommandType) Execute(page playwright.Page, command *Command, previousRe
 			}
 		}
 		if _, err = page.Goto(command.Value); err != nil {
-			err = errors.Wrap(err, fmt.Sprintf("could not goto \"%s\"", command.Value))
+			err = errors.Wrapf(err, "could not goto \"%s\"", command.Value)
 		}
 	default:
 		return result, fmt.Errorf("cannot execute command type %d", ct)
@@ -198,7 +198,7 @@ type Command struct {
 func (c *Command) Execute(page playwright.Page, previousResult *CommandResult) (result *CommandResult, err error) {
 	if result, err = c.Type.Execute(page, c, previousResult); err != nil {
 		if !c.Optional {
-			return result, errors.Wrap(err, fmt.Sprintf("execution failed for %s", c.String()))
+			return result, errors.Wrapf(err, "execution failed for %s", c.String())
 		} else {
 			// When the Command is optional we will set the result to the previous result.
 			result = previousResult
@@ -305,7 +305,7 @@ func (b *Browser) Flow(pageNumber int, commands ...Command) ([]string, error) {
 	page := b.Pages[pageNumber]
 	for i, command := range commands {
 		if result, err = command.Execute(page, result); err != nil {
-			return result.InnerTexts, errors.Wrap(err, fmt.Sprintf("flow failed on command %d", i))
+			return result.InnerTexts, errors.Wrapf(err, "flow failed on command %d", i)
 		}
 	}
 	return result.InnerTexts, nil

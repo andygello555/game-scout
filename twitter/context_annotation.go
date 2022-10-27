@@ -318,7 +318,7 @@ func (cas *ContextAnnotationSet) Scan(value any) (err error) {
 
 	var contextAnnotations []ContextAnnotation
 	if err = json.Unmarshal(bytes, &contextAnnotations); err != nil {
-		return errors.Wrap(err, fmt.Sprintf("could not unmarshal JSONB to ContextAnnotation \"%s\"", string(bytes)))
+		return errors.Wrapf(err, "could not unmarshal JSONB to ContextAnnotation \"%s\"", string(bytes))
 	}
 
 	set := mapset.NewSet[ContextAnnotation]()
@@ -351,7 +351,7 @@ func (ContextAnnotationSet) GormDBDataType(db *gorm.DB, field *schema.Field) str
 // NewContextAnnotationSet creates a ContextAnnotationSet. If twitter.TweetContextAnnotationObj objects are provided,
 // these will be converted to ContextAnnotation using ContextAnnotation.FromTweetContextAnnotationObj, then added to the
 // ContextAnnotationSet.
-func NewContextAnnotationSet(objs []*twitter.TweetContextAnnotationObj) *ContextAnnotationSet {
+func NewContextAnnotationSet(objs ...*twitter.TweetContextAnnotationObj) *ContextAnnotationSet {
 	set := mapset.NewSet[ContextAnnotation]()
 	for _, obj := range objs {
 		ca := ContextAnnotation{}
