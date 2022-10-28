@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"math"
 	"reflect"
 	"time"
@@ -256,4 +257,9 @@ func (ds *DeveloperSnapshot) BeforeUpdate(tx *gorm.DB) (err error) {
 	}
 	ds.WeightedScore = CalculateWeightedScore(ds, Tweets)
 	return
+}
+
+// OnConflict returns the clause.OnConflict that should be checked in an upsert clause.
+func (ds *DeveloperSnapshot) OnConflict() clause.OnConflict {
+	return clause.OnConflict{Columns: []clause.Column{{Name: "id"}}}
 }

@@ -5,6 +5,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/volatiletech/null/v9"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"math"
 	"reflect"
 )
@@ -17,8 +18,8 @@ type Game struct {
 	Name null.String
 	// Storefront is where this game is sold. If this cannot be found it is set to nil.
 	Storefront Storefront `gorm:"type:storefront_type"`
-	// Website is the URL for this game's website. Usually a Steam store page. If this cannot be found it is set to nil.
-	Website null.String
+	// Website is the URL for this game's website. Usually a Steam store page.
+	Website null.String `gorm:"index:idx_website,where:website is not null,unique"`
 	// DeveloperID is the foreign key to the Developer.
 	DeveloperID string
 	Developer   *Developer `gorm:"constraint:OnDelete:CASCADE;"`
@@ -174,7 +175,11 @@ func (g *Game) updateComputedFields(tx *gorm.DB) {
 	// First we set the ReviewScore
 	g.ReviewScore = null.Float64FromPtr(nil)
 	if g.checkCalculateReviewScore() {
-		g.ReviewScore = null.Float64From(float64(g.PositiveReviews.Int32) / float64(g.TotalReviews.Int32))
+		if *g.TotalReviews.Ptr() == 0 {
+			g.ReviewScore = null.Float64From(1.0)
+		} else {
+			g.ReviewScore = null.Float64From(float64(g.PositiveReviews.Int32) / float64(g.TotalReviews.Int32))
+		}
 	}
 
 	// Then we set the WeightedScore
@@ -192,4 +197,15 @@ func (g *Game) BeforeCreate(tx *gorm.DB) (err error) {
 func (g *Game) BeforeUpdate(tx *gorm.DB) (err error) {
 	g.updateComputedFields(tx)
 	return
+}
+
+// OnConflict returns the clause.OnConflict that should be checked in an upsert clause.
+func (g *Game) OnConflict() clause.OnConflict {
+	return clause.OnConflict{
+		Columns: []clause.Column{{Name: "website"}},
+		TargetWhere: clause.Where{Exprs: []clause.Expression{clause.Not(clause.Expression(clause.Eq{
+			Column: "website",
+			Value:  nil,
+		}))}},
+	}
 }

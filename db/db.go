@@ -68,7 +68,9 @@ func Open(config Config) error {
 	if err = createDB(dbName, config); err != nil {
 		return err
 	}
-	if DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{}); err != nil {
+	if DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{
+		//Logger: logger.Default.LogMode(logger.Info),
+	}); err != nil {
 		return err
 	}
 	createEnums()

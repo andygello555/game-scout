@@ -438,6 +438,28 @@ func main() {
 				return
 			},
 		},
+		{
+			Name: "scout",
+			Flags: []cli.Flag{
+				cli.IntFlag{
+					Name:  "tweets",
+					Usage: "the number of total tweets to scrape",
+					Value: 200,
+				},
+				cli.IntFlag{
+					Name:  "batchSize",
+					Usage: "the number of tweets in each batch of the Scout process",
+					Value: 100,
+				},
+			},
+			Description: "run the Scout function for the given number of tweets",
+			Action: func(c *cli.Context) (err error) {
+				if err = Scout(c.Int("batchSize"), c.Int("tweets")); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+				return
+			},
+		},
 	}
 
 	// Run the CLI app

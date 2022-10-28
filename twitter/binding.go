@@ -417,8 +417,9 @@ var clientBindings = map[BindingType]Binding{
 		ClampMaxResults: func(binding *Binding, args ...any) (int, []any) {
 			maxResults := 0
 			options := args[1].(twitter.TweetRecentSearchOpts)
-			if options.MaxResults == 0 {
-				maxResults = 10
+			if options.MaxResults < binding.MinResourcesPerRequest {
+				options.MaxResults = binding.MinResourcesPerRequest
+				maxResults = binding.MinResourcesPerRequest
 			} else if options.MaxResults > binding.MaxResourcesPerRequest {
 				options.MaxResults = binding.MaxResourcesPerRequest
 				maxResults = binding.MaxResourcesPerRequest

@@ -2,6 +2,7 @@ package models
 
 import (
 	"github.com/g8rswimmer/go-twitter/v2"
+	"gorm.io/gorm/clause"
 	"time"
 )
 
@@ -22,4 +23,9 @@ type Developer struct {
 	PublicMetrics *twitter.UserMetricsObj `gorm:"embedded;embeddedPrefix:current_"`
 	// UpdatedAt is when this developer was updated. So we know up until when the PublicMetrics are fresh to.
 	UpdatedAt time.Time
+}
+
+// OnConflict returns the clause.OnConflict that should be checked in an upsert clause.
+func (d *Developer) OnConflict() clause.OnConflict {
+	return clause.OnConflict{Columns: []clause.Column{{Name: "id"}}}
 }
