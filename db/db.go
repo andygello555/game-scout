@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	myModels "github.com/andygello555/game-scout/db/models"
+	"github.com/pkg/errors"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/schema"
+	"math"
 	"reflect"
 	"strings"
 	"sync"
@@ -56,6 +58,15 @@ type Enum interface {
 	Values() []string
 }
 
+// ComputedFieldsModel represents a model that has computed fields.
+type ComputedFieldsModel interface {
+	// UpdateComputedFields updates the computed fields for the instance of the ComputedFieldsModel.
+	UpdateComputedFields(tx *gorm.DB) (err error)
+	// Empty returns a pointer to an empty instance of the ComputedFieldsModel that can be used as the output for
+	// gorm.DB.ScanRows for instance.
+	Empty() any
+}
+
 // Open and initialise the DB global variable and run AutoMigrate for all the registered models.
 func Open(config Config) error {
 	var err error
@@ -100,6 +111,91 @@ func Close() {
 		panic(err)
 	}
 	DB = nil
+}
+
+// UpdateComputedFieldsForModels will update the computed fields in all rows of the given model names.
+func UpdateComputedFieldsForModels(modelNames ...string) (err error) {
+	log.INFO.Printf("Running UpdateComputedFieldsForModels")
+	if len(modelNames) == 0 {
+		for modelName := range models {
+			modelNames = append(modelNames, modelName)
+		}
+	}
+
+	// We defer a function to recover from any panics that occur in the goroutines for each page and set the err return
+	// parameter.
+	defer func() {
+		if pan := recover(); pan != nil {
+			switch pan.(type) {
+			case error:
+				err = errors.Wrap(pan.(error), "could not update computed model instances")
+			default:
+				panic(pan)
+			}
+		}
+	}()
+
+	const pageSize = 100
+	for i, modelName := range modelNames {
+		model := models[modelName]
+		if _, ok := model.Model.(ComputedFieldsModel); ok {
+			var count int64
+			if err = DB.Model(model.Model).Count(&count).Error; err != nil {
+				return errors.Wrapf(err, "could not find count for Model %s", modelName)
+			}
+			if count > 0 {
+				log.INFO.Printf("\t%d: Updating computed fields for %s, %d rows", i+1, modelName, count)
+				var wg sync.WaitGroup
+				pages := int(math.Ceil(float64(count) / float64(pageSize)))
+				wg.Add(pages)
+				for page := 0; page < pages; page++ {
+					// We start a new goroutine for each page to handle the rows for that page
+					go func(page int, model *DBModel) {
+						defer wg.Done()
+						var err error
+						var rows *sql.Rows
+
+						// We find the rows with the limit and the offset for the page
+						if rows, err = DB.Model(model.Model).Limit(pageSize).Offset(page * pageSize).Rows(); err != nil {
+							panic(err)
+						}
+
+						// We defer a function to close the rows and panic on any errors
+						defer func(rows *sql.Rows) {
+							if err := rows.Close(); err != nil {
+								panic(err)
+							}
+						}(rows)
+
+						for rows.Next() {
+							// For each row we will scan the row into an empty instance of the ComputedFieldsModel.
+							instance := model.Model.(ComputedFieldsModel).Empty()
+							if err = DB.ScanRows(rows, instance); err != nil {
+								panic(err)
+							}
+
+							// We then assert the instance to a ComputedFieldsModel and call the UpdateComputedFields
+							// method.
+							if err = instance.(ComputedFieldsModel).UpdateComputedFields(DB); err != nil {
+								panic(err)
+							}
+
+							// Finally, save the instance
+							DB.Save(instance)
+						}
+					}(page, model)
+				}
+
+				// Wait for each goroutine for each page to finish
+				wg.Wait()
+			} else {
+				log.INFO.Printf("\t%d: %s has no rows. Skipping", i+1, modelName)
+			}
+		} else {
+			log.INFO.Printf("\t%d: %s is not a ComputedFieldsModel. Skipping...", i+1, modelName)
+		}
+	}
+	return
 }
 
 // RegisterModel will find the schema of the given model, wrap this information in a DBModel and add it to the models

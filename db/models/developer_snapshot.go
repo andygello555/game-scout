@@ -211,14 +211,25 @@ func (ds *DeveloperSnapshot) calculateGameField(tx *gorm.DB) (err error) {
 	return
 }
 
+func (ds *DeveloperSnapshot) UpdateComputedFields(tx *gorm.DB) (err error) {
+	ds.WeightedScore = CalculateWeightedScore(ds, Tweets)
+	return
+}
+
+func (ds *DeveloperSnapshot) Empty() any {
+	return &DeveloperSnapshot{}
+}
+
 func (ds *DeveloperSnapshot) BeforeCreate(tx *gorm.DB) (err error) {
-	// First we calculate the Games and the GameWeightedScoresSum
+	// We only calculate the Games and GameWeightedScoresSum when we first create the developer snapshot. This is because
+	// we take a snapshot of the games at that current point in time.
 	if err = ds.calculateGameField(tx); err != nil {
 		return err
 	}
 
-	// Then we calculate the WeightedScore
-	ds.WeightedScore = CalculateWeightedScore(ds, Tweets)
+	if err = ds.UpdateComputedFields(tx); err != nil {
+		return errors.Wrapf(err, "could not update computed fields for DeveloperSnapshot %s", ds.ID.String())
+	}
 
 	// Then we calculate the version by looking at the other snapshots for this developer
 	developerSnapshots := tx.Model(&DeveloperSnapshot{}).Where("developer_id = ?", ds.DeveloperID)
@@ -252,10 +263,9 @@ func (ds *DeveloperSnapshot) BeforeCreate(tx *gorm.DB) (err error) {
 }
 
 func (ds *DeveloperSnapshot) BeforeUpdate(tx *gorm.DB) (err error) {
-	if err = ds.calculateGameField(tx); err != nil {
-		return err
+	if err = ds.UpdateComputedFields(tx); err != nil {
+		err = errors.Wrapf(err, "could not update computed fields for DeveloperSnapshot %s", ds.ID.String())
 	}
-	ds.WeightedScore = CalculateWeightedScore(ds, Tweets)
 	return
 }
 

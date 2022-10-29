@@ -460,6 +460,23 @@ func main() {
 				return
 			},
 		},
+		{
+			Name: "updateComputedFields",
+			Flags: []cli.Flag{
+				cli.StringSliceFlag{
+					Name:  "models",
+					Usage: "models to update computed fields for",
+					Value: &cli.StringSlice{},
+				},
+			},
+			Description: "run UpdateComputedFieldsForModels for the given models names",
+			Action: func(c *cli.Context) (err error) {
+				if err = db.UpdateComputedFieldsForModels(c.StringSlice("models")...); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+				return
+			},
+		},
 	}
 
 	// Run the CLI app

@@ -36,7 +36,14 @@ func (sf Storefront) String() string {
 }
 
 func (sf *Storefront) Scan(value interface{}) error {
-	*sf = Storefront(value.([]byte))
+	switch value.(type) {
+	case []byte:
+		*sf = Storefront(value.([]byte))
+	case string:
+		*sf = Storefront(value.(string))
+	default:
+		panic(fmt.Errorf("could not convert DB value to Storefront"))
+	}
 	return nil
 }
 

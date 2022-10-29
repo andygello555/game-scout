@@ -3,6 +3,7 @@ package models
 import (
 	"fmt"
 	"github.com/google/uuid"
+	"github.com/pkg/errors"
 	"github.com/volatiletech/null/v9"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -170,8 +171,8 @@ func (g *Game) checkCalculateReviewScore() bool {
 	return g.TotalReviews.IsValid() && g.PositiveReviews.IsValid()
 }
 
-// updateComputedFields will update the fields in Game that are computed.
-func (g *Game) updateComputedFields(tx *gorm.DB) {
+// UpdateComputedFields will update the fields in Game that are computed.
+func (g *Game) UpdateComputedFields(tx *gorm.DB) (err error) {
 	// First we set the ReviewScore
 	g.ReviewScore = null.Float64FromPtr(nil)
 	if g.checkCalculateReviewScore() {
@@ -187,15 +188,24 @@ func (g *Game) updateComputedFields(tx *gorm.DB) {
 	if g.checkCalculateWeightedScore() {
 		g.WeightedScore = null.Float64From(CalculateWeightedScore(g, Publisher))
 	}
+	return
+}
+
+func (g *Game) Empty() any {
+	return &Game{}
 }
 
 func (g *Game) BeforeCreate(tx *gorm.DB) (err error) {
-	g.updateComputedFields(tx)
+	if err = g.UpdateComputedFields(tx); err != nil {
+		err = errors.Wrapf(err, "could not update computed fields for Game %s", g.ID.String())
+	}
 	return
 }
 
 func (g *Game) BeforeUpdate(tx *gorm.DB) (err error) {
-	g.updateComputedFields(tx)
+	if err = g.UpdateComputedFields(tx); err != nil {
+		err = errors.Wrapf(err, "could not update computed fields for Game %s", g.ID.String())
+	}
 	return
 }
 
