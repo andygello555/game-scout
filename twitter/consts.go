@@ -19,6 +19,8 @@ const (
 	TimePerRequest          = time.Millisecond * 500
 	DefaultTweetCapLocation = "tweetCap.json"
 	CreatedAtFormat         = "2006-01-02T15:04:05.000Z"
+	// IgnoredErrorTypes is a comma-seperated list of
+	IgnoredErrorTypes = "https://api.twitter.com/2/problems/resource-not-found"
 )
 
 // GetRateLimitFromDuration will return the upper RateLimit bound when given a time.Duration.

@@ -27,11 +27,33 @@ type DBModel struct {
 	Model  any
 }
 
+// ColumnDBNames gets all the column names of the DBModel that are not the empty string.
 func (dbm *DBModel) ColumnDBNames() []string {
 	columnNames := make([]string, 0)
 	for _, field := range dbm.Schema.Fields {
 		if field.DBName != "" {
 			columnNames = append(columnNames, field.DBName)
+		}
+	}
+	return columnNames
+}
+
+// ColumnDBNamesExcluding gets all the column names of the DBModel that are not the empty string excluding the names
+// given.
+func (dbm *DBModel) ColumnDBNamesExcluding(names ...string) []string {
+	columnNames := make([]string, 0)
+	for _, field := range dbm.Schema.Fields {
+		if field.DBName != "" {
+			exclude := false
+			for _, name := range names {
+				if field.DBName == name {
+					exclude = true
+					break
+				}
+			}
+			if !exclude {
+				columnNames = append(columnNames, field.DBName)
+			}
 		}
 	}
 	return columnNames

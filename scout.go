@@ -9,6 +9,7 @@ import (
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
+	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -109,9 +110,10 @@ func transformTweetWorker(jobs <-chan *transformTweetJob, results chan<- *transf
 	}
 }
 
-func ScoutBatch(batchNo int, dictionary map[string]*twitter.TweetDictionary, userTweetTimes map[string][]time.Time, developerSnapshots map[string][]*models.DeveloperSnapshot) (err error) {
+func ScoutBatch(batchNo int, dictionary map[string]*twitter.TweetDictionary, userTweetTimes map[string][]time.Time, developerSnapshots map[string][]*models.DeveloperSnapshot) (gameIDs mapset.Set[uuid.UUID], err error) {
 	logPrefix := fmt.Sprintf("ScoutBatch %d: ", batchNo)
-	updateOrCreateModel := func(value any) {
+	updateOrCreateModel := func(value any) (created bool) {
+		created = false
 		// First we do a null check
 		var updateOrCreate *gorm.DB
 		switch value.(type) {
@@ -130,7 +132,7 @@ func ScoutBatch(batchNo int, dictionary map[string]*twitter.TweetDictionary, use
 		}
 		// Then we construct the upsert clause
 		onConflict := value.(upsertable).OnConflict()
-		onConflict.DoUpdates = clause.AssignmentColumns(db.GetModel(value).ColumnDBNames())
+		onConflict.DoUpdates = clause.AssignmentColumns(db.GetModel(value).ColumnDBNamesExcluding("id"))
 		if updateOrCreate = db.DB.Clauses(onConflict); updateOrCreate.Error != nil {
 			err = myTwitter.TemporaryWrapf(false, updateOrCreate.Error, "could not create update or create clause for %s", reflect.TypeOf(value).Elem().Name())
 			return
@@ -141,6 +143,8 @@ func ScoutBatch(batchNo int, dictionary map[string]*twitter.TweetDictionary, use
 			err = after.Error
 		}
 		log.INFO.Printf("%screated %s", logPrefix, reflect.TypeOf(value).Elem().Name())
+		created = true
+		return
 	}
 
 	log.INFO.Printf("Starting ScoutBatch no. %d", batchNo)
@@ -148,6 +152,7 @@ func ScoutBatch(batchNo int, dictionary map[string]*twitter.TweetDictionary, use
 	// Create the job and result channels for the transformTweetWorkers
 	jobs := make(chan *transformTweetJob, len(dictionary))
 	results := make(chan *transformTweetResult, len(dictionary))
+	gameIDs = mapset.NewSet[uuid.UUID]()
 
 	// Start the workers
 	for i := 0; i < transformTweetWorkers; i++ {
@@ -183,9 +188,11 @@ func ScoutBatch(batchNo int, dictionary map[string]*twitter.TweetDictionary, use
 				updateOrCreateModel(result.developer)
 			}
 			// Create the game
-			updateOrCreateModel(result.game)
+			if created := updateOrCreateModel(result.game); created {
+				gameIDs.Add(result.game.ID)
+			}
 			if err != nil {
-				return myTwitter.TemporaryWrap(false, err, "could not insert either Developer or Game into DB")
+				return gameIDs, myTwitter.TemporaryWrap(false, err, "could not insert either Developer or Game into DB")
 			}
 			// Add the developerSnap to the developerSnapshots
 			if _, ok := developerSnapshots[result.developer.ID]; !ok {
@@ -234,9 +241,10 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 
 	userTweetTimes := make(map[string][]time.Time)
 	developerSnapshots := make(map[string][]*models.DeveloperSnapshot)
+	gameIDs := mapset.NewSet[uuid.UUID]()
+
 	batchNo := 1
 	start := time.Now().UTC()
-
 	log.INFO.Println("Starting Scout procedure")
 	for i := 0; i < discoveryTweets; i += batchSize {
 		offset := batchSize
@@ -258,19 +266,30 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 		log.INFO.Printf("Executing ScoutBatch for batch no. %d (%d/%d) for %d tweets", batchNo, i, discoveryTweets, len(tweetRaw.TweetDictionaries()))
 		// Run ScoutBatch for this batch of tweet dictionaries
 		// If the error is not temporary then we will kill the Scouting process
-		if err = ScoutBatch(batchNo, tweetRaw.TweetDictionaries(), userTweetTimes, developerSnapshots); err != nil && !myTwitter.IsTemporary(err) {
+		var subGameIDs mapset.Set[uuid.UUID]
+		if subGameIDs, err = ScoutBatch(batchNo, tweetRaw.TweetDictionaries(), userTweetTimes, developerSnapshots); err != nil && !myTwitter.IsTemporary(err) {
 			log.FATAL.Printf("Error returned by ScoutBatch is not temporary: %s. We have to stop :(", err.Error())
 			return errors.Wrapf(err, "could not execute ScoutBatch for batch no. %d", batchNo)
 		}
+		gameIDs = gameIDs.Union(subGameIDs)
 
 		// Set up the next batch of requests by finding the NextToken of the current batch
 		opts.NextToken = result.Meta().NextToken()
 		batchNo++
 		log.INFO.Printf("Set NextToken for next batch (%d) to %s by getting the NextToken from the previous result", batchNo, opts.NextToken)
 	}
+	log.INFO.Printf("Finished main scrape in %s", time.Now().UTC().Sub(start).String())
 
-	log.INFO.Printf("Finished main scrape in %s, aggregating %d DeveloperSnapshots", time.Now().UTC().Sub(start).String(), len(developerSnapshots))
-	// We then aggregate each developer snapshot for each developer into one main developer snapshot
+	// 2nd phase: Update. For any developers, and games that exist in the DB but haven't been scraped we will fetch the
+	// details from the DB and initiate scrapes for them
+	log.INFO.Printf("We have scraped:")
+	log.INFO.Printf("\t%d developers", len(developerSnapshots))
+	log.INFO.Printf("\t%d games", gameIDs.Cardinality())
+
+	// 3rd phase: Snapshot. For all the partial DeveloperSnapshots that exist in the developerSnapshots map we will
+	// aggregate the information for them.
+	start = time.Now().UTC()
+	log.INFO.Printf("Starting aggregation of %d DeveloperSnapshots", len(developerSnapshots))
 	for id, snapshots := range developerSnapshots {
 		aggregatedSnap := &models.DeveloperSnapshot{
 			DeveloperID:                  id,
@@ -289,7 +308,7 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 				return userTweetTimes[id][i].Before(userTweetTimes[id][j])
 			})
 			// Find the max and min times by looking at the head and end of array
-			maxTime := userTweetTimes[id][len(userTweetTimes[id])]
+			maxTime := userTweetTimes[id][len(userTweetTimes[id])-1]
 			minTime := userTweetTimes[id][0]
 			// Aggregate the durations between all the tweets
 			betweenCount := time.Nanosecond * 0
@@ -323,7 +342,11 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 				aggregatedSnap.ContextAnnotationSet.Add(elem)
 			}
 		}
-		db.DB.Create(aggregatedSnap)
+		if err = db.DB.Create(aggregatedSnap).Error; err != nil {
+			return errors.Wrapf(err, "could not save aggregation of %d DeveloperSnapshots for dev. %s", len(snapshots), id)
+		}
+		log.INFO.Printf("\tSaved DeveloperSnapshot aggregation for %s which is comprised of %d partial snapshots", id, len(snapshots))
 	}
+	log.INFO.Printf("Finished aggregating DeveloperSnapshots in %s", time.Now().UTC().Sub(start).String())
 	return
 }

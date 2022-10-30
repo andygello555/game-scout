@@ -69,8 +69,18 @@ func (bt BindingType) WrapResponse(response any) (result BindingResult, err erro
 		tweetRecentSearchResponse := response.(*twitter.TweetRecentSearchResponse)
 		// If any errors have occurred then we'll treat them as Go errors by wrapping them in a bindingErrorProto
 		if len(tweetRecentSearchResponse.Raw.Errors) > 0 {
-			bep := &bindingErrorProto{errorsMethod: func() []*twitter.ErrorObj { return tweetRecentSearchResponse.Raw.Errors }}
-			return bindingResult, bep
+			// If we find any errors that shouldn't be ignored we will return that error
+			ignore := true
+			for _, tweetErr := range tweetRecentSearchResponse.Raw.Errors {
+				if !strings.Contains(IgnoredErrorTypes, tweetErr.Type) {
+					ignore = false
+					break
+				}
+			}
+			if !ignore {
+				bep := &bindingErrorProto{errorsMethod: func() []*twitter.ErrorObj { return tweetRecentSearchResponse.Raw.Errors }}
+				return bindingResult, bep
+			}
 		}
 		bindingResult.rawMethod = func() any { return tweetRecentSearchResponse.Raw }
 		bindingResult.metaMethod = func() BindingResultMeta {

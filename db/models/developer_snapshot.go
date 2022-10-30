@@ -6,6 +6,7 @@ import (
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
+	"github.com/volatiletech/null/v9"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"math"
@@ -201,13 +202,18 @@ func (ds *DeveloperSnapshot) calculateGameField(tx *gorm.DB) (err error) {
 			ds.DeveloperID,
 		)
 	}
-	if err = games.Where("weighted_score IS NOT NULL").Select("sum(weighted_score)").Row().Scan(&ds.GameWeightedScoresSum); err != nil {
+
+	// Because Game.WeightedScore can be null, we will filter out any Games with a null weighted_score and also scan the
+	// sum of the weighted_scores into a null.Float64 in case there are no games to sum-up.
+	gameWeightedScores := null.Float64From(0)
+	if err = games.Where("weighted_score IS NOT NULL").Select("sum(weighted_score)").Row().Scan(&gameWeightedScores); err != nil {
 		return errors.Wrapf(
 			err,
 			"could not sum the weighted_scores of Games for developer_id = %s in DeveloperSnapshot.BeforeCreate",
 			ds.DeveloperID,
 		)
 	}
+	ds.GameWeightedScoresSum = gameWeightedScores.Float64
 	return
 }
 

@@ -3,6 +3,7 @@ package browser
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/anaskhan96/soup"
 	"github.com/pkg/errors"
 	"io"
@@ -25,20 +26,23 @@ const (
 	SteamCommunityPosts ScrapeURL = "%s://store.steampowered.com/events/ajaxgetadjacentpartnerevents/?appid=%d&count_before=%d&count_after=%d&gidevent=%s&gidannouncement=%s&lang_list=0&origin=https://steamcommunity.com"
 )
 
-// String returns the name of the ScrapeURL along with the URL in the format: "<Name>(<URL>)".
-func (su ScrapeURL) String() string {
-	out := ""
+// Name returns the name of the ScrapeURL.
+func (su ScrapeURL) Name() string {
 	switch su {
 	case SteamAppPage:
-		out = "SteamAppPage"
+		return "SteamAppPage"
 	case SteamAppReviews:
-		out = "SteamAppReviews"
+		return "SteamAppReviews"
 	case SteamCommunityPosts:
-		out = "SteamCommunityPosts"
+		return "SteamCommunityPosts"
 	default:
 		return "<nil>"
 	}
-	return fmt.Sprintf("%s(%s)", out, string(su))
+}
+
+// String returns the name of the ScrapeURL along with the URL in the format: "<Name>(<URL>)".
+func (su ScrapeURL) String() string {
+	return fmt.Sprintf("%s(%s)", su.Name(), string(su))
 }
 
 // Fill will apply string interpolation to the ScrapeURL. The protocol does not need to be included as "https" is always
@@ -99,6 +103,65 @@ func (su ScrapeURL) Soup(args ...any) (*soup.Root, error) {
 	}
 }
 
+// TrySoup will run Soup with the given args and try the given function. If the function returns an error then the
+// function will be retried up to a total of the given number of maxTries. If minDelay is given, and is not 0, then
+// before the function is retried it will sleep for (maxTries + 1 - currentTries) * minDelay.
+func (su ScrapeURL) TrySoup(maxTries int, minDelay time.Duration, try func(doc *soup.Root) error, args ...any) (err error) {
+	tries := maxTries
+	type returnType int
+	const (
+		con returnType = iota
+		brk
+		done
+	)
+	for {
+		rt := func() (rt returnType) {
+			log.INFO.Printf("TrySoup(%s, %v) is on try %d/%d", su.Name(), args, tries, maxTries)
+			// Defer a closure to recover from any panics and set the appropriate return type
+			defer func() {
+				if pan := recover(); pan != nil {
+					if tries > 0 {
+						tries--
+						time.Sleep(minDelay * time.Duration(maxTries+1-tries))
+						rt = con
+						return
+					}
+					err = fmt.Errorf("panic occurred: %v", pan)
+					rt = brk
+				}
+			}()
+
+			var doc *soup.Root
+			if doc, err = su.Soup(args...); err != nil {
+				if tries > 0 {
+					tries--
+					time.Sleep(minDelay * time.Duration(maxTries+1-tries))
+					return con
+				}
+				err = errors.Wrapf(err, "ran out of tries (%d total) whilst requesting Soup for %s", maxTries, su.String())
+				return brk
+			}
+
+			if err = try(doc); err != nil {
+				if tries > 0 {
+					tries--
+					time.Sleep(minDelay * time.Duration(maxTries+1-tries))
+					return con
+				}
+				err = errors.Wrapf(err, "ran out of tries (%d total) whilst calling try function for %s", maxTries, su.String())
+				return brk
+			}
+			return done
+		}()
+
+		if rt == con {
+			continue
+		}
+		break
+	}
+	return
+}
+
 // JSON makes a request to the ScrapeURL and parses the response to JSON.
 func (su ScrapeURL) JSON(args ...any) (jsonBody map[string]any, err error) {
 	url := su.Fill(args...)
@@ -134,6 +197,65 @@ func (su ScrapeURL) JSON(args ...any) (jsonBody map[string]any, err error) {
 	if err = json.Unmarshal(body, &jsonBody); err != nil {
 		err = errors.Wrapf(err, "JSON could not be parsed from response from \"%s\"", url)
 		return
+	}
+	return
+}
+
+// TryJSON will run JSON with the given args and try the given function. If the function returns an error then the
+// function will be retried up to a total of the given number of maxTries. If minDelay is given, and is not 0, then
+// before the function is retried it will sleep for (maxTries + 1 - currentTries) * minDelay.
+func (su ScrapeURL) TryJSON(maxTries int, minDelay time.Duration, try func(jsonBody map[string]any) error, args ...any) (err error) {
+	tries := maxTries
+	type returnType int
+	const (
+		con returnType = iota
+		brk
+		done
+	)
+	for {
+		rt := func() (rt returnType) {
+			log.INFO.Printf("TryJSON(%s, %v) is on try %d/%d", su.Name(), args, tries, maxTries)
+			// Defer a closure to recover from any panics and set the appropriate return type
+			defer func() {
+				if pan := recover(); pan != nil {
+					if tries > 0 {
+						tries--
+						time.Sleep(minDelay * time.Duration(maxTries+1-tries))
+						rt = con
+						return
+					}
+					err = fmt.Errorf("panic occurred: %v", pan)
+					rt = brk
+				}
+			}()
+
+			var jsonBody map[string]any
+			if jsonBody, err = su.JSON(args...); err != nil {
+				if tries > 0 {
+					tries--
+					time.Sleep(minDelay * time.Duration(maxTries+1-tries))
+					return con
+				}
+				err = errors.Wrapf(err, "ran out of tries (%d total) whilst requesting JSON for %s", maxTries, su.String())
+				return brk
+			}
+
+			if err = try(jsonBody); err != nil {
+				if tries > 0 {
+					tries--
+					time.Sleep(minDelay * time.Duration(maxTries+1-tries))
+					return con
+				}
+				err = errors.Wrapf(err, "ran out of tries (%d total) whilst calling try function for %s", maxTries, su.String())
+				return brk
+			}
+			return done
+		}()
+
+		if rt == con {
+			continue
+		}
+		break
 	}
 	return
 }

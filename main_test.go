@@ -100,7 +100,7 @@ func TestScoutBatch(t *testing.T) {
 		}
 		userTweetTimes := make(map[string][]time.Time)
 		developerSnapshots := make(map[string][]*models.DeveloperSnapshot)
-		if err = ScoutBatch(1, sampleTweets, userTweetTimes, developerSnapshots); err != nil {
+		if _, err = ScoutBatch(1, sampleTweets, userTweetTimes, developerSnapshots); err != nil {
 			t.Errorf("Could not run ScoutBatch: %s", err.Error())
 		}
 	}
