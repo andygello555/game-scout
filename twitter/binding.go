@@ -330,7 +330,9 @@ func (brp *bindingResultProto) MergeNext(nextBindingResult BindingResult, bindin
 			resultMeta := &struct{ bindingResultMetaProto }{}
 			resultMeta.newestIDMethod = func() string { return meta2.NewestID() }
 			resultMeta.oldestIDMethod = func() string { return meta2.OldestID() }
-			resultMeta.resultCountMethod = func() int { return meta2.ResultCount() }
+			// resultCountMethod returns the sum of the previous meta's ResultCount() result and the next meta's
+			// ResultCount() result.
+			resultMeta.resultCountMethod = func() int { return meta1.ResultCount() + meta2.ResultCount() }
 			resultMeta.nextTokenMethod = func() string { return meta2.NextToken() }
 			return resultMeta
 		}

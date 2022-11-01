@@ -86,7 +86,7 @@ func TestMain(m *testing.M) {
 	db.Close()
 }
 
-func TestScoutBatch(t *testing.T) {
+func TestDiscoveryBatch(t *testing.T) {
 	const sampleTweetsPath = "samples/sampleTweets.json"
 	const finalDeveloperCount = 8
 	const finalGameCount = 2
@@ -100,8 +100,8 @@ func TestScoutBatch(t *testing.T) {
 		}
 		userTweetTimes := make(map[string][]time.Time)
 		developerSnapshots := make(map[string][]*models.DeveloperSnapshot)
-		if _, err = ScoutBatch(1, sampleTweets, userTweetTimes, developerSnapshots); err != nil {
-			t.Errorf("Could not run ScoutBatch: %s", err.Error())
+		if _, err = DiscoveryBatch(1, sampleTweets, userTweetTimes, developerSnapshots); err != nil {
+			t.Errorf("Could not run DiscoveryBatch: %s", err.Error())
 		}
 	}
 

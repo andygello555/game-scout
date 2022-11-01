@@ -30,6 +30,8 @@ type DeveloperSnapshot struct {
 	// TweetTimeRange is the time.Duration between the Developer's earliest tweet (that was scraped) and their latest
 	// tweet (that was scraped). This is set to nil when only one tweet was scraped.
 	TweetTimeRange NullDuration
+	// LastTweetTime is the time of the last tweet that was scraped.
+	LastTweetTime time.Time
 	// TweetTimeRange is the average time.Duration between all the Developer's tweets that were scraped for this
 	// DeveloperSnapshot. This is set to nil when only one tweet was scraped.
 	AverageDurationBetweenTweets NullDuration
