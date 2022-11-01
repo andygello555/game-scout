@@ -39,6 +39,14 @@ func (d *Developer) LatestDeveloperSnapshot(db *gorm.DB) (developerSnap *Develop
 	return
 }
 
+// Games returns the games for this developer.
+func (d *Developer) Games(db *gorm.DB) (games []*Game, err error) {
+	if err = db.Model(&Game{}).Where("developer_id = ?", d.ID).Find(&games).Error; err != nil {
+		return games, errors.Wrapf(err, "could not find Games for %s", d.ID)
+	}
+	return
+}
+
 // OnConflict returns the clause.OnConflict that should be checked in an upsert clause.
 func (d *Developer) OnConflict() clause.OnConflict {
 	return clause.OnConflict{Columns: []clause.Column{{Name: "id"}}}

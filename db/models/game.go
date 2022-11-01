@@ -219,3 +219,9 @@ func (g *Game) OnConflict() clause.OnConflict {
 		}))}},
 	}
 }
+
+// Update will update the Game. It does this by calling the Storefront.ScrapeGame method on the referred to Game.
+func (g *Game) Update(db *gorm.DB) error {
+	g.Website = null.StringFrom(g.Storefront.ScrapeGame(g.Website.String, g))
+	return db.Save(g).Error
+}

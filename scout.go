@@ -11,6 +11,7 @@ import (
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
+	"github.com/schollz/progressbar/v3"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"reflect"
@@ -24,7 +25,9 @@ const (
 	// updateDeveloperWorkers is the number of updateDeveloperWorker that will be spun up in the update phase.
 	updateDeveloperWorkers = 5
 	// maxUpdateTweets is the maximum number of tweets fetched in the update phase.
-	maxUpdateTweets = 10
+	maxUpdateTweets = 12
+	// secondsBetweenBatches is the number of seconds to sleep between DiscoveryBatch batches.
+	secondsBetweenBatches = time.Second * 20
 )
 
 // TransformTweet takes a twitter.TweetDictionary and splits it out into instances of the models.Developer,
@@ -214,6 +217,9 @@ func DiscoveryBatch(batchNo int, dictionary map[string]*twitter.TweetDictionary,
 	return
 }
 
+// UpdateDeveloper will fetch the given number of tweets for the models.Developer and run DiscoveryBatch on these tweets
+// that will ultimately update the DB row for this models.Developer and create a new models.DeveloperSnapshot for it. It
+// will also update any models.Games that exist in the DB for this developer.
 func UpdateDeveloper(developerNo int, developer *models.Developer, totalTweets int, userTweetTimes map[string][]time.Time, developerSnapshots map[string][]*models.DeveloperSnapshot) (gameIDs mapset.Set[uuid.UUID], err error) {
 	log.INFO.Printf("Updating info for developer %s (%s)", developer.Username, developer.ID)
 	var developerSnap *models.DeveloperSnapshot
@@ -232,9 +238,43 @@ func UpdateDeveloper(developerNo int, developer *models.Developer, totalTweets i
 	}
 	log.INFO.Printf("Developer %s (%s) latest DeveloperSnapshot is version %d and was created on %s", developer.Username, developer.ID, developerSnap.Version, developerSnap.CreatedAt.String())
 
+	// First we update the user's games that exist in the DB
+	var games []*models.Game
+	if games, err = developer.Games(db.DB); err != nil {
+		return gameIDs, myTwitter.TemporaryWrapf(
+			true, err, "could not find Games for Developer %s (%s)", developer.Username, developer.ID,
+		)
+	}
+	log.INFO.Printf("Developer %s (%s) has %d game(s)", developer.Username, developer.ID, len(games))
+
+	for _, game := range games {
+		if err = game.Update(db.DB); err != nil {
+			log.WARNING.Printf(
+				"Could not update Game %s (%s) for Developer %s (%s): %s",
+				game.Name.String, game.ID.String(), developer.Username, developer.ID, err.Error(),
+			)
+			continue
+		}
+		log.INFO.Printf(
+			"Updated Game %s (%s) for Developer %s (%s)",
+			game.Name.String, game.ID.String(), developer.Username, developer.ID,
+		)
+	}
+
+	startTime := developerSnap.LastTweetTime.UTC().Add(time.Second)
+	sevenDaysAgo := time.Now().UTC().Add(time.Hour * time.Duration(-24*7))
+	// If the startTime is before the last seven days then we will clamp it to seven days ago.
+	// Note: This is because RecentSearch can only look through the past 7 days of tweets.
+	if startTime.Before(sevenDaysAgo) {
+		log.INFO.Printf(
+			"Clamping startTime for Developer %s (%s) to %s",
+			developer.Username, developer.ID, sevenDaysAgo.Format(time.RFC3339),
+		)
+		startTime = sevenDaysAgo
+	}
+
 	// Construct the query and options for RecentSearch
 	query := fmt.Sprintf("%s from:%s", globalConfig.Twitter.TwitterQuery(), developer.ID)
-	startTime := developerSnap.LastTweetTime.Add(time.Second * 5)
 	opts := twitter.TweetRecentSearchOpts{
 		Expansions: []twitter.Expansion{
 			twitter.ExpansionEntitiesMentionsUserName,
@@ -264,13 +304,20 @@ func UpdateDeveloper(developerNo int, developer *models.Developer, totalTweets i
 		SortOrder:  twitter.TweetSearchSortOrderRecency,
 		MaxResults: totalTweets,
 		// We start looking for tweets after the last tweet time of the latest developer snapshot for the developer
-		StartTime: startTime,
+		StartTime: startTime.UTC().Add(time.Second),
 	}
 
-	// We only request 100 tweets
+	// Then we make the request for totalTweets from RecentSearch
+	log.INFO.Printf(
+		"Making RecentSearch request for %d tweets from %s for Developer %s (%s)",
+		totalTweets, opts.StartTime.Format(time.RFC3339), developer.Username, developer.ID,
+	)
 	var result myTwitter.BindingResult
 	if result, err = myTwitter.Client.ExecuteBinding(myTwitter.RecentSearch, &myTwitter.BindingOptions{Total: totalTweets}, query, opts); err != nil {
-		return gameIDs, errors.Wrapf(err, "could not fetch %d tweets for developer %s (%s) after %s", totalTweets, developer.Username, developer.ID, startTime.String())
+		return gameIDs, errors.Wrapf(
+			err, "could not fetch %d tweets for developer %s (%s) after %s",
+			totalTweets, developer.Username, developer.ID, opts.StartTime.Format(time.RFC3339),
+		)
 	}
 
 	// Then we run DiscoveryBatch with this batch of tweets
@@ -288,12 +335,14 @@ func UpdateDeveloper(developerNo int, developer *models.Developer, totalTweets i
 	return
 }
 
+// updateDeveloperJob represents a job that is sent to an updateDeveloperWorker.
 type updateDeveloperJob struct {
 	developerNo int
 	developer   *models.Developer
 	totalTweets int
 }
 
+// updateDeveloperResult represents a result that is produced by an updateDeveloperWorker.
 type updateDeveloperResult struct {
 	developerNo        int
 	developer          *models.Developer
@@ -303,6 +352,8 @@ type updateDeveloperResult struct {
 	error              error
 }
 
+// updateDeveloperWorker is a worker for UpdateDeveloper that takes a channel of updateDeveloperJob and queues up the
+// result of UpdateDeveloper as an updateDeveloperResult.
 func updateDeveloperWorker(jobs <-chan *updateDeveloperJob, results chan<- *updateDeveloperResult) {
 	for job := range jobs {
 		result := &updateDeveloperResult{
@@ -317,9 +368,20 @@ func updateDeveloperWorker(jobs <-chan *updateDeveloperJob, results chan<- *upda
 	}
 }
 
+// Scout will run the 5 phase scraping procedure for the game scout system.
+//
+// • 1st phase: Discovery. Search the recent tweets on Twitter belonging to the hashtags given in config.json.
+//
+// • 2nd phase: Update. For any developers, and games that exist in the DB that haven't been scraped in the Discovery
+// phase, we will fetch their details from the DB and initiate scrapes for them to update their models.Game, create a
+// models.DeveloperSnapshot, and update the models.Developer instance itself.
+//
+// • 3rd phase: Snapshot. For all the partial models.DeveloperSnapshot that have been created in the previous two phases
+// we will aggregate the information for them into one models.DeveloperSnapshot for each models.Developer.
 func Scout(batchSize int, discoveryTweets int) (err error) {
-	// If the number of discovery tweets we requested is more
-	if discoveryTweets > int(myTwitter.TweetsPerDay)/2 {
+	// If the number of discovery tweets we requested is more than 65% of the total tweets available for a day then we
+	// will error out.
+	if discoveryTweets > int(float64(int(myTwitter.TweetsPerDay))*0.65) {
 		return myTwitter.TemporaryErrorf(false, "cannot request more than %d tweets per day for discovery purposes", int(myTwitter.TweetsPerDay))
 	}
 
@@ -362,6 +424,7 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 	start := time.Now().UTC()
 	log.INFO.Println("Starting Discovery phase")
 	for i := 0; i < discoveryTweets; i += batchSize {
+		batchStart := time.Now().UTC()
 		offset := batchSize
 		if i+offset > discoveryTweets {
 			offset = discoveryTweets - i
@@ -392,6 +455,17 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 		opts.NextToken = result.Meta().NextToken()
 		batchNo++
 		log.INFO.Printf("Set NextToken for next batch (%d) to %s by getting the NextToken from the previous result", batchNo, opts.NextToken)
+
+		// Nap time
+		log.INFO.Printf(
+			"Finished batch in %s. Sleeping for %s so we don't overdo it",
+			time.Now().UTC().Sub(batchStart).String(), secondsBetweenBatches.String(),
+		)
+		bar := progressbar.Default(int64(secondsBetweenBatches.Seconds()))
+		for s := 0; s < int(secondsBetweenBatches.Seconds()); s++ {
+			_ = bar.Add(1)
+			time.Sleep(time.Second)
+		}
 	}
 	log.INFO.Printf("Finished Discovery phase in %s", time.Now().UTC().Sub(start).String())
 
@@ -432,11 +506,6 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 		jobs := make(chan *updateDeveloperJob, len(unscrapedDevelopers))
 		results := make(chan *updateDeveloperResult, len(unscrapedDevelopers))
 
-		// Start the workers
-		for w := 0; w < updateDeveloperWorkers; w++ {
-			go updateDeveloperWorker(jobs, results)
-		}
-
 		// For each unscraped developer we will execute a query on RecentSearch for the developer for tweets after the
 		// latest developer snapshot's LastTweetTime. We decide how many tweets to request for each developer by dividing
 		// the remaining number of tweets for this day by the number of developers we need to update.
@@ -446,29 +515,50 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 		}
 		log.INFO.Printf("Initial number of tweets fetched for %d developers is %d", len(unscrapedDevelopers), totalTweetsForEachDeveloper)
 
-		// In the case that we can't get any tweets for any developers we will exclude developers one by one based on their
-		// latest developer snapshot
-		if totalTweetsForEachDeveloper == 0 {
-			log.WARNING.Printf("totalTweetsForEachDeveloper is 0. Reducing the number of developers to see if we can fetch at least 1 tweet for each developer")
-			checkDeveloperNo := len(unscrapedDevelopers) - 1
-			for totalTweetsForEachDeveloper == 0 && checkDeveloperNo > 0 {
+		// In the case that we can't get enough tweets to satisfy the minimum resources per-request for RecentSearch for
+		// any developers we will exclude developers one by one based on their latest developer snapshot
+		if totalTweetsForEachDeveloper < myTwitter.RecentSearch.Binding().MinResourcesPerRequest {
+			log.WARNING.Printf(
+				"totalTweetsForEachDeveloper is %d. Reducing the number of developers to see if we can fetch at "+
+					"least %d tweet(s) for each developer",
+				totalTweetsForEachDeveloper, myTwitter.RecentSearch.Binding().MinResourcesPerRequest,
+			)
+			initialDeveloperCount := len(unscrapedDevelopers)
+			checkDeveloperNo := initialDeveloperCount - 1
+			// We iterate until totalTweetsForEachDeveloper is at least the minimum resources per-request for the
+			// RecentSearch binding, or checkDeveloper is zero (we cannot make this request as there are too many
+			// developers)
+			for totalTweetsForEachDeveloper < myTwitter.RecentSearch.Binding().MinResourcesPerRequest && checkDeveloperNo > 0 {
 				unscrapedDevelopersQuery.Model(&models.Developer{}).Joins(
 					"left join developer_snapshots on developer_snapshots.developer_id = developer.id",
 				).Where("developer_snapshots.weighted_score IS NOT NULL").Order("version desc, weighted_score desc").Limit(checkDeveloperNo).Find(&unscrapedDevelopers)
+				// We re-calculate totalTweetsForEachDeveloper on each iteration
 				totalTweetsForEachDeveloper = (int(myTwitter.TweetsPerDay) - discoveryTweets) / len(unscrapedDevelopers)
 				checkDeveloperNo--
 			}
+			// If we end up with zero developers we will return a non-temporary error
 			if checkDeveloperNo == 0 {
+				log.FATAL.Printf(
+					"Could not get totalTweetsForEachDeveloper up to at least %d, because there is just not "+
+						"enough tweetcap left for today (%d rem.) to update %d developers",
+					myTwitter.RecentSearch.Binding().MinResourcesPerRequest,
+					int(myTwitter.TweetsPerDay)-discoveryTweets,
+					initialDeveloperCount,
+				)
 				return myTwitter.TemporaryErrorf(
 					false, "cannot run update phase as we couldn't find a totalTweetsForEachDeveloper "+
 						"number that didn't result in 0 unscrapedDevelopers",
 				)
 			}
-			log.INFO.Printf("Found a new totalTweetsForEachDeveloper: %d", totalTweetsForEachDeveloper)
+			log.INFO.Printf(
+				"Found a new totalTweetsForEachDeveloper: %d, by reducing developer count to %d",
+				totalTweetsForEachDeveloper, len(unscrapedDevelopers),
+			)
 		}
 
 		queueDeveloperRange := func(low int, high int) {
 			slicedUnscrapedDevelopers := unscrapedDevelopers[low:high]
+			currentBatchQueue := 0
 			for d, developer := range slicedUnscrapedDevelopers {
 				log.INFO.Printf("Queued update for Developer no. %d: %s (%s)", d, developer.Username, developer.ID)
 				jobs <- &updateDeveloperJob{
@@ -476,7 +566,28 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 					developer:   developer,
 					totalTweets: totalTweetsForEachDeveloper,
 				}
+				currentBatchQueue++
+				// When the current number jobs sent to the updateDeveloperWorkers has reached batchSize, we will wait
+				// for a bit before continuing to send them
+				if currentBatchQueue == batchSize {
+					currentBatchQueue = 0
+					log.INFO.Printf(
+						"We have queued up %d jobs to the updateDeveloperWorkers so we will take a break of %s",
+						batchSize, secondsBetweenBatches.String(),
+					)
+					bar := progressbar.Default(int64(secondsBetweenBatches.Seconds()))
+					for s := 0; s < int(secondsBetweenBatches.Seconds()); s++ {
+						_ = bar.Add(1)
+						time.Sleep(time.Second)
+					}
+				}
 			}
+		}
+
+		// Start the workers
+		for w := 0; w < updateDeveloperWorkers; w++ {
+			log.INFO.Printf("Starting updateDeveloperWorker no. %d", w)
+			go updateDeveloperWorker(jobs, results)
 		}
 
 		// We also check if the rate limit will be exceeded by the number of requests. We use 100 * unscrapedDevelopers
@@ -578,7 +689,7 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 			DeveloperID:                  id,
 			Tweets:                       int32(len(userTweetTimes[id])),
 			TweetTimeRange:               models.NullDurationFromPtr(nil),
-			LastTweetTime:                userTweetTimes[id][0],
+			LastTweetTime:                userTweetTimes[id][0].UTC(),
 			AverageDurationBetweenTweets: models.NullDurationFromPtr(nil),
 			TweetsPublicMetrics:          &twitter.TweetMetricsObj{},
 			UserPublicMetrics:            &twitter.UserMetricsObj{},
@@ -594,7 +705,7 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 			// Find the max and min times by looking at the head and end of array
 			maxTime := userTweetTimes[id][len(userTweetTimes[id])-1]
 			minTime := userTweetTimes[id][0]
-			aggregatedSnap.LastTweetTime = maxTime
+			aggregatedSnap.LastTweetTime = maxTime.UTC()
 			// Aggregate the durations between all the tweets
 			betweenCount := time.Nanosecond * 0
 			for t, tweetTime := range userTweetTimes[id] {

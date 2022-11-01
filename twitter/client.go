@@ -425,6 +425,16 @@ func (w *ClientWrapper) ExecuteBinding(bindingType BindingType, options *Binding
 
 			// Then we make the request itself, passing in the client, options and args.
 			if response, err = binding.Request(w, options, args...); err != nil {
+				var errs []twitter.Error
+				switch err.(type) {
+				case *twitter.ErrorResponse:
+					errs = err.(*twitter.ErrorResponse).Errors
+				default:
+					break
+				}
+				if len(errs) > 0 {
+					log.ERROR.Printf("Could not make %s request no. %d for the following reasons: %v", binding.Type.String(), requestNo, errs)
+				}
 				return bindingResult, errors.Wrapf(err, "could not make %s request no. %d", binding.Type.String(), requestNo)
 			}
 
@@ -480,6 +490,16 @@ func (w *ClientWrapper) ExecuteBinding(bindingType BindingType, options *Binding
 
 		// Then we make the Request itself.
 		if response, err = binding.Request(w, options, args...); err != nil {
+			var errs []twitter.Error
+			switch err.(type) {
+			case *twitter.ErrorResponse:
+				errs = err.(*twitter.ErrorResponse).Errors
+			default:
+				break
+			}
+			if len(errs) > 0 {
+				log.ERROR.Printf("Could not make singleton %s request for the following reasons: %v", binding.Type.String(), errs)
+			}
 			return bindingResult, errors.Wrapf(err, "could not make singleton %s request", binding.Type.String())
 		}
 
