@@ -14,6 +14,7 @@ import (
 	"github.com/schollz/progressbar/v3"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"math"
 	"reflect"
 	"sort"
 	"time"
@@ -28,6 +29,15 @@ const (
 	maxUpdateTweets = 12
 	// secondsBetweenBatches is the number of seconds to sleep between DiscoveryBatch batches.
 	secondsBetweenBatches = time.Second * 20
+	// maxTotalDiscoveryTweetsDailyPercent is the maximum percentage that the discoveryTweets number can be out of
+	// myTwitter.TweetsPerDay.
+	maxTotalDiscoveryTweetsDailyPercent = 0.55
+	// maxTotalDiscoveryTweets is the maximum number of discoveryTweets that can be given to Scout.
+	maxTotalDiscoveryTweets = float64(myTwitter.TweetsPerDay) * maxTotalDiscoveryTweetsDailyPercent
+	// maxTotalUpdateTweets is the maximum number of tweets that can be scraped by the Update phase.
+	maxTotalUpdateTweets = float64(myTwitter.TweetsPerDay) * (1.0 - maxTotalDiscoveryTweetsDailyPercent)
+	// maxNonDisabledDevelopers is the number of developers to keep in the Disable phase.
+	maxNonDisabledDevelopers = maxTotalUpdateTweets / maxUpdateTweets
 )
 
 // TransformTweet takes a twitter.TweetDictionary and splits it out into instances of the models.Developer,
@@ -368,6 +378,15 @@ func updateDeveloperWorker(jobs <-chan *updateDeveloperJob, results chan<- *upda
 	}
 }
 
+// sleepBar will sleep for the given time.Duration (as seconds) and display a progress bar for the sleep.
+func sleepBar(sleepDuration time.Duration) {
+	bar := progressbar.Default(int64(math.Ceil(sleepDuration.Seconds())))
+	for s := 0; s < int(math.Ceil(secondsBetweenBatches.Seconds())); s++ {
+		_ = bar.Add(1)
+		time.Sleep(time.Second)
+	}
+}
+
 // Scout will run the 5 phase scraping procedure for the game scout system.
 //
 // • 1st phase: Discovery. Search the recent tweets on Twitter belonging to the hashtags given in config.json.
@@ -379,9 +398,9 @@ func updateDeveloperWorker(jobs <-chan *updateDeveloperJob, results chan<- *upda
 // • 3rd phase: Snapshot. For all the partial models.DeveloperSnapshot that have been created in the previous two phases
 // we will aggregate the information for them into one models.DeveloperSnapshot for each models.Developer.
 func Scout(batchSize int, discoveryTweets int) (err error) {
-	// If the number of discovery tweets we requested is more than 65% of the total tweets available for a day then we
-	// will error out.
-	if discoveryTweets > int(float64(int(myTwitter.TweetsPerDay))*0.65) {
+	// If the number of discovery tweets we requested is more than maxDiscoveryTweetsDailyPercent of the total tweets
+	// available for a day then we will error out.
+	if float64(discoveryTweets) > maxTotalDiscoveryTweets {
 		return myTwitter.TemporaryErrorf(false, "cannot request more than %d tweets per day for discovery purposes", int(myTwitter.TweetsPerDay))
 	}
 
@@ -461,11 +480,7 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 			"Finished batch in %s. Sleeping for %s so we don't overdo it",
 			time.Now().UTC().Sub(batchStart).String(), secondsBetweenBatches.String(),
 		)
-		bar := progressbar.Default(int64(secondsBetweenBatches.Seconds()))
-		for s := 0; s < int(secondsBetweenBatches.Seconds()); s++ {
-			_ = bar.Add(1)
-			time.Sleep(time.Second)
-		}
+		sleepBar(secondsBetweenBatches)
 	}
 	log.INFO.Printf("Finished Discovery phase in %s", time.Now().UTC().Sub(start).String())
 
@@ -485,11 +500,25 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 		i++
 	}
 
+	// SELECT developers.*
+	// FROM "developers"
+	// INNER JOIN developer_snapshots ON developer_snapshots.developer_id = developers.id
+	// WHERE developers.id NOT IN ? AND NOT developers.disabled
+	// GROUP BY developers.id
+	// HAVING COUNT(developer_snapshots.id) > 0;
+
 	var unscrapedDevelopersQuery *gorm.DB
-	if unscrapedDevelopersQuery = db.DB.Where(
-		"id NOT IN ? AND NOT disabled AND (?) > 0",
+	if unscrapedDevelopersQuery = db.DB.Select(
+		"developers.*",
+	).Joins(
+		"INNER JOIN developer_snapshots ON developer_snapshots.developer_id = developers.id",
+	).Where(
+		"developers.id NOT IN ? AND NOT developers.disabled",
 		scrapedDevelopers,
-		db.DB.Model(&models.DeveloperSnapshot{}).Select("count(*)").Where("developer_snapshots.developer_id = developers.id"),
+	).Group(
+		"developers.id",
+	).Having(
+		"COUNT(developer_snapshots.id) > 0",
 	); unscrapedDevelopersQuery.Error != nil {
 		return myTwitter.TemporaryWrap(false, unscrapedDevelopersQuery.Error, "cannot construct query for unscraped developers")
 	}
@@ -575,11 +604,7 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 						"We have queued up %d jobs to the updateDeveloperWorkers so we will take a break of %s",
 						batchSize, secondsBetweenBatches.String(),
 					)
-					bar := progressbar.Default(int64(secondsBetweenBatches.Seconds()))
-					for s := 0; s < int(secondsBetweenBatches.Seconds()); s++ {
-						_ = bar.Add(1)
-						time.Sleep(time.Second)
-					}
+					sleepBar(secondsBetweenBatches)
 				}
 			}
 		}
@@ -606,7 +631,7 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 					queueDeveloperRange(low, high)
 					sleepDuration := rateLimit.Reset.Time().Sub(time.Now().UTC())
 					log.INFO.Printf("We are going to sleep until %s (%s)", rateLimit.Reset.Time().String(), sleepDuration.String())
-					time.Sleep(sleepDuration)
+					sleepBar(sleepDuration)
 					myTwitter.Client.Mutex.Lock()
 					rateLimit, ok = myTwitter.Client.RateLimits[myTwitter.RecentSearch]
 					myTwitter.Client.Mutex.Unlock()
@@ -631,7 +656,20 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 
 		for r := 0; r < len(unscrapedDevelopers); r++ {
 			result := <-results
-			if result.error != nil && !myTwitter.IsTemporary(result.error) {
+			// If the error is a RateLimitError, and the error contains info on a twitter.RateLimit then we will sleep
+			// until the reset time of this RateLimit.
+			var rateLimitError *myTwitter.RateLimitError
+			if errors.As(result.error, &rateLimitError) {
+				log.WARNING.Printf("RateLimitError occurred in UpdateDeveloper: %s", rateLimitError.Error())
+				if rateLimitError.RateLimit != nil {
+					sleepDuration := rateLimitError.RateLimit.Reset.Time().Sub(time.Now().UTC())
+					log.WARNING.Printf("RateLimitError contains a RateLimit so we will wait %s until it has reset", sleepDuration.String())
+					sleepBar(sleepDuration)
+				} else {
+					log.ERROR.Printf("RateLimitError does not contain a RateLimit instance so we must be exceeding the TweetCap")
+					return errors.Wrap(rateLimitError, "rate limit was exceeded in a non-recoverable way")
+				}
+			} else if result.error != nil && !myTwitter.IsTemporary(result.error) {
 				return errors.Wrapf(result.error, "permanent error occurred whilst scraping unscraped developer %s", result.developer.Username)
 			} else if result.error != nil {
 				log.ERROR.Printf("UpdateDeveloper result for %s (%s) contains an error: %s", result.developer.Username, result.developer.ID, result.error.Error())
@@ -744,5 +782,27 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 		log.INFO.Printf("\tSaved DeveloperSnapshot aggregation for %s which is comprised of %d partial snapshots", id, len(snapshots))
 	}
 	log.INFO.Printf("Finished aggregating DeveloperSnapshots in %s", time.Now().UTC().Sub(start).String())
+
+	// 4th phase: Disable. Disable the developers who aren't doing so well. The number of developers to disable depends
+	// on the number of tweets we get to use in the update phase the next time around.
+
+	// UPDATE developers
+	// SET disabled = true
+	// WHERE id IN (
+	//     SELECT developers.id
+	//     FROM (
+	//        SELECT developer_snapshots.developer_id, max(version) AS latest_version
+	//        FROM developer_snapshots
+	//        GROUP BY developer_snapshots.developer_id
+	//     ) ds1
+	//     JOIN developer_snapshots ds2 ON ds1.developer_id = ds2.developer_id AND ds1.latest_version = ds2.version
+	//     JOIN developers ON ds2.developer_id = developers.id
+	//     WHERE NOT developers.disabled
+	//     ORDER BY ds2.weighted_score
+	//     LIMIT <TOTAL NON DISABLED DEVELOPERS - maxNonDisabledDevelopers
+	// );
+
+	// 5th phase: Measure. For all the users that have a good number of snapshots we'll see if any are shining above the
+	// rest
 	return
 }

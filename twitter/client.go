@@ -322,62 +322,76 @@ func (w *ClientWrapper) SetTweetCap(used int, remaining int, total int, resets t
 // CheckRateLimit will return an appropriate error if the given number of resources exceeds either the tweet cap or the
 // given RequestRateLimit.
 func (w *ClientWrapper) CheckRateLimit(binding *Binding, totalResources int) (err error) {
+	now := time.Now().UTC()
 	w.Mutex.Lock()
 	// If we don't have enough of our monthly tweet cap remaining to fetch the requested number of tweets then we will
 	// return an error.
 	if binding.ResourceType == Tweet && totalResources > w.TweetCap.Remaining {
 		log.WARNING.Printf("TweetCap check for %s failed when requesting %d tweets (%s)", binding.Type.String(), totalResources, w.TweetCap.String())
-		return TemporaryErrorf(
-			false,
-			"cannot request %d Tweets as our Tweet cap is %s",
-			totalResources,
-			w.TweetCap.String(),
-		)
+		return &RateLimitError{
+			TweetCap: &TweetCap{
+				Used:        w.TweetCap.Used,
+				Remaining:   w.TweetCap.Remaining,
+				Total:       w.TweetCap.Total,
+				Resets:      w.TweetCap.Resets,
+				LastFetched: w.TweetCap.LastFetched,
+			},
+			MaxResourcesPerRequest: binding.MaxResourcesPerRequest,
+			RequestedResources:     totalResources,
+			RequestRateLimit:       &binding.RequestRateLimit,
+			ResourceType:           binding.ResourceType,
+			Happened:               now,
+		}
 	}
 	// Then we check if there is a saved twitter.RateLimit for this BindingType in the ClientWrapper. If there is, we
 	// can check if we can make enough requests with the remaining rate limit. We only need to check the rate limit if
 	// the reset time is after the current time, this is because we don't really care if the rate limit is stale and
 	// assume that the rate has reset.
-	now := time.Now().UTC()
 	if rateLimit, ok := w.RateLimits[binding.Type]; ok && rateLimit.Reset.Time().After(now) {
 		log.INFO.Printf("We have a saved RateLimit for %s which is still valid for now", binding.Type.String())
 		if totalResources > rateLimit.Remaining*binding.MaxResourcesPerRequest {
-			return TemporaryErrorf(
-				false,
-				"cannot request %d %ss as this exceeds the rate limit saved from an earlier request %d/%d resets %s",
-				totalResources,
-				binding.ResourceType.String(),
-				rateLimit.Remaining,
-				rateLimit.Limit,
-				rateLimit.Reset.Time().String(),
-			)
+			return &RateLimitError{
+				RateLimit: &twitter.RateLimit{
+					Limit:     rateLimit.Limit,
+					Remaining: rateLimit.Remaining,
+					Reset:     rateLimit.Reset,
+				},
+				MaxResourcesPerRequest: binding.MaxResourcesPerRequest,
+				RequestedResources:     totalResources,
+				ResourceType:           binding.ResourceType,
+				Happened:               now,
+			}
 		}
 		// If the number of requests we can make in the remaining time on the rate limit exceeds the number of requests
 		// we would have to make to satisfy the totalResources to get.
 		if remaining := rateLimit.Reset.Time().Sub(now) / TimePerRequest; int64(remaining) < int64(totalResources/binding.MaxResourcesPerRequest) {
-			return TemporaryErrorf(
-				false,
-				"cannot request now (%s) as the number of requests to make to get %d %ss exceeds the number we can make in the time remaining %s",
-				now.String(),
-				totalResources,
-				binding.ResourceType.String(),
-				remaining.String(),
-			)
+			return &RateLimitError{
+				RateLimit: &twitter.RateLimit{
+					Limit:     rateLimit.Limit,
+					Remaining: rateLimit.Remaining,
+					Reset:     rateLimit.Reset,
+				},
+				MaxResourcesPerRequest: binding.MaxResourcesPerRequest,
+				RequestedResources:     totalResources,
+				ResourceType:           binding.ResourceType,
+				Happened:               now,
+			}
 		}
 	}
 	w.Mutex.Unlock()
 	// If the total number of resources we are requesting exceeds the maximum number of resources we can fetch with the
 	// Binding's rate limit then we will return an appropriate error.
 	if totalResources > binding.RequestRateLimit.Requests*binding.MaxResourcesPerRequest {
-		return TemporaryErrorf(
-			false,
-			"cannot request %d %ss as the maximum for this action is %s (%d %ss)",
-			totalResources,
-			binding.ResourceType.String(),
-			binding.RequestRateLimit.String(),
-			binding.RequestRateLimit.Requests*binding.MaxResourcesPerRequest,
-			binding.ResourceType.String(),
-		)
+		return &RateLimitError{
+			RequestRateLimit: &RequestRateLimit{
+				Requests: binding.RequestRateLimit.Requests,
+				Every:    binding.RequestRateLimit.Every,
+			},
+			MaxResourcesPerRequest: binding.MaxResourcesPerRequest,
+			RequestedResources:     totalResources,
+			ResourceType:           binding.ResourceType,
+			Happened:               now,
+		}
 	}
 	return nil
 }
@@ -425,15 +439,9 @@ func (w *ClientWrapper) ExecuteBinding(bindingType BindingType, options *Binding
 
 			// Then we make the request itself, passing in the client, options and args.
 			if response, err = binding.Request(w, options, args...); err != nil {
-				var errs []twitter.Error
-				switch err.(type) {
-				case *twitter.ErrorResponse:
-					errs = err.(*twitter.ErrorResponse).Errors
-				default:
-					break
-				}
-				if len(errs) > 0 {
-					log.ERROR.Printf("Could not make %s request no. %d for the following reasons: %v", binding.Type.String(), requestNo, errs)
+				var errorResponse *twitter.ErrorResponse
+				if errors.As(err, &errorResponse) {
+					log.ERROR.Printf("Could not make %s request no. %d for the following reasons: %v", binding.Type.String(), requestNo, err.(*twitter.ErrorResponse).Errors)
 				}
 				return bindingResult, errors.Wrapf(err, "could not make %s request no. %d", binding.Type.String(), requestNo)
 			}
@@ -490,15 +498,9 @@ func (w *ClientWrapper) ExecuteBinding(bindingType BindingType, options *Binding
 
 		// Then we make the Request itself.
 		if response, err = binding.Request(w, options, args...); err != nil {
-			var errs []twitter.Error
-			switch err.(type) {
-			case *twitter.ErrorResponse:
-				errs = err.(*twitter.ErrorResponse).Errors
-			default:
-				break
-			}
-			if len(errs) > 0 {
-				log.ERROR.Printf("Could not make singleton %s request for the following reasons: %v", binding.Type.String(), errs)
+			var errorResponse *twitter.ErrorResponse
+			if errors.As(err, &errorResponse) {
+				log.ERROR.Printf("Could not make singleton %s request for the following reasons: %v", binding.Type.String(), err.(*twitter.ErrorResponse).Errors)
 			}
 			return bindingResult, errors.Wrapf(err, "could not make singleton %s request", binding.Type.String())
 		}
