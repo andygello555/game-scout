@@ -4,10 +4,8 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
-	"github.com/anaskhan96/soup"
 	"github.com/andygello555/game-scout/browser"
 	mapset "github.com/deckarep/golang-set/v2"
-	"github.com/pkg/errors"
 	"github.com/volatiletech/null/v9"
 	"reflect"
 	"strings"
@@ -85,30 +83,64 @@ func (sf Storefront) ScrapeGame(url string, game *Game) (standardisedURL string)
 		const maxTries = 3
 		const minDelay = time.Second * 2
 
-		// Fetch the store page to gather info on the name and the publisher
-		if err = browser.SteamAppPage.TrySoup(maxTries, minDelay, func(doc *soup.Root) error {
-			var nameEl soup.Root
-			if nameEl = doc.Find("div", "id", "appHubAppName"); nameEl.Error != nil {
-				return errors.Wrapf(nameEl.Error, "could not find name of game on SteamAppPage soup for %s", url)
-			}
-			game.Name = null.StringFrom(nameEl.Text())
-			log.INFO.Printf("Game name (%d): %s", appID, game.Name.String)
+		// Fetch the appdetail json to gather info on the name and the publisher
+		if err = browser.SteamAppDetails.TryJSON(maxTries, minDelay, func(jsonBody map[string]any) (err error) {
+			var (
+				ok             bool
+				appDetailsBody any
+				appDetails     map[string]any
+				appDetailsData map[string]any
+			)
 
-			var devRows []soup.Root
-			if devRows = doc.FindAll("div", "class", "dev_row"); len(devRows) < 2 {
-				return fmt.Errorf("could not find publisher on SteamAppPage soup for %s, only found %d dev_rows", url, len(devRows))
+			if appDetailsBody, ok = jsonBody[fmt.Sprintf("%d", appID.(int64))]; !ok {
+				return fmt.Errorf("cannot get %v from returned JSON", appID)
 			}
 
-			developerName := strings.TrimSpace(devRows[0].Find("a").Text())
-			publisherName := strings.TrimSpace(devRows[1].Find("a").Text())
-			log.INFO.Printf("Developer name (%d): %s", appID, developerName)
-			log.INFO.Printf("Publisher name (%d): %s", appID, publisherName)
-			if developerName != publisherName {
-				game.Publisher = null.StringFrom(publisherName)
+			if appDetails, ok = appDetailsBody.(map[string]any); !ok {
+				return fmt.Errorf("cannot assert app details for %v to map[string]any", appID)
 			}
-			return nil
+
+			if !appDetails["success"].(bool) {
+				return fmt.Errorf("value of \"success\" key in app details for %v is false", appID)
+			}
+
+			if appDetailsData, ok = appDetails["data"].(map[string]any); !ok {
+				return fmt.Errorf("cannot assert app details \"data\" key for %v to map[string]any", appID)
+			}
+			game.Name = null.StringFrom(appDetailsData["name"].(string))
+
+			var (
+				developerName, publisherName strings.Builder
+				developers, publishers       []any
+			)
+			developers, ok = appDetailsData["developers"].([]any)
+			publishers, ok = appDetailsData["publishers"].([]any)
+			if !ok {
+				return fmt.Errorf(
+					"cannot convert values of \"developers\" (%v)/\"publishers\" (%v) keys to arrays",
+					appDetailsData["developers"], appDetailsData["publishers"],
+				)
+			}
+
+			for i, developer := range developers {
+				developerName.WriteString(developer.(string))
+				if i < len(developers)-1 {
+					developerName.WriteString(",")
+				}
+			}
+			for i, publisher := range publishers {
+				publisherName.WriteString(publisher.(string))
+				if i < len(publishers)-1 {
+					publisherName.WriteString(",")
+				}
+			}
+
+			if developerName.String() != publisherName.String() {
+				game.Publisher = null.StringFrom(publisherName.String())
+			}
+			return
 		}, appID); err != nil {
-			log.WARNING.Printf("Could not fetch info from SteamAppPage for %d: %s", appID, err.Error())
+			log.WARNING.Printf("Could not fetch info from SteamAppDetails for %d: %s", appID, err.Error())
 		}
 
 		// Fetch reviews to gather headline stats on the number of reviews

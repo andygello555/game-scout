@@ -20,6 +20,8 @@ type ScrapeURL string
 const (
 	// SteamAppPage is the app page for an appid.
 	SteamAppPage ScrapeURL = "%s://store.steampowered.com/app/%d"
+	// SteamAppDetails is the app details API from the Steam store. Can fetch the details for the given appid.
+	SteamAppDetails ScrapeURL = "%s://store.steampowered.com/api/appdetails/?appids=%d"
 	// SteamAppReviews fetches a JSON object of the reviews for the given appid.
 	SteamAppReviews ScrapeURL = "%s://store.steampowered.com/appreviews/%d?json=1&cursor=%s&language=%s&day_range=9223372036854775807&num_per_page=%d&review_type=all&purchase_type=%s&filter=%s&start_date=%d&end_date=%d&date_range_type=%s"
 	// SteamCommunityPosts fetches a JSON object of the required number of community posts by the partner (publisher).
@@ -31,6 +33,8 @@ func (su ScrapeURL) Name() string {
 	switch su {
 	case SteamAppPage:
 		return "SteamAppPage"
+	case SteamAppDetails:
+		return "SteamAppDetails"
 	case SteamAppReviews:
 		return "SteamAppReviews"
 	case SteamCommunityPosts:

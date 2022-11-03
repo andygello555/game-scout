@@ -12,7 +12,6 @@ import (
 	"github.com/andygello555/game-scout/db/models"
 	task "github.com/andygello555/game-scout/tasks"
 	myTwitter "github.com/andygello555/game-scout/twitter"
-	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/google/uuid"
 	"github.com/urfave/cli"
@@ -386,55 +385,19 @@ func main() {
 			},
 		},
 		{
-			Name: "aggregateCommunityPosts",
+			Name: "scrapeSteamGame",
 			Flags: []cli.Flag{
-				cli.Int64Flag{
-					Name:  "appid",
-					Usage: "the appid of the game to aggregate community posts for",
-					Value: 477160,
+				cli.IntFlag{
+					Name:     "appid",
+					Usage:    "the appid of the Steam game to scrape",
+					Required: true,
 				},
 			},
-			Description: "gets the total upvotes, downvotes, and comments for all community posts for a game",
+			Description: "scrape the Steam game with the given appid",
 			Action: func(c *cli.Context) (err error) {
-				const batchSize = 50
-				appID := c.Int64("appid")
-				totalUpvotes := 0
-				totalDownvotes := 0
-				totalComments := 0
-				gidEvent := "0"
-				gidAnnouncement := "0"
-				gids := mapset.NewSet[string]()
-
-				for {
-					var jsonBody map[string]any
-					if jsonBody, err = browser.SteamCommunityPosts.JSON(appID, 0, batchSize, gidEvent, gidAnnouncement); err != nil {
-						return cli.NewExitError(err.Error(), 1)
-					}
-					eventsProcessed := 0
-
-					for _, event := range jsonBody["events"].([]interface{}) {
-						eventBody := event.(map[string]any)
-						gid := eventBody["gid"].(string)
-						gidEvent = gid
-						if !gids.Contains(gid) {
-							gids.Add(gid)
-							announcementBody := eventBody["announcement_body"].(map[string]any)
-							gidAnnouncement = announcementBody["gid"].(string)
-							totalUpvotes += int(announcementBody["voteupcount"].(float64))
-							totalDownvotes += int(announcementBody["votedowncount"].(float64))
-							totalComments += int(announcementBody["commentcount"].(float64))
-							eventsProcessed++
-						}
-					}
-
-					if eventsProcessed == 0 {
-						break
-					}
-				}
-
-				fmt.Println("Total upvotes:", totalUpvotes)
-				fmt.Println("Total downvotes:", totalDownvotes)
-				fmt.Println("Total comments:", totalComments)
+				game := &models.Game{}
+				game.Website = null.StringFrom(models.SteamStorefront.ScrapeGame(browser.SteamAppPage.Fill(c.Int("appid")), game))
+				fmt.Println(game)
 				return
 			},
 		},

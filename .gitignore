@@ -25,3 +25,6 @@ tweetCap.json
 
 # Smommit ignore
 .smommit/
+
+# Ignore CSV files as these are usually just data samples
+*.csv

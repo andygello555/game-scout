@@ -323,19 +323,33 @@ func (w *ClientWrapper) SetTweetCap(used int, remaining int, total int, resets t
 // given RequestRateLimit.
 func (w *ClientWrapper) CheckRateLimit(binding *Binding, totalResources int) (err error) {
 	now := time.Now().UTC()
+
+	// We create copies of both the tweet cap and the current rate limit for this action (if there is one) so we don't
+	// have to lock the mutex for a long time.
 	w.Mutex.Lock()
+	tweetCap := TweetCap{
+		Used:        w.TweetCap.Used,
+		Remaining:   w.TweetCap.Remaining,
+		Total:       w.TweetCap.Total,
+		Resets:      w.TweetCap.Resets,
+		LastFetched: w.TweetCap.LastFetched,
+	}
+	rateLimit, rateLimitOk := w.RateLimits[binding.Type]
+	if rateLimitOk {
+		rateLimit = &twitter.RateLimit{
+			Limit:     rateLimit.Limit,
+			Remaining: rateLimit.Remaining,
+			Reset:     rateLimit.Reset,
+		}
+	}
+	w.Mutex.Unlock()
+
 	// If we don't have enough of our monthly tweet cap remaining to fetch the requested number of tweets then we will
 	// return an error.
-	if binding.ResourceType == Tweet && totalResources > w.TweetCap.Remaining {
+	if binding.ResourceType == Tweet && totalResources > tweetCap.Remaining {
 		log.WARNING.Printf("TweetCap check for %s failed when requesting %d tweets (%s)", binding.Type.String(), totalResources, w.TweetCap.String())
 		return &RateLimitError{
-			TweetCap: &TweetCap{
-				Used:        w.TweetCap.Used,
-				Remaining:   w.TweetCap.Remaining,
-				Total:       w.TweetCap.Total,
-				Resets:      w.TweetCap.Resets,
-				LastFetched: w.TweetCap.LastFetched,
-			},
+			TweetCap:               &tweetCap,
 			MaxResourcesPerRequest: binding.MaxResourcesPerRequest,
 			RequestedResources:     totalResources,
 			RequestRateLimit:       &binding.RequestRateLimit,
@@ -347,15 +361,16 @@ func (w *ClientWrapper) CheckRateLimit(binding *Binding, totalResources int) (er
 	// can check if we can make enough requests with the remaining rate limit. We only need to check the rate limit if
 	// the reset time is after the current time, this is because we don't really care if the rate limit is stale and
 	// assume that the rate has reset.
-	if rateLimit, ok := w.RateLimits[binding.Type]; ok && rateLimit.Reset.Time().After(now) {
+	if rateLimitOk && rateLimit.Reset.Time().After(now) {
 		log.INFO.Printf("We have a saved RateLimit for %s which is still valid for now", binding.Type.String())
 		if totalResources > rateLimit.Remaining*binding.MaxResourcesPerRequest {
+			log.WARNING.Printf(
+				"%d %ss exceeds rate limit of %d resources per request until %s",
+				totalResources, binding.ResourceType.String(), binding.MaxResourcesPerRequest,
+				rateLimit.Reset.Time().String(),
+			)
 			return &RateLimitError{
-				RateLimit: &twitter.RateLimit{
-					Limit:     rateLimit.Limit,
-					Remaining: rateLimit.Remaining,
-					Reset:     rateLimit.Reset,
-				},
+				RateLimit:              rateLimit,
 				MaxResourcesPerRequest: binding.MaxResourcesPerRequest,
 				RequestedResources:     totalResources,
 				ResourceType:           binding.ResourceType,
@@ -365,12 +380,15 @@ func (w *ClientWrapper) CheckRateLimit(binding *Binding, totalResources int) (er
 		// If the number of requests we can make in the remaining time on the rate limit exceeds the number of requests
 		// we would have to make to satisfy the totalResources to get.
 		if remaining := rateLimit.Reset.Time().Sub(now) / TimePerRequest; int64(remaining) < int64(totalResources/binding.MaxResourcesPerRequest) {
+			log.WARNING.Printf(
+				"There is %s remaining on the rate limit meaning we cannot make the %d requests required for %d %ss",
+				remaining.String(),
+				totalResources/binding.MaxResourcesPerRequest,
+				totalResources,
+				binding.ResourceType.String(),
+			)
 			return &RateLimitError{
-				RateLimit: &twitter.RateLimit{
-					Limit:     rateLimit.Limit,
-					Remaining: rateLimit.Remaining,
-					Reset:     rateLimit.Reset,
-				},
+				RateLimit:              rateLimit,
 				MaxResourcesPerRequest: binding.MaxResourcesPerRequest,
 				RequestedResources:     totalResources,
 				ResourceType:           binding.ResourceType,
@@ -378,10 +396,15 @@ func (w *ClientWrapper) CheckRateLimit(binding *Binding, totalResources int) (er
 			}
 		}
 	}
-	w.Mutex.Unlock()
+
 	// If the total number of resources we are requesting exceeds the maximum number of resources we can fetch with the
 	// Binding's rate limit then we will return an appropriate error.
 	if totalResources > binding.RequestRateLimit.Requests*binding.MaxResourcesPerRequest {
+		log.WARNING.Printf(
+			"%d %ss exceeds the number of %ss we could possibly ever request from %s (max: %d)",
+			totalResources, binding.ResourceType.String(), binding.ResourceType.String(),
+			binding.Type.String(), binding.RequestRateLimit.Requests*binding.MaxResourcesPerRequest,
+		)
 		return &RateLimitError{
 			RequestRateLimit: &RequestRateLimit{
 				Requests: binding.RequestRateLimit.Requests,

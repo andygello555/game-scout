@@ -618,11 +618,20 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 		// We also check if the rate limit will be exceeded by the number of requests. We use 100 * unscrapedDevelopers
 		// as the totalResources arg as we are more interested if the number of requests can be made.
 		if err = myTwitter.Client.CheckRateLimit(myTwitter.RecentSearch.Binding(), 100*len(unscrapedDevelopers)); err != nil {
+			log.WARNING.Printf(
+				"%d requests for %d developers will exceed our rate limit. We need to check if we can batch...",
+				len(unscrapedDevelopers), len(unscrapedDevelopers),
+			)
 			myTwitter.Client.Mutex.Lock()
 			rateLimit, ok := myTwitter.Client.RateLimits[myTwitter.RecentSearch]
 			myTwitter.Client.Mutex.Unlock()
+			log.WARNING.Printf("Managed to get rate limit for RecentSearch: %v", rateLimit)
 			if ok && rateLimit.Reset.Time().After(time.Now().UTC()) {
-				log.WARNING.Printf("Due to the number of unscrapedDevelopers (%d) this would exceed the current rate limit of RecentSearch: %d/%d %s. Switching to a batching approach...", rateLimit.Remaining, rateLimit.Limit, rateLimit.Reset.Time().String())
+				log.WARNING.Printf(
+					"Due to the number of unscrapedDevelopers (%d) this would exceed the current rate limit of "+
+						"RecentSearch: %d/%d %s. Switching to a batching approach...",
+					rateLimit.Remaining, rateLimit.Limit, rateLimit.Reset.Time().String(),
+				)
 				left := len(unscrapedDevelopers)
 				low := 0
 				high := rateLimit.Remaining
@@ -650,6 +659,7 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 			}
 		} else {
 			// Otherwise, queue up the jobs for ALL the updateDeveloperWorkers
+			log.INFO.Printf("Queueing up jobs one after another...")
 			queueDeveloperRange(0, len(unscrapedDevelopers))
 		}
 		close(jobs)
