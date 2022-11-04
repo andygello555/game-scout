@@ -137,33 +137,42 @@ func (wf developerSnapshotWeightedField) GetValueFromWeightedModel(model Weighte
 		return []float64{val}
 	case *twitter.TweetMetricsObj:
 		tweetMetricsObj := f.Interface().(*twitter.TweetMetricsObj)
-		return []float64{
-			float64(tweetMetricsObj.Impressions),
-			float64(tweetMetricsObj.URLLinkClicks),
-			float64(tweetMetricsObj.UserProfileClicks),
-			float64(tweetMetricsObj.Likes),
-			float64(tweetMetricsObj.Replies),
-			float64(tweetMetricsObj.Retweets),
-			float64(tweetMetricsObj.Quotes),
+		if tweetMetricsObj != nil {
+			return []float64{
+				float64(tweetMetricsObj.Impressions),
+				float64(tweetMetricsObj.URLLinkClicks),
+				float64(tweetMetricsObj.UserProfileClicks),
+				float64(tweetMetricsObj.Likes),
+				float64(tweetMetricsObj.Replies),
+				float64(tweetMetricsObj.Retweets),
+				float64(tweetMetricsObj.Quotes),
+			}
 		}
+		return []float64{0.0}
 	case *twitter.UserMetricsObj:
 		userMetricsObj := f.Interface().(*twitter.UserMetricsObj)
-		return []float64{
-			float64(userMetricsObj.Followers),
-			float64(userMetricsObj.Following),
-			float64(userMetricsObj.Tweets),
-			float64(userMetricsObj.Listed),
+		if userMetricsObj != nil {
+			return []float64{
+				float64(userMetricsObj.Followers),
+				float64(userMetricsObj.Following),
+				float64(userMetricsObj.Tweets),
+				float64(userMetricsObj.Listed),
+			}
 		}
+		return []float64{0.0}
 	case *myTwitter.ContextAnnotationSet:
 		contextAnnotationSet := f.Interface().(*myTwitter.ContextAnnotationSet)
-		values := make([]float64, contextAnnotationSet.Cardinality())
-		iterator := contextAnnotationSet.Set.Iterator()
-		var i int
-		for contextAnnotation := range iterator.C {
-			values[i] = contextAnnotation.Domain.Value()
-			i++
+		if contextAnnotationSet != nil {
+			values := make([]float64, contextAnnotationSet.Cardinality())
+			iterator := contextAnnotationSet.Set.Iterator()
+			var i int
+			for contextAnnotation := range iterator.C {
+				values[i] = contextAnnotation.Domain.Value()
+				i++
+			}
+			return values
 		}
-		return values
+		return []float64{0.0}
 	default:
 		panic(fmt.Errorf(
 			"developerSnapshotWeightedField has type %s, and cannot be converted to []float64",

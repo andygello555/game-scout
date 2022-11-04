@@ -97,6 +97,7 @@ func Open(config Config) error {
 	if flag.Lookup("test.v") != nil {
 		dsn = configToTestDSN(config)
 		dbName = config.TestDBName()
+		log.INFO.Printf("In testing mode. Creating new database: %s (%s)", dbName, dsn)
 	}
 	if err = createDB(dbName, config); err != nil {
 		return err

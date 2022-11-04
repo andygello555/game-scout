@@ -423,6 +423,37 @@ func (w *ClientWrapper) CheckRateLimit(binding *Binding, totalResources int) (er
 // the BindingResult. It will check if the rate limit has been/will be exceeded using the ClientWrapper.CheckRateLimit
 // method before executing the Binding.Request.
 func (w *ClientWrapper) ExecuteBinding(bindingType BindingType, options *BindingOptions, args ...any) (bindingResult BindingResult, err error) {
+	// We only update it if it is newer than the previous rate limit for this binding type, or there is no saved
+	// rate limit for this binding type yet. We can check if the rate limit is newer by looking at the reset times
+	// and the number of requests remaining.
+	updateRateLimits := func() {
+		rateLimit := bindingResult.RateLimit()
+		w.Mutex.Lock()
+		latestRateLimit, ok := w.RateLimits[bindingType]
+		update := !ok
+		if ok {
+			// We initialise some booleans to make things more readable
+			samePeriod := rateLimit.Reset.Time().Equal(latestRateLimit.Reset.Time())
+			smallerRemaining := rateLimit.Remaining < latestRateLimit.Remaining
+			afterPeriod := rateLimit.Reset.Time().After(latestRateLimit.Reset.Time())
+			update = (samePeriod && smallerRemaining) || afterPeriod
+		}
+		if update {
+			log.INFO.Printf(
+				"Updating RateLimit for %s to %d/%d (%s)",
+				bindingType.String(), rateLimit.Remaining, rateLimit.Limit, rateLimit.Reset.Time().String(),
+			)
+			w.RateLimits[bindingType] = rateLimit
+		} else {
+			log.WARNING.Printf(
+				"RateLimit for %s: %d/%d (%s) was not newer than the currently cached RateLimit for %s: %d/%d (%s)",
+				bindingType.String(), rateLimit.Remaining, rateLimit.Limit, rateLimit.Reset.Time().String(),
+				bindingType.String(), latestRateLimit.Remaining, latestRateLimit.Limit, latestRateLimit.Reset.Time().String(),
+			)
+		}
+		w.Mutex.Unlock()
+	}
+
 	var response any
 	binding := clientBindings[bindingType]
 	start := time.Now().UTC()
@@ -500,10 +531,8 @@ func (w *ClientWrapper) ExecuteBinding(bindingType BindingType, options *Binding
 					return bindingResult, errors.Wrapf(err, "could not set TweetCap after request no. %d", requestNo-1)
 				}
 			}
-			// Next it's the request rate limit
-			w.Mutex.Lock()
-			w.RateLimits[binding.Type] = bindingResult.RateLimit()
-			w.Mutex.Unlock()
+
+			updateRateLimits()
 		}
 		log.INFO.Printf("ExecuteBinding has completed batching process for %d requests in %s", requestNo-1, time.Now().UTC().Sub(start).String())
 	} else {
@@ -523,7 +552,10 @@ func (w *ClientWrapper) ExecuteBinding(bindingType BindingType, options *Binding
 		if response, err = binding.Request(w, options, args...); err != nil {
 			var errorResponse *twitter.ErrorResponse
 			if errors.As(err, &errorResponse) {
-				log.ERROR.Printf("Could not make singleton %s request for the following reasons: %v", binding.Type.String(), err.(*twitter.ErrorResponse).Errors)
+				log.ERROR.Printf(
+					"Could not make singleton %s request for the following reasons: %v",
+					binding.Type.String(), err.(*twitter.ErrorResponse).Errors,
+				)
 			}
 			return bindingResult, errors.Wrapf(err, "could not make singleton %s request", binding.Type.String())
 		}
@@ -539,10 +571,8 @@ func (w *ClientWrapper) ExecuteBinding(bindingType BindingType, options *Binding
 				return bindingResult, errors.Wrapf(err, "could not set TweetCap after singleton %s request", binding.Type.String())
 			}
 		}
-		// Next it's the request rate limit
-		w.Mutex.Lock()
-		w.RateLimits[binding.Type] = bindingResult.RateLimit()
-		w.Mutex.Unlock()
+
+		updateRateLimits()
 		log.INFO.Printf("ExecuteBinding has completed the singleton request in %s", time.Now().UTC().Sub(start).String())
 	}
 	return bindingResult, nil

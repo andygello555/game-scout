@@ -1,13 +1,18 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"github.com/andygello555/game-scout/browser"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
+	myTwitter "github.com/andygello555/game-scout/twitter"
+	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
+	"github.com/google/uuid"
+	"gorm.io/gorm"
 	"os"
 	"sort"
 	"testing"
@@ -86,7 +91,14 @@ func TestMain(m *testing.M) {
 	db.Close()
 }
 
+func clearDB(t *testing.T) {
+	if err := db.DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.Developer{}).Error; err != nil {
+		t.Fatalf("Could not clearDB: %s", err.Error())
+	}
+}
+
 func TestDiscoveryBatch(t *testing.T) {
+	clearDB(t)
 	const sampleTweetsPath = "samples/sampleTweets.json"
 	const finalDeveloperCount = 8
 	const finalGameCount = 2
@@ -120,5 +132,90 @@ func TestDiscoveryBatch(t *testing.T) {
 	}
 	if count != finalGameCount {
 		t.Errorf("There are %d Games in the DB instead of %d", count, finalGameCount)
+	}
+}
+
+func TestUpdatePhase(t *testing.T) {
+	clearDB(t)
+	const (
+		sampleDeveloperIDsPath = "samples/sampleUserIDs.txt"
+		batchSize              = 100
+		discoveryTweets        = 30250
+	)
+
+	file, err := os.Open(sampleDeveloperIDsPath)
+	if err != nil {
+		t.Fatalf("Cannot open %s: %s", sampleDeveloperIDsPath, err.Error())
+	}
+	defer func(file *os.File) {
+		err = file.Close()
+		if err != nil {
+			t.Fatalf("Could not close %s: %s", sampleDeveloperIDsPath, err.Error())
+		}
+	}(file)
+
+	// Create developers from the sampleDeveloperIDs file and also create a snapshot for each.
+	developerNo := 0
+	developerSnapshotNo := 0
+	sevenDaysAgo := time.Now().UTC().Add(time.Hour * time.Duration(-24*7))
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		developer := models.Developer{ID: scanner.Text()}
+		if err = db.DB.Create(&developer).Error; err != nil {
+			t.Errorf("Cannot create Developer %s: %s", developer.ID, err.Error())
+		}
+		developerNo++
+
+		if err = db.DB.Create(&models.DeveloperSnapshot{
+			Version:       0,
+			DeveloperID:   developer.ID,
+			Tweets:        1,
+			LastTweetTime: sevenDaysAgo,
+		}).Error; err != nil {
+			t.Errorf("Cannot create DeveloperSnapshot for Developer %s: %s", developer.ID, err.Error())
+		}
+		developerSnapshotNo++
+	}
+
+	// Create the global Twitter client
+	if err = myTwitter.ClientCreate(globalConfig.Twitter); err != nil {
+		t.Fatalf("Could not create Twitter ClientWrapper: %s", err.Error())
+	}
+
+	// We also just run a RecentSearch request, so we can update the RateLimits of the myTwitter.ClientWrapper
+	query := globalConfig.Twitter.TwitterQuery()
+	if _, err = myTwitter.Client.ExecuteBinding(
+		myTwitter.RecentSearch,
+		&myTwitter.BindingOptions{Total: 10},
+		query,
+		twitter.TweetRecentSearchOpts{MaxResults: 10},
+	); err != nil {
+		t.Fatalf("Error occurred whilst making a test RecentSearch request: %s", err.Error())
+	}
+
+	// Then we run the UpdatePhase function
+	userTweetTimes := make(map[string][]time.Time)
+	developerSnapshots := make(map[string][]*models.DeveloperSnapshot)
+	gameIDs := mapset.NewSet[uuid.UUID]()
+	if err = UpdatePhase(batchSize, discoveryTweets, []string{}, userTweetTimes, developerSnapshots, gameIDs); err != nil {
+		t.Errorf("Error occurred in update phase: %s", err.Error())
+	}
+
+	// We check if developerSnapshots and userTweetTimes have the same length as the number of developers read from the
+	// sample file.
+	if len(developerSnapshots) != developerNo {
+		t.Errorf(
+			"The number of developers in developerSnapshots does not equal the number of developer IDs "+
+				"read/created from %s: %d vs. %d",
+			sampleDeveloperIDsPath, len(developerSnapshots), developerNo,
+		)
+	}
+
+	if len(userTweetTimes) != developerNo {
+		t.Errorf(
+			"The number of users in userTweetTimes does not equal the number of developer IDs "+
+				"read/created from %s: %d vs. %d",
+			sampleDeveloperIDsPath, len(userTweetTimes), developerNo,
+		)
 	}
 }
