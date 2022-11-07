@@ -290,3 +290,8 @@ func (ds *DeveloperSnapshot) BeforeUpdate(tx *gorm.DB) (err error) {
 func (ds *DeveloperSnapshot) OnConflict() clause.OnConflict {
 	return clause.OnConflict{Columns: []clause.Column{{Name: "id"}}}
 }
+
+// OnCreateOmit returns the fields that should be omitted when creating a DeveloperSnapshot.
+func (ds *DeveloperSnapshot) OnCreateOmit() []string {
+	return []string{"Developer"}
+}

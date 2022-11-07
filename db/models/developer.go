@@ -51,3 +51,8 @@ func (d *Developer) Games(db *gorm.DB) (games []*Game, err error) {
 func (d *Developer) OnConflict() clause.OnConflict {
 	return clause.OnConflict{Columns: []clause.Column{{Name: "id"}}}
 }
+
+// OnCreateOmit returns the fields that should be omitted when creating a Developer.
+func (d *Developer) OnCreateOmit() []string {
+	return []string{}
+}

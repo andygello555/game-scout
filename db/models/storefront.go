@@ -4,10 +4,12 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
+	"github.com/anaskhan96/soup"
 	"github.com/andygello555/game-scout/browser"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/volatiletech/null/v9"
 	"reflect"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -165,7 +167,7 @@ func (sf Storefront) ScrapeGame(url string, game *Game) (standardisedURL string)
 			)
 		}
 
-		// Finally, fetch all the community posts and aggregate the upvotes, downvotes, and comment totals
+		// Fetch all the community posts and aggregate the upvotes, downvotes, and comment totals
 		const batchSize = 50
 		gidEvent := "0"
 		gidAnnouncement := "0"
@@ -252,6 +254,42 @@ func (sf Storefront) ScrapeGame(url string, game *Game) (standardisedURL string)
 			break
 		}
 
+		// Finally, we will fetch the game's app page so that we can see if they have included a link to the
+		// dev's/game's twitter page. This is only done when there is a Developer filled for the Game
+		// (i.e. the Game's Developer field is not nil).
+		if game.Developer != nil {
+			twitterUserURLPattern := regexp.MustCompile(`^https?://(?:www\.)?twitter\.com/(?:#!/)?@?([^/?#]*)(?:[?#].*)?$`)
+			if err = browser.SteamAppPage.TrySoup(maxTries, minDelay, func(doc *soup.Root) (err error) {
+				links := doc.FindAll("a")
+				usernames := mapset.NewSet[string]()
+				for _, link := range links {
+					attrs := link.Attrs()
+					if href, ok := attrs["href"]; ok {
+						if twitterUserURLPattern.MatchString(href) {
+							subs := twitterUserURLPattern.FindStringSubmatch(href)
+							if len(subs) > 0 {
+								usernames.Add(subs[1])
+							}
+						}
+					}
+				}
+
+				game.DeveloperVerified = usernames.Contains(game.Developer.Username)
+				log.INFO.Printf(
+					"Twitter usernames found for %d: %v. Contains \"%s\" = %t",
+					appID, usernames, game.Developer.Username, game.DeveloperVerified,
+				)
+				return
+			}, appID); err != nil {
+				log.WARNING.Printf(
+					"Could not get SteamAppPage Soup for %s: %s",
+					browser.SteamAppPage.Fill(appID), err.Error(),
+				)
+			}
+		} else {
+			log.WARNING.Printf("Game's Developer field is null, skipping DeveloperVerified check...")
+		}
+
 		// Set the standardised URL for the game's website
 		standardisedURL = browser.SteamAppPage.Fill(args...)
 	default:
@@ -261,34 +299,36 @@ func (sf Storefront) ScrapeGame(url string, game *Game) (standardisedURL string)
 }
 
 // ScrapeStorefrontsForGame will scrape all the storefront URLs found for a given game and collate more data on it that
-// will be stored in a Game model instance.
-func ScrapeStorefrontsForGame(storefrontsFound map[Storefront]mapset.Set[string]) *Game {
-	game := (*Game)(nil)
+// will be stored in the given Game model instance. The game parameter is a pointer to a pointer of Game so that we
+// can set the Game to nil if there are no storefrontsFound for it.
+func ScrapeStorefrontsForGame(game **Game, storefrontsFound map[Storefront]mapset.Set[string]) {
 	if len(storefrontsFound) > 0 {
-		game = &Game{
-			Storefront:      UnknownStorefront,
-			Name:            null.StringFromPtr(nil),
-			Website:         null.StringFromPtr(nil),
-			Publisher:       null.StringFromPtr(nil),
-			TotalReviews:    null.Int32FromPtr(nil),
-			PositiveReviews: null.Int32FromPtr(nil),
-			NegativeReviews: null.Int32FromPtr(nil),
-			ReviewScore:     null.Float64FromPtr(nil),
-			TotalUpvotes:    null.Int32FromPtr(nil),
-			TotalDownvotes:  null.Int32FromPtr(nil),
-			TotalComments:   null.Int32FromPtr(nil),
+		if game == nil {
+			*game = &Game{}
 		}
+		(*game).Storefront = UnknownStorefront
+		(*game).Name = null.StringFromPtr(nil)
+		(*game).Website = null.StringFromPtr(nil)
+		(*game).Publisher = null.StringFromPtr(nil)
+		(*game).TotalReviews = null.Int32FromPtr(nil)
+		(*game).PositiveReviews = null.Int32FromPtr(nil)
+		(*game).NegativeReviews = null.Int32FromPtr(nil)
+		(*game).ReviewScore = null.Float64FromPtr(nil)
+		(*game).TotalUpvotes = null.Int32FromPtr(nil)
+		(*game).TotalDownvotes = null.Int32FromPtr(nil)
+		(*game).TotalComments = null.Int32FromPtr(nil)
 		for _, storefront := range UnknownStorefront.Storefronts() {
 			if _, ok := storefrontsFound[storefront]; ok {
 				// Pop a random URL from the set of URLs for this storefront
 				url, _ := storefrontsFound[SteamStorefront].Pop()
 				// Do some scraping to find more details for the game
-				standardisedURL := storefront.ScrapeGame(url, game)
+				standardisedURL := storefront.ScrapeGame(url, *game)
 				// Finally, set the Storefront and Website fields
-				game.Storefront = SteamStorefront
-				game.Website = null.StringFrom(standardisedURL)
+				(*game).Storefront = SteamStorefront
+				(*game).Website = null.StringFrom(standardisedURL)
 			}
 		}
+	} else {
+		*game = nil
 	}
-	return game
 }

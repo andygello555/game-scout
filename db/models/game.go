@@ -24,6 +24,8 @@ type Game struct {
 	// DeveloperID is the foreign key to the Developer.
 	DeveloperID string
 	Developer   *Developer `gorm:"constraint:OnDelete:CASCADE;"`
+	// DeveloperVerified indicates whether the developer's Twitter username can be found somewhere on the Game's Website.
+	DeveloperVerified bool
 	// Publisher is the publisher for this game. Usually found via the Steam store API. If this cannot be found it is
 	// set to nil. If this is set then it negatively contributes to the Game's WeightedScore.
 	Publisher null.String
@@ -218,6 +220,11 @@ func (g *Game) OnConflict() clause.OnConflict {
 			Value:  nil,
 		}))}},
 	}
+}
+
+// OnCreateOmit returns the fields that should be omitted when creating a Game.
+func (g *Game) OnCreateOmit() []string {
+	return []string{"Developer"}
 }
 
 // Update will update the Game. It does this by calling the Storefront.ScrapeGame method on the referred to Game.

@@ -200,22 +200,4 @@ func TestUpdatePhase(t *testing.T) {
 	if err = UpdatePhase(batchSize, discoveryTweets, []string{}, userTweetTimes, developerSnapshots, gameIDs); err != nil {
 		t.Errorf("Error occurred in update phase: %s", err.Error())
 	}
-
-	// We check if developerSnapshots and userTweetTimes have the same length as the number of developers read from the
-	// sample file.
-	if len(developerSnapshots) != developerNo {
-		t.Errorf(
-			"The number of developers in developerSnapshots does not equal the number of developer IDs "+
-				"read/created from %s: %d vs. %d",
-			sampleDeveloperIDsPath, len(developerSnapshots), developerNo,
-		)
-	}
-
-	if len(userTweetTimes) != developerNo {
-		t.Errorf(
-			"The number of users in userTweetTimes does not equal the number of developer IDs "+
-				"read/created from %s: %d vs. %d",
-			sampleDeveloperIDsPath, len(userTweetTimes), developerNo,
-		)
-	}
 }

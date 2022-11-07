@@ -3,6 +3,7 @@ package twitter
 import (
 	"context"
 	"fmt"
+	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"strings"
 	"time"
@@ -73,6 +74,9 @@ func (bt BindingType) WrapResponse(response any) (result BindingResult, err erro
 			ignore := true
 			for _, tweetErr := range tweetRecentSearchResponse.Raw.Errors {
 				if !strings.Contains(IgnoredErrorTypes, tweetErr.Type) {
+					log.ERROR.Printf(
+						"Un-ignorable occurred in %s response: %s, %s", bt.String(), tweetErr.Type, tweetErr.Detail,
+					)
 					ignore = false
 					break
 				}
