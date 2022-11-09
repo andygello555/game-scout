@@ -47,6 +47,8 @@ type Game struct {
 	TotalDownvotes null.Int32
 	// TotalComments for this game. Only set when Storefront is SteamStorefront or ItchIOStorefront.
 	TotalComments null.Int32
+	// TagScore is the score of each tag for the game added together. Only set when Storefront is SteamStorefront.
+	TagScore null.Int64
 	// WeightedScore is a weighted average comprised of the values taken from Publisher, TotalReviews, ReviewScore,
 	// TotalUpvotes, TotalDownvotes, and TotalComments for this game. If Game.checkCalculateWeightedScore is false then
 	// this will be nil. This is a computed field, no need to set it before saving.
@@ -64,6 +66,7 @@ const (
 	TotalUpvotesWeight   gameWeight = 0.45
 	TotalDownvotesWeight gameWeight = -0.35
 	TotalCommentsWeight  gameWeight = 0.35
+	TagScoreWeight       gameWeight = 0.25
 )
 
 // gameWeightedField represents a field that can have a weighting calculation applied to it in Game.
@@ -76,6 +79,7 @@ const (
 	TotalUpvotes   gameWeightedField = "TotalUpvotes"
 	TotalDownvotes gameWeightedField = "TotalDownvotes"
 	TotalComments  gameWeightedField = "TotalComments"
+	TagScore       gameWeightedField = "TagScore"
 )
 
 // String returns the string value of the gameWeightedField.
@@ -97,6 +101,8 @@ func (gf gameWeightedField) Weight() (w float64, inverse bool) {
 		w = float64(TotalDownvotesWeight)
 	case TotalComments:
 		w = float64(TotalCommentsWeight)
+	case TagScore:
+		w = float64(TagScoreWeight)
 	default:
 		panic(fmt.Errorf("\"%s\" is not a gameWeightedField", gf))
 	}
@@ -145,6 +151,13 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 			val = float64(*nullInt32.Ptr())
 		}
 		return []float64{val}
+	case TagScore:
+		nullInt64 := f.Interface().(null.Int64)
+		var val float64
+		if nullInt64.IsValid() {
+			val = float64(*nullInt64.Ptr())
+		}
+		return []float64{val}
 	default:
 		panic(fmt.Errorf("gameWeightedField %s is not recognized, and cannot be converted to []float64", gf))
 	}
@@ -158,6 +171,7 @@ func (gf gameWeightedField) Fields() []WeightedField {
 		TotalUpvotes,
 		TotalDownvotes,
 		TotalComments,
+		TagScore,
 	}
 }
 

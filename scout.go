@@ -31,8 +31,8 @@ const (
 	maxTotalDiscoveryTweets = float64(myTwitter.TweetsPerDay) * maxTotalDiscoveryTweetsDailyPercent
 	// maxTotalUpdateTweets is the maximum number of tweets that can be scraped by the Update phase.
 	maxTotalUpdateTweets = float64(myTwitter.TweetsPerDay) * (1.0 - maxTotalDiscoveryTweetsDailyPercent)
-	// maxNonDisabledDevelopers is the number of developers to keep in the Disable phase.
-	maxNonDisabledDevelopers = maxTotalUpdateTweets / maxUpdateTweets
+	// maxEnabledDevelopers is the number of developers to keep in the Disable phase.
+	maxEnabledDevelopers = maxTotalUpdateTweets / maxUpdateTweets
 )
 
 // sleepBar will sleep for the given time.Duration (as seconds) and display a progress bar for the sleep.
@@ -231,60 +231,11 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 
 	// 4th phase: Disable. Disable the developers who aren't doing so well. The number of developers to disable depends
 	// on the number of tweets we get to use in the update phase the next time around.
-
-	// UPDATE developers
-	// SET disabled = true
-	// WHERE id IN (
-	//     SELECT developers.id
-	//     FROM (
-	//        SELECT developer_snapshots.developer_id, max(version) AS latest_version
-	//        FROM developer_snapshots
-	//        GROUP BY developer_snapshots.developer_id
-	//     ) ds1
-	//     JOIN developer_snapshots ds2 ON ds1.developer_id = ds2.developer_id AND ds1.latest_version = ds2.version
-	//     JOIN developers ON ds2.developer_id = developers.id
-	//     WHERE NOT developers.disabled
-	//     ORDER BY ds2.weighted_score
-	//     LIMIT <TOTAL NON DISABLED DEVELOPERS - maxNonDisabledDevelopers
-	// );
-
 	phaseStart = time.Now().UTC()
 	log.INFO.Println("Starting Disable phase")
 
-	var enabledDeveloperCount int64
-	if err = db.DB.Model(&models.Developer{}).Where("NOT disabled").Count(&enabledDeveloperCount).Error; err == nil {
-		log.INFO.Printf("There are %d enabled developers", enabledDeveloperCount)
-		if maxEnabled := int64(math.Floor(maxNonDisabledDevelopers)); enabledDeveloperCount > maxEnabled {
-			limit := enabledDeveloperCount - maxEnabled
-			log.INFO.Printf("Disabling %d of the worst performing developers", limit)
-			if update := db.DB.Model(&models.Developer{}).Update(
-				"disabled", true,
-			).Where(
-				"id IN (?)",
-				db.DB.Table(
-					"(?) as ds1",
-					db.DB.Model(&models.DeveloperSnapshot{}).Select(
-						"developer_snapshots.developer_id", "max(version) as latest_version",
-					).Group("developer_snapshots.developer_id"),
-				).Joins(
-					"JOIN developer_snapshots ds2 ON ds1.developer_id = ds2.developer_id AND ds1.latest_version = ds2.version",
-				).Joins(
-					"JOIN developers on ds2.developer_id = developers.id",
-				).Where("NOT developers.disabled").Order("ds2.weighted_score").Limit(int(limit)),
-			); update.Error != nil {
-				log.ERROR.Printf("Could not update %d developers to disabled status: %v", limit, update.Error.Error())
-				return errors.Wrapf(update.Error, "could not update %d developers to disabled status", limit)
-			}
-			log.INFO.Printf("Successfully disabled %d developers", limit)
-		} else {
-			log.WARNING.Printf(
-				"Because there are only %d enabled developers, there is no need to disable any developers (max "+
-					"enabled developers = %d)",
-				enabledDeveloperCount, maxEnabled,
-			)
-		}
-	} else {
-		log.ERROR.Printf("Could not count the number of disabled Developers: %v. Skipping Disable phase...", err.Error())
+	if err = DisablePhase(); err != nil {
+		return errors.Wrap(err, "disable phase has failed")
 	}
 
 	log.INFO.Printf("Finished Disable phase in %s", time.Now().UTC().Sub(phaseStart))

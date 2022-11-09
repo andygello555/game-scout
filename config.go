@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"github.com/andygello555/game-scout/db/models"
 	task "github.com/andygello555/game-scout/tasks"
+	"github.com/pkg/errors"
 	"os"
 	"strings"
 )
@@ -93,11 +95,31 @@ func (c *TwitterConfig) TwitterQuery() string {
 	return strings.Join(hashtags, " OR ")
 }
 
+type TagConfig struct {
+	DefaultValue float64            `json:"default_value"`
+	Values       map[string]float64 `json:"values"`
+}
+
+type StorefrontConfig struct {
+	Storefront models.Storefront `json:"storefront"`
+	Tags       *TagConfig        `json:"tags"`
+}
+
+func (sfc *StorefrontConfig) StorefrontStorefront() models.Storefront { return sfc.Storefront }
+func (sfc *StorefrontConfig) StorefrontTags() *TagConfig              { return sfc.Tags }
+
+type ScrapeConfig struct {
+	Storefronts []*StorefrontConfig `json:"storefronts"`
+}
+
+func (sc *ScrapeConfig) ScrapeStorefronts() []*StorefrontConfig { return sc.Storefronts }
+
 // Config contains the sub-configs for the various parts of the game-scout system. Such as the DBConfig.
 type Config struct {
 	DB      *DBConfig      `json:"db"`
 	Tasks   *TaskConfig    `json:"tasks"`
 	Twitter *TwitterConfig `json:"twitter"`
+	Scrape  *ScrapeConfig  `json:"scrape"`
 }
 
 var globalConfig *Config
@@ -115,4 +137,12 @@ func LoadConfig() error {
 		return err
 	}
 	return nil
+}
+
+// ToJSON converts the Config back to JSON.
+func (c *Config) ToJSON() (jsonData []byte, err error) {
+	if jsonData, err = json.Marshal(c); err != nil {
+		return jsonData, errors.Wrap(err, "could not Marshal Config to JSON")
+	}
+	return
 }

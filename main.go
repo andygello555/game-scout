@@ -39,6 +39,7 @@ func init() {
 }
 
 func main() {
+	rand.Seed(time.Now().Unix())
 	// We set up the global DB instance...
 	start := time.Now().UTC()
 	log.INFO.Printf("Setting up DB at %s", start.String())
@@ -328,6 +329,7 @@ func main() {
 					totalUpvotes := int32(rand.Intn(5000))
 					totalDownvotes := int32(rand.Intn(5000))
 					totalComments := int32(rand.Intn(3000))
+					tagScore := int64(rand.Intn(6000))
 					game := models.Game{
 						Name:            null.StringFrom("fake"),
 						Storefront:      models.SteamStorefront,
@@ -340,6 +342,7 @@ func main() {
 						TotalUpvotes:    null.Int32From(totalUpvotes),
 						TotalDownvotes:  null.Int32From(totalDownvotes),
 						TotalComments:   null.Int32From(totalComments),
+						TagScore:        null.Int64From(tagScore),
 					}
 					// Then the game...
 					if tx := db.DB.Create(&game); tx.Error != nil {
@@ -436,6 +439,26 @@ func main() {
 			Action: func(c *cli.Context) (err error) {
 				if err = db.UpdateComputedFieldsForModels(c.StringSlice("models")...); err != nil {
 					return cli.NewExitError(err.Error(), 1)
+				}
+				return
+			},
+		},
+		{
+			Name: "config",
+			Flags: []cli.Flag{
+				cli.BoolFlag{
+					Name:  "view",
+					Usage: "view the entire config",
+				},
+			},
+			Description: "subcommand for viewing/manipulating the currently loaded config.json",
+			Action: func(c *cli.Context) (err error) {
+				if c.Bool("view") {
+					var jsonData []byte
+					if jsonData, err = globalConfig.ToJSON(); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+					fmt.Println(string(jsonData))
 				}
 				return
 			},

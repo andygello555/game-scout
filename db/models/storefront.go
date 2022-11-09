@@ -317,6 +317,7 @@ func ScrapeStorefrontsForGame(game **Game, storefrontsFound map[Storefront]mapse
 		(*game).TotalUpvotes = null.Int32FromPtr(nil)
 		(*game).TotalDownvotes = null.Int32FromPtr(nil)
 		(*game).TotalComments = null.Int32FromPtr(nil)
+		(*game).TagScore = null.Int64FromPtr(nil)
 		for _, storefront := range UnknownStorefront.Storefronts() {
 			if _, ok := storefrontsFound[storefront]; ok {
 				// Pop a random URL from the set of URLs for this storefront

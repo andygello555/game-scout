@@ -20,12 +20,15 @@ type ScrapeURL string
 const (
 	// SteamAppPage is the app page for an appid.
 	SteamAppPage ScrapeURL = "%s://store.steampowered.com/app/%d"
-	// SteamAppDetails is the app details API from the Steam store. Can fetch the details for the given appid.
+	// SteamAppDetails is the app details API from the Steam store. Can fetch the details, in JSON, for the given appid.
 	SteamAppDetails ScrapeURL = "%s://store.steampowered.com/api/appdetails/?appids=%d"
 	// SteamAppReviews fetches a JSON object of the reviews for the given appid.
 	SteamAppReviews ScrapeURL = "%s://store.steampowered.com/appreviews/%d?json=1&cursor=%s&language=%s&day_range=9223372036854775807&num_per_page=%d&review_type=all&purchase_type=%s&filter=%s&start_date=%d&end_date=%d&date_range_type=%s"
 	// SteamCommunityPosts fetches a JSON object of the required number of community posts by the partner (publisher).
 	SteamCommunityPosts ScrapeURL = "%s://store.steampowered.com/events/ajaxgetadjacentpartnerevents/?appid=%d&count_before=%d&count_after=%d&gidevent=%s&gidannouncement=%s&lang_list=0&origin=https://steamcommunity.com"
+	// SteamSpyAppDetails is the URL for the app details API from Steamspy. Can fetch the details, in JSON, for the
+	// given appid.
+	SteamSpyAppDetails ScrapeURL = "%s://steamspy.com/api.php?request=appdetails&appid=%d"
 )
 
 // Name returns the name of the ScrapeURL.
@@ -39,6 +42,8 @@ func (su ScrapeURL) Name() string {
 		return "SteamAppReviews"
 	case SteamCommunityPosts:
 		return "SteamCommunityPosts"
+	case SteamSpyAppDetails:
+		return "SteamSpyAppDetails"
 	default:
 		return "<nil>"
 	}
