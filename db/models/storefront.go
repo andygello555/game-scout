@@ -7,6 +7,7 @@ import (
 	"github.com/anaskhan96/soup"
 	"github.com/andygello555/game-scout/browser"
 	mapset "github.com/deckarep/golang-set/v2"
+	"github.com/pkg/errors"
 	"github.com/volatiletech/null/v9"
 	"reflect"
 	"regexp"
@@ -72,9 +73,28 @@ func (sf Storefront) Storefronts() []Storefront {
 	}
 }
 
+// TagConfig contains the configuration for the tags that are found in browser.SteamSpyAppDetails.
+type TagConfig interface {
+	TagDefaultValue() float64
+	TagUpvotesThreshold() float64
+	TagValues() map[string]float64
+}
+
+// StorefrontConfig contains the configuration for a specific Storefront.
+type StorefrontConfig interface {
+	StorefrontStorefront() Storefront
+	StorefrontTags() TagConfig
+}
+
+// ScrapeConfig contains the configuration for the scrape.
+type ScrapeConfig interface {
+	ScrapeStorefronts() []StorefrontConfig
+	ScrapeGetStorefront(storefront Storefront) StorefrontConfig
+}
+
 // ScrapeGame will fetch more info on the given game located at the given URL. The scrape procedure depends on what
 // Storefront the URL is for. This also returns a standardised URL for the game's webpage.
-func (sf Storefront) ScrapeGame(url string, game *Game) (standardisedURL string) {
+func (sf Storefront) ScrapeGame(url string, game *Game, config ScrapeConfig) (standardisedURL string) {
 	var err error
 	switch sf {
 	case UnknownStorefront:
@@ -254,6 +274,76 @@ func (sf Storefront) ScrapeGame(url string, game *Game) (standardisedURL string)
 			break
 		}
 
+		// Use SteamSpy to find the accumulated TagScore for the game
+		storefrontConfig := config.ScrapeGetStorefront(sf)
+		if storefrontConfig != nil {
+			tagConfig := storefrontConfig.StorefrontTags()
+			if err = browser.SteamSpyAppDetails.TryJSON(maxTries, minDelay, func(jsonBody map[string]any) (err error) {
+				if tagAny, ok := jsonBody["tags"]; ok {
+					var tags map[string]any
+					switch tagAny.(type) {
+					case []any:
+						if len(tagAny.([]any)) > 0 {
+							return errors.New("\"tags\" should be an object but it's a non-empty array")
+						}
+						tags = make(map[string]any)
+					case map[string]any:
+						tags = tagAny.(map[string]any)
+					default:
+						return errors.Errorf("\"tags\" should be an object but it's a %s", reflect.TypeOf(tagAny).String())
+					}
+
+					if len(tags) > 0 {
+						game.TagScore = null.Float64From(0.0)
+					}
+					for name, upvotes := range tags {
+						// First we check if the upvotes are actually a float64
+						var upvotesFloat float64
+						if upvotesFloat, ok = upvotes.(float64); ok {
+							upvotesFloat = upvotes.(float64)
+						} else {
+							log.WARNING.Printf(
+								"For app %d: upvotes (%v) for tag \"%s\" is not a float, it is a %s",
+								appID, upvotes, name, reflect.TypeOf(upvotes).String(),
+							)
+							continue
+						}
+
+						// Then we check if the upvotes exceed the upvotes threshold.
+						if upvotesFloat < tagConfig.TagUpvotesThreshold() {
+							log.WARNING.Printf(
+								"For app %d: %f upvotes for \"%s\" do not exceed the threshold of %f",
+								appID, upvotesFloat, name, tagConfig.TagUpvotesThreshold(),
+							)
+							continue
+						}
+
+						// Finally, we add the value of the tag to the tag score, using the default value if necessary
+						var value float64
+						if value, ok = tagConfig.TagValues()[name]; !ok {
+							value = tagConfig.TagDefaultValue()
+						}
+						// Add the value of the tag multiplied by the number of upvotes the tag has
+						log.INFO.Printf("For app %d: \"%s\" = %f", appID, name, value*upvotesFloat)
+						game.TagScore.Float64 += value * upvotesFloat
+					}
+
+					// Then we take the average of the score
+					if len(tags) > 0 && game.TagScore.Float64 > 0.0 {
+						game.TagScore.Float64 = game.TagScore.Float64 / float64(len(tags))
+					}
+				}
+				return
+			}, appID); err != nil {
+				log.WARNING.Printf(
+					"Could not get SteamSpyAppDetails JSON for %s: %s",
+					browser.SteamSpyAppDetails.Fill(appID), err.Error(),
+				)
+			}
+		} else {
+			log.WARNING.Printf("There is no storefront config for %s, so we are skipping tag finding", sf.String())
+		}
+
 		// Finally, we will fetch the game's app page so that we can see if they have included a link to the
 		// dev's/game's twitter page. This is only done when there is a Developer filled for the Game
 		// (i.e. the Game's Developer field is not nil).
@@ -301,7 +391,7 @@ func (sf Storefront) ScrapeGame(url string, game *Game) (standardisedURL string)
 // ScrapeStorefrontsForGame will scrape all the storefront URLs found for a given game and collate more data on it that
 // will be stored in the given Game model instance. The game parameter is a pointer to a pointer of Game so that we
 // can set the Game to nil if there are no storefrontsFound for it.
-func ScrapeStorefrontsForGame(game **Game, storefrontsFound map[Storefront]mapset.Set[string]) {
+func ScrapeStorefrontsForGame(game **Game, storefrontsFound map[Storefront]mapset.Set[string], config ScrapeConfig) {
 	if len(storefrontsFound) > 0 {
 		if game == nil {
 			*game = &Game{}
@@ -317,13 +407,13 @@ func ScrapeStorefrontsForGame(game **Game, storefrontsFound map[Storefront]mapse
 		(*game).TotalUpvotes = null.Int32FromPtr(nil)
 		(*game).TotalDownvotes = null.Int32FromPtr(nil)
 		(*game).TotalComments = null.Int32FromPtr(nil)
-		(*game).TagScore = null.Int64FromPtr(nil)
+		(*game).TagScore = null.Float64FromPtr(nil)
 		for _, storefront := range UnknownStorefront.Storefronts() {
 			if _, ok := storefrontsFound[storefront]; ok {
 				// Pop a random URL from the set of URLs for this storefront
 				url, _ := storefrontsFound[SteamStorefront].Pop()
 				// Do some scraping to find more details for the game
-				standardisedURL := storefront.ScrapeGame(url, *game)
+				standardisedURL := storefront.ScrapeGame(url, *game, config)
 				// Finally, set the Storefront and Website fields
 				(*game).Storefront = SteamStorefront
 				(*game).Website = null.StringFrom(standardisedURL)

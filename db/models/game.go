@@ -47,8 +47,9 @@ type Game struct {
 	TotalDownvotes null.Int32
 	// TotalComments for this game. Only set when Storefront is SteamStorefront or ItchIOStorefront.
 	TotalComments null.Int32
-	// TagScore is the score of each tag for the game added together. Only set when Storefront is SteamStorefront.
-	TagScore null.Int64
+	// TagScore is average value of each tag, multiplied by the number of upvotes for that tag, for the game. See
+	// TagConfig for more info. Only set when Storefront is SteamStorefront.
+	TagScore null.Float64
 	// WeightedScore is a weighted average comprised of the values taken from Publisher, TotalReviews, ReviewScore,
 	// TotalUpvotes, TotalDownvotes, and TotalComments for this game. If Game.checkCalculateWeightedScore is false then
 	// this will be nil. This is a computed field, no need to set it before saving.
@@ -152,10 +153,10 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 		}
 		return []float64{val}
 	case TagScore:
-		nullInt64 := f.Interface().(null.Int64)
+		nullInt64 := f.Interface().(null.Float64)
 		var val float64
 		if nullInt64.IsValid() {
-			val = float64(*nullInt64.Ptr())
+			val = *nullInt64.Ptr()
 		}
 		return []float64{val}
 	default:
@@ -242,7 +243,7 @@ func (g *Game) OnCreateOmit() []string {
 }
 
 // Update will update the Game. It does this by calling the Storefront.ScrapeGame method on the referred to Game.
-func (g *Game) Update(db *gorm.DB) error {
-	g.Website = null.StringFrom(g.Storefront.ScrapeGame(g.Website.String, g))
+func (g *Game) Update(db *gorm.DB, config ScrapeConfig) error {
+	g.Website = null.StringFrom(g.Storefront.ScrapeGame(g.Website.String, g, config))
 	return db.Save(g).Error
 }

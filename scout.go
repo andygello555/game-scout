@@ -22,8 +22,10 @@ const (
 	updateDeveloperWorkers = 5
 	// maxUpdateTweets is the maximum number of tweets fetched in the update phase.
 	maxUpdateTweets = 12
-	// secondsBetweenBatches is the number of seconds to sleep between DiscoveryBatch batches.
-	secondsBetweenBatches = time.Second * 20
+	// secondsBetweenDiscoveryBatches is the number of seconds to sleep between DiscoveryBatch batches.
+	secondsBetweenDiscoveryBatches = time.Second * 5
+	// secondsBetweenUpdateBatches is the number of seconds to sleep between queue batches of updateDeveloperJob.
+	secondsBetweenUpdateBatches = time.Second * 30
 	// maxTotalDiscoveryTweetsDailyPercent is the maximum percentage that the discoveryTweets number can be out of
 	// myTwitter.TweetsPerDay.
 	maxTotalDiscoveryTweetsDailyPercent = 0.55
@@ -136,9 +138,9 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 		// Nap time
 		log.INFO.Printf(
 			"Finished batch in %s. Sleeping for %s so we don't overdo it",
-			time.Now().UTC().Sub(batchStart).String(), secondsBetweenBatches.String(),
+			time.Now().UTC().Sub(batchStart).String(), secondsBetweenDiscoveryBatches.String(),
 		)
-		sleepBar(secondsBetweenBatches)
+		sleepBar(secondsBetweenDiscoveryBatches)
 	}
 	log.INFO.Printf("Finished Discovery phase in %s", time.Now().UTC().Sub(phaseStart).String())
 

@@ -12,6 +12,7 @@ import (
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/google/uuid"
+	"github.com/volatiletech/null/v9"
 	"gorm.io/gorm"
 	"math"
 	"math/rand"
@@ -102,9 +103,11 @@ func clearDB(t *testing.T) {
 
 func TestDiscoveryBatch(t *testing.T) {
 	clearDB(t)
-	const sampleTweetsPath = "samples/sampleTweets.json"
-	const finalDeveloperCount = 8
-	const finalGameCount = 2
+	const (
+		sampleTweetsPath    = "samples/sampleTweets.json"
+		finalDeveloperCount = 8
+		finalGameCount      = 2
+	)
 
 	if sampleTweetsBytes, err := os.ReadFile(sampleTweetsPath); err != nil {
 		t.Errorf("Cannot read sample tweets from %s: %s", sampleTweetsPath, err.Error())
@@ -139,33 +142,65 @@ func TestDiscoveryBatch(t *testing.T) {
 }
 
 func TestUpdatePhase(t *testing.T) {
+	var (
+		scanner *bufio.Scanner
+		err     error
+	)
 	clearDB(t)
 	const (
 		sampleDeveloperIDsPath = "samples/sampleUserIDs.txt"
+		sampleGameWebsitesPath = "samples/sampleGameWebsites.txt"
 		batchSize              = 100
 		discoveryTweets        = 30250
 	)
 
-	file, err := os.Open(sampleDeveloperIDsPath)
-	if err != nil {
+	closeFile := func(file *os.File, filename string) {
+		if err = file.Close(); err != nil {
+			t.Fatalf("Could not close %s: %s", filename, err.Error())
+		}
+	}
+
+	// First we load all the game websites into an array
+	gameWebsites := make([]null.String, 0)
+	var gameWebsitesFile *os.File
+	if gameWebsitesFile, err = os.Open(sampleGameWebsitesPath); err != nil {
+		t.Fatalf("Cannot open %s: %s", sampleGameWebsitesPath, err.Error())
+	}
+	defer closeFile(gameWebsitesFile, sampleGameWebsitesPath)
+
+	scanner = bufio.NewScanner(gameWebsitesFile)
+	for scanner.Scan() {
+		gameWebsites = append(gameWebsites, null.StringFrom(scanner.Text()))
+	}
+
+	// Then we open the sample file containing developer IDs and create a developer for each
+	var developerIDsFile *os.File
+	if developerIDsFile, err = os.Open(sampleDeveloperIDsPath); err != nil {
 		t.Fatalf("Cannot open %s: %s", sampleDeveloperIDsPath, err.Error())
 	}
-	defer func(file *os.File) {
-		err = file.Close()
-		if err != nil {
-			t.Fatalf("Could not close %s: %s", sampleDeveloperIDsPath, err.Error())
-		}
-	}(file)
+	defer closeFile(developerIDsFile, sampleDeveloperIDsPath)
 
-	// Create developers from the sampleDeveloperIDs file and also create a snapshot for each.
+	// Create developers from the sampleDeveloperIDs file and also create a game and a snapshot for each.
 	developerNo := 0
 	developerSnapshotNo := 0
-	sevenDaysAgo := time.Now().UTC().Add(time.Hour * time.Duration(-24*7))
-	scanner := bufio.NewScanner(file)
+	sixDaysAgo := time.Now().UTC().Add(time.Hour * time.Duration(-24*6))
+	scanner = bufio.NewScanner(developerIDsFile)
 	for scanner.Scan() {
 		developer := models.Developer{ID: scanner.Text()}
 		if err = db.DB.Create(&developer).Error; err != nil {
 			t.Errorf("Cannot create Developer %s: %s", developer.ID, err.Error())
+		}
+
+		if err = db.DB.Create(&models.Game{
+			Name:        null.StringFrom(fmt.Sprintf("Game for Developer: %d", developerNo)),
+			Storefront:  models.SteamStorefront,
+			Website:     gameWebsites[developerNo],
+			DeveloperID: developer.ID,
+		}).Error; err != nil {
+			t.Errorf(
+				"Cannot create game %s for Developer %s: %s",
+				gameWebsites[developerNo].String, developer.ID, err.Error(),
+			)
 		}
 		developerNo++
 
@@ -173,7 +208,7 @@ func TestUpdatePhase(t *testing.T) {
 			Version:       0,
 			DeveloperID:   developer.ID,
 			Tweets:        1,
-			LastTweetTime: sevenDaysAgo,
+			LastTweetTime: sixDaysAgo,
 		}).Error; err != nil {
 			t.Errorf("Cannot create DeveloperSnapshot for Developer %s: %s", developer.ID, err.Error())
 		}

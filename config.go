@@ -96,23 +96,57 @@ func (c *TwitterConfig) TwitterQuery() string {
 }
 
 type TagConfig struct {
-	DefaultValue float64            `json:"default_value"`
-	Values       map[string]float64 `json:"values"`
+	// DefaultValue is the default value for tags that are not included in the Values map. The value of each tag for a
+	// models.Game (on the models.SteamStorefront) will be multiplied by the number of upvotes it has then accumulated.
+	// The average of this accumulated value will be used to calculate models.Game.WeightedScore.
+	DefaultValue float64 `json:"default_value"`
+	// UpvotesThreshold is the threshold for the number of upvotes a tag should have (i.e. >=) to be included in the
+	// accumulated value of all the tags for a models.Game. If this is not set (== 0), then all the tags will be added.
+	UpvotesThreshold float64 `json:"upvotes_threshold"`
+	// Values is a map of tag names to values. It is useful for soft "banning" tags that we don't want to see in a game.
+	Values map[string]float64 `json:"values"`
 }
 
+func (tc *TagConfig) TagDefaultValue() float64      { return tc.DefaultValue }
+func (tc *TagConfig) TagUpvotesThreshold() float64  { return tc.UpvotesThreshold }
+func (tc *TagConfig) TagValues() map[string]float64 { return tc.Values }
+
 type StorefrontConfig struct {
+	// Storefront is the models.Storefront that this StorefrontConfig applies to.
 	Storefront models.Storefront `json:"storefront"`
-	Tags       *TagConfig        `json:"tags"`
+	// Tags is the TagConfig for the models.Storefront. This only applies to models.SteamStorefront.
+	Tags *TagConfig `json:"tags"`
 }
 
 func (sfc *StorefrontConfig) StorefrontStorefront() models.Storefront { return sfc.Storefront }
-func (sfc *StorefrontConfig) StorefrontTags() *TagConfig              { return sfc.Tags }
+func (sfc *StorefrontConfig) StorefrontTags() models.TagConfig        { return sfc.Tags }
 
 type ScrapeConfig struct {
+	// Storefronts is a list of StorefrontConfig that contains the configs for each models.Storefront.
 	Storefronts []*StorefrontConfig `json:"storefronts"`
 }
 
-func (sc *ScrapeConfig) ScrapeStorefronts() []*StorefrontConfig { return sc.Storefronts }
+func (sc *ScrapeConfig) ScrapeStorefronts() []models.StorefrontConfig {
+	storefronts := make([]models.StorefrontConfig, len(sc.Storefronts))
+	for i, storefront := range sc.Storefronts {
+		storefronts[i] = storefront
+	}
+	return storefronts
+}
+
+func (sc *ScrapeConfig) ScrapeGetStorefront(storefront models.Storefront) (storefrontConfig models.StorefrontConfig) {
+	found := false
+	for _, storefrontConfig = range sc.Storefronts {
+		if storefrontConfig.StorefrontStorefront() == storefront {
+			found = true
+			break
+		}
+	}
+	if !found {
+		storefrontConfig = nil
+	}
+	return
+}
 
 // Config contains the sub-configs for the various parts of the game-scout system. Such as the DBConfig.
 type Config struct {

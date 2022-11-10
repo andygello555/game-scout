@@ -329,7 +329,7 @@ func main() {
 					totalUpvotes := int32(rand.Intn(5000))
 					totalDownvotes := int32(rand.Intn(5000))
 					totalComments := int32(rand.Intn(3000))
-					tagScore := int64(rand.Intn(6000))
+					tagScore := float64(rand.Intn(6000))
 					game := models.Game{
 						Name:            null.StringFrom("fake"),
 						Storefront:      models.SteamStorefront,
@@ -342,7 +342,7 @@ func main() {
 						TotalUpvotes:    null.Int32From(totalUpvotes),
 						TotalDownvotes:  null.Int32From(totalDownvotes),
 						TotalComments:   null.Int32From(totalComments),
-						TagScore:        null.Int64From(tagScore),
+						TagScore:        null.Float64From(tagScore),
 					}
 					// Then the game...
 					if tx := db.DB.Create(&game); tx.Error != nil {
@@ -399,7 +399,11 @@ func main() {
 			Description: "scrape the Steam game with the given appid",
 			Action: func(c *cli.Context) (err error) {
 				game := &models.Game{}
-				game.Website = null.StringFrom(models.SteamStorefront.ScrapeGame(browser.SteamAppPage.Fill(c.Int("appid")), game))
+				game.Website = null.StringFrom(models.SteamStorefront.ScrapeGame(
+					browser.SteamAppPage.Fill(c.Int("appid")),
+					game,
+					globalConfig.Scrape,
+				))
 				fmt.Println(game)
 				return
 			},
@@ -459,6 +463,45 @@ func main() {
 						return cli.NewExitError(err.Error(), 1)
 					}
 					fmt.Println(string(jsonData))
+				}
+				return
+			},
+		},
+		{
+			Name: "developer",
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:     "id",
+					Usage:    "the ID of the developer/Twitter user in the DB",
+					Required: true,
+				},
+				cli.BoolFlag{
+					Name:     "games",
+					Usage:    "view the games for this developer",
+					Required: false,
+				},
+			},
+			Description: "subcommand for viewing resources related to a developer in the DB",
+			Action: func(c *cli.Context) (err error) {
+				var developer models.Developer
+				if err = db.DB.Find(&developer, c.String("id")).Error; err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+				if c.Bool("games") {
+					var games []*models.Game
+					if games, err = developer.Games(db.DB); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+
+					fmt.Printf(
+						"Developer %s (%s), has %d games:\n",
+						developer.Username, developer.ID, len(games),
+					)
+					if len(games) > 0 {
+						for i, game := range games {
+							fmt.Printf("\t%d) %v\n", i+1, game)
+						}
+					}
 				}
 				return
 			},

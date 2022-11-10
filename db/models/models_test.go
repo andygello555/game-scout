@@ -6,6 +6,62 @@ import (
 	"testing"
 )
 
+// We setup fake types that implement the TagConfig, StorefrontConfig, and ScrapeConfig.
+type tagConfig struct {
+	defaultValue     float64
+	upvotesThreshold float64
+	values           map[string]float64
+}
+
+func (tc *tagConfig) TagDefaultValue() float64      { return tc.defaultValue }
+func (tc *tagConfig) TagUpvotesThreshold() float64  { return tc.upvotesThreshold }
+func (tc *tagConfig) TagValues() map[string]float64 { return tc.values }
+
+type storefrontConfig struct {
+	storefront Storefront
+	tags       *tagConfig
+}
+
+func (sfc *storefrontConfig) StorefrontStorefront() Storefront { return sfc.storefront }
+func (sfc *storefrontConfig) StorefrontTags() TagConfig        { return sfc.tags }
+
+type scrapeConfig struct {
+	storefronts []*storefrontConfig
+}
+
+func (sc *scrapeConfig) ScrapeStorefronts() []StorefrontConfig {
+	storefronts := make([]StorefrontConfig, len(sc.storefronts))
+	for i, storefront := range sc.storefronts {
+		storefronts[i] = storefront
+	}
+	return storefronts
+}
+
+func (sc *scrapeConfig) ScrapeGetStorefront(storefront Storefront) (storefrontConfig StorefrontConfig) {
+	found := false
+	for _, storefrontConfig = range sc.storefronts {
+		if storefrontConfig.StorefrontStorefront() == storefront {
+			found = true
+			break
+		}
+	}
+	if !found {
+		storefrontConfig = nil
+	}
+	return
+}
+
+var fakeConfig = &scrapeConfig{storefronts: []*storefrontConfig{
+	{
+		storefront: SteamStorefront,
+		tags: &tagConfig{
+			defaultValue:     10,
+			upvotesThreshold: 50,
+			values:           map[string]float64{},
+		},
+	},
+}}
+
 func TestScrapeStorefrontsForGame(t *testing.T) {
 	for i, test := range []struct {
 		expectedName              string
@@ -41,7 +97,7 @@ func TestScrapeStorefrontsForGame(t *testing.T) {
 		},
 	} {
 		game := &Game{Developer: test.developer}
-		ScrapeStorefrontsForGame(&game, test.storefrontMapping)
+		ScrapeStorefrontsForGame(&game, test.storefrontMapping, fakeConfig)
 		if !test.fail {
 			for _, check := range []struct {
 				name     string

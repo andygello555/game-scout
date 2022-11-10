@@ -21,15 +21,15 @@ import (
 const (
 	// minScrapeStorefrontsForGameWorkerWaitTime is the minimum amount of time for a scrapeStorefrontsForGameWorker to
 	// wait after completing a job.
-	minScrapeStorefrontsForGameWorkerWaitTime = time.Second * 3
+	minScrapeStorefrontsForGameWorkerWaitTime = time.Millisecond * 750
 	// maxScrapeStorefrontsForGameWorkerWaitTime is the maximum amount of time for a scrapeStorefrontsForGameWorker to
 	// wait after completing a job.
-	maxScrapeStorefrontsForGameWorkerWaitTime = time.Second * 10
+	maxScrapeStorefrontsForGameWorkerWaitTime = time.Second * 3
 	// maxGamesPerTweet is needed so that we don't overload the queue to the scrapeStorefrontsForGameWorker.
 	maxGamesPerTweet = 10
 	// scrapeStorefrontsForGameWorkers is the number of scrapeStorefrontsForGameWorker to start in the DiscoveryBatch
 	// function.
-	scrapeStorefrontsForGameWorkers = 2
+	scrapeStorefrontsForGameWorkers = 3
 	// maxConcurrentScrapeStorefrontsForGameWorkers is the maximum number of scrapeStorefrontsForGameWorker that can be
 	// running at the same time.
 	maxConcurrentScrapeStorefrontsForGameWorkers = 2
@@ -52,15 +52,18 @@ func scrapeStorefrontsForGameWorker(no int, jobs <-chan *scrapeStorefrontsForGam
 	log.INFO.Printf("ScrapeStorefrontsForGameWorker no. %d has started...", no)
 	for job := range jobs {
 		guard <- struct{}{}
-		models.ScrapeStorefrontsForGame(&job.game, job.storefrontURLs)
+		log.INFO.Printf("ScrapeStorefrontsForGameWorker no. %d has acquired the guard", no)
+		models.ScrapeStorefrontsForGame(&job.game, job.storefrontURLs, globalConfig.Scrape)
 		job.result <- job.game
+
+		// Find out how long to sleep for...
 		min := int64(minScrapeStorefrontsForGameWorkerWaitTime)
 		max := int64(maxScrapeStorefrontsForGameWorkerWaitTime)
 		random := rand.Int63n(max-min+1) + min
 		sleepDuration := time.Duration(random)
 		log.INFO.Printf(
 			"ScrapeStorefrontsForGameWorker no. %d has completed a job and is now sleeping for %s",
-			sleepDuration.String(),
+			no, sleepDuration.String(),
 		)
 		time.Sleep(sleepDuration)
 		<-guard

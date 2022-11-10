@@ -38,6 +38,7 @@ func UpdateDeveloper(developerNo int, developer *models.Developer, totalTweets i
 
 	// First we update the user's games that exist in the DB
 	var games []*models.Game
+	gameIDs = mapset.NewSet[uuid.UUID]()
 	if games, err = developer.Games(db.DB); err != nil {
 		return gameIDs, myTwitter.TemporaryWrapf(
 			true, err, "could not find Games for Developer %s (%s)", developer.Username, developer.ID,
@@ -46,7 +47,9 @@ func UpdateDeveloper(developerNo int, developer *models.Developer, totalTweets i
 	log.INFO.Printf("Developer %s (%s) has %d game(s)", developer.Username, developer.ID, len(games))
 
 	for _, game := range games {
-		if err = game.Update(db.DB); err != nil {
+		gameIDs.Add(game.ID)
+		game.Developer = developer
+		if err = game.Update(db.DB, globalConfig.Scrape); err != nil {
 			log.WARNING.Printf(
 				"Could not update Game %s (%s) for Developer %s (%s): %s",
 				game.Name.String, game.ID.String(), developer.Username, developer.ID, err.Error(),
@@ -129,13 +132,16 @@ func UpdateDeveloper(developerNo int, developer *models.Developer, totalTweets i
 
 	log.INFO.Printf("Executing DiscoveryBatch for batch of %d tweets for developer %s (%s)", result.Meta().ResultCount(), developer.Username, developer.ID)
 	// Run DiscoveryBatch for this batch of tweet dictionaries
-	if gameIDs, err = DiscoveryBatch(developerNo, tweetRaw.TweetDictionaries(), userTweetTimes, developerSnapshots); err != nil && !myTwitter.IsTemporary(err) {
+	var subGameIDs mapset.Set[uuid.UUID]
+	if subGameIDs, err = DiscoveryBatch(developerNo, tweetRaw.TweetDictionaries(), userTweetTimes, developerSnapshots); err != nil && !myTwitter.IsTemporary(err) {
 		log.FATAL.Printf("Error returned by DiscoveryBatch is not temporary: %s. We have to stop :(", err.Error())
 		return gameIDs, myTwitter.TemporaryWrapf(
 			false, err, "could not execute DiscoveryBatch for tweets fetched for Developer %s (%s)",
 			developer.Username, developer.ID,
 		)
 	}
+	// Merge the gameIDs from DiscoveryBatch back into the local gameIDs
+	gameIDs = gameIDs.Union(subGameIDs)
 	return
 }
 
@@ -317,9 +323,9 @@ func UpdatePhase(batchSize int, discoveryTweets int, developerIDs []string, user
 					currentBatchQueue = 0
 					log.INFO.Printf(
 						"We have queued up %d jobs to the updateDeveloperWorkers so we will take a break of %s",
-						batchSize, secondsBetweenBatches.String(),
+						batchSize, secondsBetweenUpdateBatches.String(),
 					)
-					sleepBar(secondsBetweenBatches)
+					sleepBar(secondsBetweenUpdateBatches)
 				}
 			}
 		}
@@ -363,14 +369,23 @@ func UpdatePhase(batchSize int, discoveryTweets int, developerIDs []string, user
 							batchNo, left, low, high,
 						)
 						queueDeveloperRange(low, high)
+						left -= high - low
 
-						// Figure out the sleepDuration until the reset time and sleep until then
-						sleepDuration := rateLimit.Reset.Time().Sub(time.Now().UTC())
-						log.INFO.Printf(
-							"batchNo: %d) We are going to sleep until %s (%s)",
-							batchNo, rateLimit.Reset.Time().String(), sleepDuration.String(),
-						)
-						sleepBar(sleepDuration)
+						// We don't need to sleep if there are no jobs left
+						if left > 0 {
+							// Figure out the sleepDuration until the reset time and sleep until then
+							sleepDuration := rateLimit.Reset.Time().Sub(time.Now().UTC())
+							log.INFO.Printf(
+								"batchNo: %d) We are going to sleep until %s (%s)",
+								batchNo, rateLimit.Reset.Time().String(), sleepDuration.String(),
+							)
+							sleepBar(sleepDuration)
+						} else {
+							log.INFO.Printf(
+								"Left is 0, so we are not going to sleep until %s because we have finished",
+								rateLimit.Reset.Time().String(),
+							)
+						}
 
 						// We wait until all the results have been processed by the consumer
 						developerNumbersSeen := mapset.NewSet[int]()
@@ -392,8 +407,7 @@ func UpdatePhase(batchSize int, discoveryTweets int, developerIDs []string, user
 						myTwitter.Client.Mutex.Unlock()
 						log.INFO.Printf("batchNo: %d) I'm awake. New RateLimit?: %t", batchNo, ok)
 
-						// Set left, low, and high for the next batch
-						left -= high - low
+						// Set low and high for the next batch
 						low = high
 						if ok && rateLimit.Reset.Time().After(time.Now().UTC()) {
 							high += rateLimit.Remaining
