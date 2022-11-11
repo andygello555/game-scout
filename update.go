@@ -18,7 +18,14 @@ import (
 // UpdateDeveloper will fetch the given number of tweets for the models.Developer and run DiscoveryBatch on these tweets
 // that will ultimately update the DB row for this models.Developer and create a new models.DeveloperSnapshot for it. It
 // will also update any models.Games that exist in the DB for this developer.
-func UpdateDeveloper(developerNo int, developer *models.Developer, totalTweets int, userTweetTimes map[string][]time.Time, developerSnapshots map[string][]*models.DeveloperSnapshot) (gameIDs mapset.Set[uuid.UUID], err error) {
+func UpdateDeveloper(
+	developerNo int,
+	developer *models.Developer,
+	totalTweets int,
+	gameScrapeQueue chan *scrapeStorefrontsForGameJob,
+	userTweetTimes map[string][]time.Time,
+	developerSnapshots map[string][]*models.DeveloperSnapshot,
+) (gameIDs mapset.Set[uuid.UUID], err error) {
 	log.INFO.Printf("Updating info for developer %s (%s)", developer.Username, developer.ID)
 	var developerSnap *models.DeveloperSnapshot
 	if developerSnap, err = developer.LatestDeveloperSnapshot(db.DB); err != nil {
@@ -46,20 +53,28 @@ func UpdateDeveloper(developerNo int, developer *models.Developer, totalTweets i
 	}
 	log.INFO.Printf("Developer %s (%s) has %d game(s)", developer.Username, developer.ID, len(games))
 
+	// Update all the games. We just start a new goroutine for each game, so we don't block this goroutine and can
+	// continue onto fetching the set of tweets.
 	for _, game := range games {
 		gameIDs.Add(game.ID)
-		game.Developer = developer
-		if err = game.Update(db.DB, globalConfig.Scrape); err != nil {
-			log.WARNING.Printf(
-				"Could not update Game %s (%s) for Developer %s (%s): %s",
-				game.Name.String, game.ID.String(), developer.Username, developer.ID, err.Error(),
+		go func(game *models.Game) {
+			log.INFO.Printf(
+				"Queued update for Game \"%s\" (%s) for Developer %s (%s)",
+				game.Name.String, game.ID.String(), developer.Username, developer.ID,
 			)
-			continue
-		}
-		log.INFO.Printf(
-			"Updated Game %s (%s) for Developer %s (%s)",
-			game.Name.String, game.ID.String(), developer.Username, developer.ID,
-		)
+			game.Developer = developer
+			scrapeGameDone := make(chan *models.Game)
+			gameScrapeQueue <- &scrapeStorefrontsForGameJob{
+				game:   game,
+				update: true,
+				result: scrapeGameDone,
+			}
+			<-scrapeGameDone
+			log.INFO.Printf(
+				"Updated Game \"%s\" (%s) for Developer %s (%s)",
+				game.Name.String, game.ID.String(), developer.Username, developer.ID,
+			)
+		}(game)
 	}
 
 	startTime := developerSnap.LastTweetTime.UTC().Add(time.Second)
@@ -130,10 +145,15 @@ func UpdateDeveloper(developerNo int, developer *models.Developer, totalTweets i
 	// Then we run DiscoveryBatch with this batch of tweets
 	tweetRaw := result.Raw().(*twitter.TweetRaw)
 
-	log.INFO.Printf("Executing DiscoveryBatch for batch of %d tweets for developer %s (%s)", result.Meta().ResultCount(), developer.Username, developer.ID)
+	log.INFO.Printf(
+		"Executing DiscoveryBatch for batch of %d tweets for developer %s (%s)",
+		result.Meta().ResultCount(), developer.Username, developer.ID,
+	)
 	// Run DiscoveryBatch for this batch of tweet dictionaries
 	var subGameIDs mapset.Set[uuid.UUID]
-	if subGameIDs, err = DiscoveryBatch(developerNo, tweetRaw.TweetDictionaries(), userTweetTimes, developerSnapshots); err != nil && !myTwitter.IsTemporary(err) {
+	if subGameIDs, err = DiscoveryBatch(
+		developerNo, tweetRaw.TweetDictionaries(), gameScrapeQueue, userTweetTimes, developerSnapshots,
+	); err != nil && !myTwitter.IsTemporary(err) {
 		log.FATAL.Printf("Error returned by DiscoveryBatch is not temporary: %s. We have to stop :(", err.Error())
 		return gameIDs, myTwitter.TemporaryWrapf(
 			false, err, "could not execute DiscoveryBatch for tweets fetched for Developer %s (%s)",
@@ -164,7 +184,12 @@ type updateDeveloperResult struct {
 
 // updateDeveloperWorker is a worker for UpdateDeveloper that takes a channel of updateDeveloperJob and queues up the
 // result of UpdateDeveloper as an updateDeveloperResult.
-func updateDeveloperWorker(wg *sync.WaitGroup, jobs <-chan *updateDeveloperJob, results chan<- *updateDeveloperResult) {
+func updateDeveloperWorker(
+	wg *sync.WaitGroup,
+	jobs <-chan *updateDeveloperJob,
+	results chan<- *updateDeveloperResult,
+	gameScrapeQueue chan *scrapeStorefrontsForGameJob,
+) {
 	defer wg.Done()
 	for job := range jobs {
 		result := &updateDeveloperResult{
@@ -174,7 +199,8 @@ func updateDeveloperWorker(wg *sync.WaitGroup, jobs <-chan *updateDeveloperJob, 
 			developerSnapshots: make(map[string][]*models.DeveloperSnapshot),
 		}
 		result.gameIDs, result.error = UpdateDeveloper(
-			job.developerNo, job.developer, job.totalTweets, result.userTweetTimes, result.developerSnapshots,
+			job.developerNo, job.developer, job.totalTweets,
+			gameScrapeQueue, result.userTweetTimes, result.developerSnapshots,
 		)
 		result.developer = job.developer
 		results <- result
@@ -198,7 +224,14 @@ func updateDeveloperWorker(wg *sync.WaitGroup, jobs <-chan *updateDeveloperJob, 
 // • Consumer (no = 1): dequeues results from the results channel and aggregates them into the userTweetTimes,
 // developerSnapshots, and gameIDs instances. Once a result has been processed, the developerNo of the
 // updateDeveloperResult will be pushed to a buffered channel to notify the producer that that job has been processed.
-func UpdatePhase(batchSize int, discoveryTweets int, developerIDs []string, userTweetTimes map[string][]time.Time, developerSnapshots map[string][]*models.DeveloperSnapshot, gameIDs mapset.Set[uuid.UUID]) (err error) {
+func UpdatePhase(
+	batchSize int,
+	discoveryTweets int,
+	developerIDs []string,
+	userTweetTimes map[string][]time.Time,
+	developerSnapshots map[string][]*models.DeveloperSnapshot,
+) (gameIDs mapset.Set[uuid.UUID], err error) {
+	gameIDs = mapset.NewSet[uuid.UUID]()
 	// SELECT developers.*
 	// FROM "developers"
 	// INNER JOIN developer_snapshots ON developer_snapshots.developer_id = developers.id
@@ -233,7 +266,8 @@ func UpdatePhase(batchSize int, discoveryTweets int, developerIDs []string, user
 	}
 
 	if unscrapedDevelopersQuery.Error != nil {
-		return myTwitter.TemporaryWrap(false, unscrapedDevelopersQuery.Error, "cannot construct query for unscraped developers")
+		err = myTwitter.TemporaryWrap(false, unscrapedDevelopersQuery.Error, "cannot construct query for unscraped developers")
+		return
 	}
 
 	var unscrapedDevelopers []*models.Developer
@@ -295,10 +329,11 @@ func UpdatePhase(batchSize int, discoveryTweets int, developerIDs []string, user
 					int(myTwitter.TweetsPerDay)-discoveryTweets,
 					initialDeveloperCount,
 				)
-				return myTwitter.TemporaryErrorf(
+				err = myTwitter.TemporaryErrorf(
 					false, "cannot run update phase as we couldn't find a totalTweetsForEachDeveloper "+
 						"number that didn't result in 0 unscrapedDevelopers",
 				)
+				return
 			}
 			log.INFO.Printf(
 				"Found a new totalTweetsForEachDeveloper: %d, by reducing developer count to %d",
@@ -330,11 +365,27 @@ func UpdatePhase(batchSize int, discoveryTweets int, developerIDs []string, user
 			}
 		}
 
+		// Start the workers for scraping games.
+		// Note: in the update phase we have to be a bit more cautious with the number of workers that we start. This is
+		//       because each developer in a batch is updated in parallel.
+		gameScrapeQueue := make(
+			chan *scrapeStorefrontsForGameJob,
+			len(unscrapedDevelopers)*totalTweetsForEachDeveloper*maxGamesPerTweet,
+		)
+		gameScrapeGuard := make(chan struct{}, updateMaxConcurrentGameScrapeWorkers)
+		var gameScrapeWg sync.WaitGroup
+
+		// Start the scrapeStorefrontsForGameWorkers
+		for i := 0; i < updateGameScrapeWorkers; i++ {
+			gameScrapeWg.Add(1)
+			go scrapeStorefrontsForGameWorker(i+1, &gameScrapeWg, gameScrapeQueue, gameScrapeGuard)
+		}
+
 		// Start the workers
 		for w := 0; w < updateDeveloperWorkers; w++ {
 			log.INFO.Printf("Starting updateDeveloperWorker no. %d", w)
 			updateDeveloperWorkerWg.Add(1)
-			go updateDeveloperWorker(&updateDeveloperWorkerWg, jobs, results)
+			go updateDeveloperWorker(&updateDeveloperWorkerWg, jobs, results, gameScrapeQueue)
 		}
 
 		// We also check if the rate limit will be exceeded by the number of requests. We use 100 * unscrapedDevelopers
@@ -425,11 +476,12 @@ func UpdatePhase(batchSize int, discoveryTweets int, developerIDs []string, user
 					producerDone <- struct{}{}
 				}()
 			} else {
-				return myTwitter.TemporaryWrap(
+				err = myTwitter.TemporaryWrap(
 					false,
 					err,
 					"do not know how long there is left on the rate limit for RecentSearch as it is stale",
 				)
+				return
 			}
 		} else {
 			// Otherwise, queue up the jobs for ALL the updateDeveloperWorkers
@@ -503,19 +555,28 @@ func UpdatePhase(batchSize int, discoveryTweets int, developerIDs []string, user
 		log.INFO.Printf("Producer has finished")
 		close(jobs)
 		log.INFO.Printf("Closed jobs channel")
+
 		// We then wait for all the workers to process their outstanding jobs.
 		updateDeveloperWorkerWg.Wait()
 		log.INFO.Printf("Workers have all stopped")
-		// Finally, we first close the results channel as there should be no more results to queue, and then we wait
+
+		// Then, we first close the results channel as there should be no more results to queue, and then we wait
 		// for the consumer to finish.
 		close(results)
 		log.INFO.Printf("Closed results channel")
 		err = <-consumerDone
 		log.INFO.Printf("Consumer has finished")
 
+		// Finally, we wait for the game scrapers to finish
+		close(gameScrapeQueue)
+		log.INFO.Printf("Closed gameScrapeQueue")
+		gameScrapeWg.Wait()
+		log.INFO.Printf("Game scrape workers have all stopped")
+
 		// If the consumer returned an error then we will wrap it and return it.
 		if err != nil {
-			return errors.Wrap(err, "error occurred in update phase consumer")
+			err = errors.Wrap(err, "error occurred in update phase consumer")
+			return
 		}
 	}
 

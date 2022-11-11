@@ -19,6 +19,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -116,11 +117,25 @@ func TestDiscoveryBatch(t *testing.T) {
 		if err = json.Unmarshal(sampleTweetsBytes, &sampleTweets); err != nil {
 			t.Errorf("Cannot unmarshal %s into map[string]*twitter.TweetDictionary: %s", sampleTweetsPath, err.Error())
 		}
+
 		userTweetTimes := make(map[string][]time.Time)
 		developerSnapshots := make(map[string][]*models.DeveloperSnapshot)
-		if _, err = DiscoveryBatch(1, sampleTweets, userTweetTimes, developerSnapshots); err != nil {
+
+		gameScrapeQueue := make(chan *scrapeStorefrontsForGameJob, len(sampleTweets)*maxGamesPerTweet)
+		gameScrapeGuard := make(chan struct{}, 4)
+		var gameScrapeWg sync.WaitGroup
+
+		// Start the scrapeStorefrontsForGameWorkers
+		for i := 0; i < 5; i++ {
+			gameScrapeWg.Add(1)
+			go scrapeStorefrontsForGameWorker(i+1, &gameScrapeWg, gameScrapeQueue, gameScrapeGuard)
+		}
+
+		if _, err = DiscoveryBatch(1, sampleTweets, gameScrapeQueue, userTweetTimes, developerSnapshots); err != nil {
 			t.Errorf("Could not run DiscoveryBatch: %s", err.Error())
 		}
+		close(gameScrapeQueue)
+		gameScrapeWg.Wait()
 	}
 
 	// Check if the database contains the right things
@@ -140,6 +155,8 @@ func TestDiscoveryBatch(t *testing.T) {
 		t.Errorf("There are %d Games in the DB instead of %d", count, finalGameCount)
 	}
 }
+
+var developers = flag.Int("developers", 465, "the number of developers to ")
 
 func TestUpdatePhase(t *testing.T) {
 	var (
@@ -185,10 +202,13 @@ func TestUpdatePhase(t *testing.T) {
 	developerSnapshotNo := 0
 	sixDaysAgo := time.Now().UTC().Add(time.Hour * time.Duration(-24*6))
 	scanner = bufio.NewScanner(developerIDsFile)
-	for scanner.Scan() {
+	for scanner.Scan() && developerNo != *developers {
 		developer := models.Developer{ID: scanner.Text()}
 		if err = db.DB.Create(&developer).Error; err != nil {
 			t.Errorf("Cannot create Developer %s: %s", developer.ID, err.Error())
+		}
+		if testing.Verbose() {
+			fmt.Printf("Created Developer no. %d: %s\n", developerNo+1, developer.ID)
 		}
 
 		if err = db.DB.Create(&models.Game{
@@ -234,9 +254,13 @@ func TestUpdatePhase(t *testing.T) {
 	// Then we run the UpdatePhase function
 	userTweetTimes := make(map[string][]time.Time)
 	developerSnapshots := make(map[string][]*models.DeveloperSnapshot)
-	gameIDs := mapset.NewSet[uuid.UUID]()
-	if err = UpdatePhase(batchSize, discoveryTweets, []string{}, userTweetTimes, developerSnapshots, gameIDs); err != nil {
+	var gameIDs mapset.Set[uuid.UUID]
+	if gameIDs, err = UpdatePhase(batchSize, discoveryTweets, []string{}, userTweetTimes, developerSnapshots); err != nil {
 		t.Errorf("Error occurred in update phase: %s", err.Error())
+	}
+
+	if gameIDs.Cardinality() < developerNo {
+		t.Errorf("There are only %d gameIDs, expected >=%d", gameIDs.Cardinality(), developerNo)
 	}
 }
 

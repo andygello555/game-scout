@@ -23,7 +23,7 @@ const (
 	// maxUpdateTweets is the maximum number of tweets fetched in the update phase.
 	maxUpdateTweets = 12
 	// secondsBetweenDiscoveryBatches is the number of seconds to sleep between DiscoveryBatch batches.
-	secondsBetweenDiscoveryBatches = time.Second * 5
+	secondsBetweenDiscoveryBatches = time.Second * 7
 	// secondsBetweenUpdateBatches is the number of seconds to sleep between queue batches of updateDeveloperJob.
 	secondsBetweenUpdateBatches = time.Second * 30
 	// maxTotalDiscoveryTweetsDailyPercent is the maximum percentage that the discoveryTweets number can be out of
@@ -35,6 +35,16 @@ const (
 	maxTotalUpdateTweets = float64(myTwitter.TweetsPerDay) * (1.0 - maxTotalDiscoveryTweetsDailyPercent)
 	// maxEnabledDevelopers is the number of developers to keep in the Disable phase.
 	maxEnabledDevelopers = maxTotalUpdateTweets / maxUpdateTweets
+	// discoveryGameScrapeWorkers is the number of scrapeStorefrontsForGameWorker to start in the discovery phase.
+	discoveryGameScrapeWorkers = 5
+	// discoveryMaxConcurrentGameScrapeWorkers is number of scrapeStorefrontsForGameWorker that can be processing a job
+	// at the same time in the discovery phase.
+	discoveryMaxConcurrentGameScrapeWorkers = 4
+	// updateGameScrapeWorkers is the number of scrapeStorefrontsForGameWorker to start in the UpdatePhase.
+	updateGameScrapeWorkers = 3
+	// updateMaxConcurrentGameScrapeWorkers is number of scrapeStorefrontsForGameWorker that can be processing a job
+	// at the same time in the UpdatePhase.
+	updateMaxConcurrentGameScrapeWorkers = 2
 )
 
 // sleepBar will sleep for the given time.Duration (as seconds) and display a progress bar for the sleep.
@@ -56,92 +66,39 @@ func sleepBar(sleepDuration time.Duration) {
 //
 // • 3rd phase: Snapshot. For all the partial models.DeveloperSnapshot that have been created in the previous two phases
 // we will aggregate the information for them into one models.DeveloperSnapshot for each models.Developer.
+//
+// • 4th phase: Disable. Disable all the models.Developer who aren't doing so well. The number of developers to disable
+// depends on the number of tweets we get to use in the update phase the next time around:
+// totalEnabledDevelopers - maxEnabledDevelopers.
+//
+// • 5th phase: Measure. For all the models.Developer that have a good number of models.DeveloperSnapshot we'll see if
+// any are shining above the rest.
 func Scout(batchSize int, discoveryTweets int) (err error) {
 	scoutStart := time.Now().UTC()
 	// If the number of discovery tweets we requested is more than maxDiscoveryTweetsDailyPercent of the total tweets
 	// available for a day then we will error out.
 	if float64(discoveryTweets) > maxTotalDiscoveryTweets {
-		return myTwitter.TemporaryErrorf(false, "cannot request more than %d tweets per day for discovery purposes", int(myTwitter.TweetsPerDay))
+		return myTwitter.TemporaryErrorf(
+			false,
+			"cannot request more than %d tweets per day for discovery purposes",
+			int(myTwitter.TweetsPerDay),
+		)
 	}
 
 	// 1st phase: Discovery. Search the recent tweets on Twitter belonging to the hashtags given in config.json.
-	query := globalConfig.Twitter.TwitterQuery()
-	opts := twitter.TweetRecentSearchOpts{
-		Expansions: []twitter.Expansion{
-			twitter.ExpansionEntitiesMentionsUserName,
-			twitter.ExpansionAuthorID,
-			twitter.ExpansionReferencedTweetsID,
-			twitter.ExpansionReferencedTweetsIDAuthorID,
-			twitter.ExpansionInReplyToUserID,
-		},
-		TweetFields: []twitter.TweetField{
-			twitter.TweetFieldCreatedAt,
-			twitter.TweetFieldConversationID,
-			twitter.TweetFieldAttachments,
-			twitter.TweetFieldPublicMetrics,
-			twitter.TweetFieldReferencedTweets,
-			twitter.TweetFieldContextAnnotations,
-			twitter.TweetFieldEntities,
-			twitter.TweetFieldAuthorID,
-		},
-		UserFields: []twitter.UserField{
-			twitter.UserFieldDescription,
-			twitter.UserFieldEntities,
-			twitter.UserFieldPublicMetrics,
-			twitter.UserFieldVerified,
-			twitter.UserFieldPinnedTweetID,
-			twitter.UserFieldCreatedAt,
-		},
-		SortOrder: twitter.TweetSearchSortOrderRecency,
-	}
-
 	userTweetTimes := make(map[string][]time.Time)
 	developerSnapshots := make(map[string][]*models.DeveloperSnapshot)
 	gameIDs := mapset.NewSet[uuid.UUID]()
 
-	batchNo := 1
 	phaseStart := time.Now().UTC()
 	log.INFO.Println("Starting Discovery phase")
-	for i := 0; i < discoveryTweets; i += batchSize {
-		batchStart := time.Now().UTC()
-		offset := batchSize
-		if i+offset > discoveryTweets {
-			offset = discoveryTweets - i
-		}
-		opts.MaxResults = offset
 
-		log.INFO.Printf("Executing RecentSearch binding for batch no. %d (%d/%d) for %d tweets", batchNo, i, discoveryTweets, offset)
-		var result myTwitter.BindingResult
-		if result, err = myTwitter.Client.ExecuteBinding(myTwitter.RecentSearch, &myTwitter.BindingOptions{Total: offset}, query, opts); err != nil {
-			log.ERROR.Printf("Could not fetch %d tweets in Scout on batch %d/%d: %s. Continuing...", offset, i, discoveryTweets, err.Error())
-			continue
-		}
-
-		// The sub-phase of the Discovery phase is the cleansing phase
-		tweetRaw := result.Raw().(*twitter.TweetRaw)
-
-		log.INFO.Printf("Executing DiscoveryBatch for batch no. %d (%d/%d) for %d tweets", batchNo, i, discoveryTweets, len(tweetRaw.TweetDictionaries()))
-		// Run DiscoveryBatch for this batch of tweet dictionaries
-		// If the error is not temporary then we will kill the Scouting process
-		var subGameIDs mapset.Set[uuid.UUID]
-		if subGameIDs, err = DiscoveryBatch(batchNo, tweetRaw.TweetDictionaries(), userTweetTimes, developerSnapshots); err != nil && !myTwitter.IsTemporary(err) {
-			log.FATAL.Printf("Error returned by DiscoveryBatch is not temporary: %s. We have to stop :(", err.Error())
-			return errors.Wrapf(err, "could not execute DiscoveryBatch for batch no. %d", batchNo)
-		}
-		gameIDs = gameIDs.Union(subGameIDs)
-
-		// Set up the next batch of requests by finding the NextToken of the current batch
-		opts.NextToken = result.Meta().NextToken()
-		batchNo++
-		log.INFO.Printf("Set NextToken for next batch (%d) to %s by getting the NextToken from the previous result", batchNo, opts.NextToken)
-
-		// Nap time
-		log.INFO.Printf(
-			"Finished batch in %s. Sleeping for %s so we don't overdo it",
-			time.Now().UTC().Sub(batchStart).String(), secondsBetweenDiscoveryBatches.String(),
-		)
-		sleepBar(secondsBetweenDiscoveryBatches)
+	var subGameIDs mapset.Set[uuid.UUID]
+	if subGameIDs, err = DiscoveryPhase(batchSize, discoveryTweets, userTweetTimes, developerSnapshots); err != nil {
+		return err
 	}
+	gameIDs = gameIDs.Union(subGameIDs)
+
 	log.INFO.Printf("Finished Discovery phase in %s", time.Now().UTC().Sub(phaseStart).String())
 
 	// 2nd phase: Update. For any developers, and games that exist in the DB but haven't been scraped we will fetch the
@@ -161,9 +118,10 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 	}
 
 	// Run the UpdatePhase.
-	if err = UpdatePhase(batchSize, discoveryTweets, scrapedDevelopers, userTweetTimes, developerSnapshots, gameIDs); err != nil {
+	if subGameIDs, err = UpdatePhase(batchSize, discoveryTweets, scrapedDevelopers, userTweetTimes, developerSnapshots); err != nil {
 		return err
 	}
+	gameIDs = gameIDs.Union(subGameIDs)
 	log.INFO.Printf("Finished Update phase in %s", time.Now().UTC().Sub(phaseStart).String())
 
 	// 3rd phase: Snapshot. For all the partial DeveloperSnapshots that exist in the developerSnapshots map we will

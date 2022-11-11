@@ -101,6 +101,12 @@ func (su ScrapeURL) ExtractArgs(url string) (args []any) {
 	return args
 }
 
+// Standardise will first extract the args from the given URL then Fill the referred to ScrapeURL with those args.
+func (su ScrapeURL) Standardise(url string) string {
+	args := su.ExtractArgs(url)
+	return su.Fill(args...)
+}
+
 // Soup fetches the ScrapeURL and parses the returned HTML page into a soup.Root.
 func (su ScrapeURL) Soup(args ...any) (*soup.Root, error) {
 	url := su.Fill(args...)

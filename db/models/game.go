@@ -245,5 +245,5 @@ func (g *Game) OnCreateOmit() []string {
 // Update will update the Game. It does this by calling the Storefront.ScrapeGame method on the referred to Game.
 func (g *Game) Update(db *gorm.DB, config ScrapeConfig) error {
 	g.Website = null.StringFrom(g.Storefront.ScrapeGame(g.Website.String, g, config))
-	return db.Save(g).Error
+	return db.Omit(g.OnCreateOmit()...).Save(g).Error
 }
