@@ -4,6 +4,9 @@
 *.dll
 *.so
 *.dylib
+**/obj/
+**/bin/
+SteamWebPipes
 
 # Test binary, built with `go test -c`
 *.test
@@ -27,4 +30,6 @@ tweetCap.json
 .smommit/
 
 # Ignore CSV files as these are usually just data samples
+*.txt
 *.csv
+!samples/**

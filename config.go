@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"github.com/andygello555/game-scout/db/models"
 	task "github.com/andygello555/game-scout/tasks"
@@ -148,12 +149,22 @@ func (sc *ScrapeConfig) ScrapeGetStorefront(storefront models.Storefront) (store
 	return
 }
 
+// SteamWebPipesConfig stores the configuration for the SteamWebPipes co-process that's started when the machinery workers
+// are started. The SteamWebPipes binary is a slightly modified version of this project: https://github.com/xPaw/SteamWebPipes.
+type SteamWebPipesConfig struct {
+	BinaryLocation           string `json:"BinaryLocation"`
+	Location                 string `json:"Location"`
+	DatabaseConnectionString string `json:"DatabaseConnectionString"`
+	X509Certificate          string `json:"X509Certificate"`
+}
+
 // Config contains the sub-configs for the various parts of the game-scout system. Such as the DBConfig.
 type Config struct {
-	DB      *DBConfig      `json:"db"`
-	Tasks   *TaskConfig    `json:"tasks"`
-	Twitter *TwitterConfig `json:"twitter"`
-	Scrape  *ScrapeConfig  `json:"scrape"`
+	DB            *DBConfig            `json:"db"`
+	Tasks         *TaskConfig          `json:"tasks"`
+	Twitter       *TwitterConfig       `json:"twitter"`
+	Scrape        *ScrapeConfig        `json:"scrape"`
+	SteamWebPipes *SteamWebPipesConfig `json:"SteamWebPipes"`
 }
 
 var globalConfig *Config
@@ -165,6 +176,9 @@ func LoadConfig() error {
 	if configData, err = os.ReadFile(ConfigDefaultPath); err != nil {
 		return err
 	}
+
+	// Remove BOM, if there is one
+	configData = bytes.TrimPrefix(configData, []byte("\xef\xbb\xbf"))
 
 	globalConfig = &Config{}
 	if err = json.Unmarshal(configData, globalConfig); err != nil {

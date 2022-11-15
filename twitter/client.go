@@ -115,7 +115,7 @@ func (w *ClientWrapper) GetTweetCap() (err error) {
 		} else {
 			message += " (" + w.TweetCap.String() + ")"
 		}
-		log.INFO.Printf("\tTweetCap is %s, fetching TweetCap from web")
+		log.INFO.Printf("\tTweetCap is %s, fetching TweetCap from web", message)
 		var b *browser.Browser
 		if b, err = browser.NewBrowser(true); err != nil {
 			return errors.Wrap(err, "could not create browser to get TweetCap")

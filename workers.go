@@ -2,10 +2,14 @@ package main
 
 import (
 	"fmt"
+	"github.com/RichardKnop/logging"
 	"github.com/RichardKnop/machinery/example/tracers"
+	"github.com/RichardKnop/machinery/v1"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/RichardKnop/machinery/v1/tasks"
 	task "github.com/andygello555/game-scout/tasks"
+	"github.com/pkg/errors"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -18,23 +22,58 @@ var (
 	taskCountTable          map[string]int64
 )
 
-func worker() error {
+// throughWriter is a writer that writes to the logger (logging.LoggerInterface), by converting the given
+// bytes to a string.
+type throughWriter struct {
+	logger logging.LoggerInterface
+}
+
+func (w *throughWriter) Write(d []byte) (int, error) {
+	dString := string(d[:])
+	w.logger.Print(strings.TrimSpace(dString))
+	return len(d), nil
+}
+
+func worker() (err error) {
 	consumerTag := "machinery_worker"
 
-	cleanup, err := tracers.SetupTracer(consumerTag)
-	if err != nil {
+	var cleanup func()
+	if cleanup, err = tracers.SetupTracer(consumerTag); err != nil {
 		log.FATAL.Fatalln("Unable to instantiate a tracer:", err)
 	}
 	defer cleanup()
 
-	server, err := task.StartServer(globalConfig.Tasks)
-	if err != nil {
+	var server *machinery.Server
+	if server, err = task.StartServer(globalConfig.Tasks); err != nil {
 		return err
 	}
 
+	// Create the ScoutWebPipes co-process
+	scoutWebPipes := exec.Command(globalConfig.SteamWebPipes.BinaryLocation)
+	// Hook the stdout to the INFO level logger
+	scoutWebPipes.Stdout = &throughWriter{logger: log.INFO}
+	// Start the ScoutWebPipes process
+	if err = scoutWebPipes.Start(); err != nil {
+		return errors.Wrapf(
+			err,
+			"cannot start ScoutWebPipes (%s) process",
+			globalConfig.SteamWebPipes.BinaryLocation,
+		)
+	}
+	// Defer a function that will kill the scoutWebPipes process
+	defer func() {
+		if err = scoutWebPipes.Process.Kill(); err != nil {
+			err = errors.Wrapf(
+				err,
+				"cannot kill ScoutWebPipes (%s) process",
+				globalConfig.SteamWebPipes.BinaryLocation,
+			)
+		}
+	}()
+
 	// The second argument is a consumer tag
 	// Ideally, each worker should have a unique tag (worker1, worker2 etc)
-	worker := server.NewWorker(consumerTag, 0)
+	w := server.NewWorker(consumerTag, 0)
 
 	// Will construct a call signature for the given tasks.Signature with the arg name, value, and type
 	constructCallSignature := func(signature *tasks.Signature) string {
@@ -111,9 +150,9 @@ func worker() error {
 		}
 	}
 
-	worker.SetPostTaskHandler(postTaskHandler)
-	worker.SetErrorHandler(errorHandler)
-	worker.SetPreTaskHandler(preTaskHandler)
+	w.SetPostTaskHandler(postTaskHandler)
+	w.SetErrorHandler(errorHandler)
+	w.SetPreTaskHandler(preTaskHandler)
 
-	return worker.Launch()
+	return w.Launch()
 }
