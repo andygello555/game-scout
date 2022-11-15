@@ -8,10 +8,13 @@ import (
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/RichardKnop/machinery/v1/tasks"
 	task "github.com/andygello555/game-scout/tasks"
+	"github.com/gorilla/websocket"
 	"github.com/pkg/errors"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -28,10 +31,25 @@ type throughWriter struct {
 	logger logging.LoggerInterface
 }
 
+var timePrefixPattern = regexp.MustCompile(`^(\[.*?] ).*$`)
+
 func (w *throughWriter) Write(d []byte) (int, error) {
 	dString := string(d[:])
-	w.logger.Print(strings.TrimSpace(dString))
+	timePrefix := timePrefixPattern.FindStringSubmatch(dString)[1]
+	w.logger.Print(strings.TrimPrefix(strings.TrimSpace(dString), timePrefix))
 	return len(d), nil
+}
+
+func websocketClient(c *websocket.Conn, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for {
+		_, message, err := c.ReadMessage()
+		if err != nil {
+			log.INFO.Println("read:", err)
+			return
+		}
+		log.INFO.Printf("recv: %s", message)
+	}
 }
 
 func worker() (err error) {
@@ -60,7 +78,10 @@ func worker() (err error) {
 			globalConfig.SteamWebPipes.BinaryLocation,
 		)
 	}
-	// Defer a function that will kill the scoutWebPipes process
+
+	// Defer a function that will kill the scoutWebPipes process. We also define a WaitGroup that will wait for the
+	// client to finish processing its current job.
+	var websocketClientWg sync.WaitGroup
 	defer func() {
 		if err = scoutWebPipes.Process.Kill(); err != nil {
 			err = errors.Wrapf(
@@ -69,7 +90,35 @@ func worker() (err error) {
 				globalConfig.SteamWebPipes.BinaryLocation,
 			)
 		}
+		websocketClientWg.Wait()
 	}()
+
+	// Start a websocket client that will listen to all the changelogs being pushed
+	log.INFO.Printf("Websocket client is connecting to %s", globalConfig.SteamWebPipes.Location)
+
+	// Start the websocket and dial into the location that is stored in the SteamWebPipesConfig
+	var c *websocket.Conn
+	err = errors.New("")
+	// We keep trying to dial in until we've not got an error
+	for err != nil {
+		if c, _, err = websocket.DefaultDialer.Dial(globalConfig.SteamWebPipes.Location, nil); err != nil {
+			log.WARNING.Printf("Could not dial into %s: %s, waiting 2s", globalConfig.SteamWebPipes.Location, err.Error())
+		}
+		time.Sleep(time.Second * 2)
+	}
+
+	// Start the actual client that will read from the websocket
+	websocketClientWg.Add(1)
+	go websocketClient(c, &websocketClientWg)
+
+	// Defer a close to the websocket connection
+	defer func(c *websocket.Conn) {
+		if err = c.Close(); err != nil {
+			err = errors.Wrapf(
+				err, "could not close websocket connection to %s", globalConfig.SteamWebPipes.Location,
+			)
+		}
+	}(c)
 
 	// The second argument is a consumer tag
 	// Ideally, each worker should have a unique tag (worker1, worker2 etc)

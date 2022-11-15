@@ -10,6 +10,7 @@ import (
 	"github.com/andygello555/game-scout/browser"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
+	"github.com/andygello555/game-scout/steamcmd"
 	task "github.com/andygello555/game-scout/tasks"
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	"github.com/g8rswimmer/go-twitter/v2"
@@ -502,6 +503,38 @@ func main() {
 							fmt.Printf("\t%d) %v\n", i+1, game)
 						}
 					}
+				}
+				return
+			},
+		},
+		{
+			Name:        "steamcmd",
+			Description: "runs a flow of commands in the SteamCMD wrapper",
+			Action: func(c *cli.Context) (err error) {
+				commands := make([]*steamcmd.CommandWithArgs, 0)
+				for _, arg := range c.Args() {
+					var cType steamcmd.CommandType
+					if cType, err = steamcmd.CommandTypeFromString(arg); err == nil {
+						commands = append(commands, steamcmd.NewCommandWithArgs(cType))
+					} else {
+						// Otherwise, we'll interpret the arg as an arg for the previous command
+						if len(commands) > 0 {
+							argValue, _ := steamcmd.ParseArgType(arg)
+							commands[len(commands)-1].Args = append(commands[len(commands)-1].Args, argValue)
+						} else {
+							return cli.NewExitError("first argument is not a CommandType", 1)
+						}
+					}
+				}
+
+				cmd := steamcmd.New(true)
+				if err = cmd.Flow(commands...); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+
+				// Print outputs
+				for i, output := range cmd.ParsedOutputs {
+					fmt.Printf("Output %d:\n%v\n\n", i+1, output)
 				}
 				return
 			},

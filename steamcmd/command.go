@@ -1,37 +1,28 @@
 package steamcmd
 
 import (
+	"bytes"
 	"fmt"
+	"github.com/RichardKnop/machinery/v1/log"
+	"github.com/hjson/hjson-go/v4"
 	"github.com/pkg/errors"
 	"reflect"
+	"regexp"
 	"strconv"
+	"strings"
 )
 
-type CommandType int
-
-const (
-	AppInfoPrint CommandType = iota
-	Quit
-)
-
-func (ct CommandType) String() string {
-	switch ct {
-	case AppInfoPrint:
-		return "app_info_print"
-	case Quit:
-		return "quit"
-	default:
-		return "<nil>"
-	}
-}
-
+// ArgType is the type of an Arg. It represents how an Arg should be serialised and parsed.
 type ArgType int
 
 const (
+	// Number represents values of type: int, int8, int16, int32, int64, float32, float64.
 	Number ArgType = iota
+	// String represents string values.
 	String
 )
 
+// String returns the string representation of the ArgType.
 func (at ArgType) String() string {
 	switch at {
 	case Number:
@@ -40,6 +31,27 @@ func (at ArgType) String() string {
 		return "String"
 	default:
 		return "<nil>"
+	}
+}
+
+// ParseArgType first checks if the given string can be parsed to an int, then whether it can be parsed to a float.
+// If it can be parsed to either of these then Number is returned. Otherwise, String is returned. It also returns the
+// value that the arg should have.
+func ParseArgType(s string) (any, ArgType) {
+	var (
+		intVal, floatVal any
+		isInt, isFloat   error
+	)
+	intVal, isInt = strconv.ParseInt(s, 10, 64)
+	floatVal, isFloat = strconv.ParseFloat(s, 64)
+
+	switch {
+	case isInt == nil:
+		return intVal, Number
+	case isFloat == nil:
+		return floatVal, Number
+	default:
+		return s, String
 	}
 }
 
@@ -67,6 +79,24 @@ func (at ArgType) DefaultSerialiser(value any) string {
 	}
 }
 
+// DefaultValidator checks if the given value fits the ArgType.
+func (at ArgType) DefaultValidator(value any) bool {
+	switch at {
+	case Number:
+		switch value.(type) {
+		case int, int8, int16, int32, int64, float32, float64:
+			return true
+		default:
+			return false
+		}
+	case String:
+		_, ok := value.(string)
+		return ok
+	default:
+		return false
+	}
+}
+
 type ArgValidator func(any) bool
 type ArgSerialiser func(any) string
 
@@ -78,18 +108,170 @@ type Arg struct {
 	Serialiser ArgSerialiser
 }
 
-func (a *Arg) Serialise(val any) string {
+// Serialise the given value to a string using the Serialiser for the Arg. If there is no Serialiser for the Arg then
+// the ArgType.DefaultSerialiser will be used instead.
+func (a *Arg) Serialise(value any) string {
 	if a.Serialiser != nil {
-		return a.Serialiser(val)
+		return a.Serialiser(value)
 	}
-	return a.Type.DefaultSerialiser(val)
+	return a.Type.DefaultSerialiser(value)
 }
 
-type CommandOutputValidator func(string) bool
+// Validate the given value against the Type of the Arg and the Validator for the Arg (if there is one).
+func (a *Arg) Validate(value any) bool {
+	if a.Type.DefaultValidator(value) {
+		if a.Validator != nil {
+			return a.Validator(value)
+		}
+		return true
+	}
+	return false
+}
+
+// CommandType represents a (sub)command that can be executed by SteamCMD.
+type CommandType int
+
+const (
+	// AppInfoPrint calls the "app_info_print" command. It takes a sole Number as an Arg.
+	AppInfoPrint CommandType = iota
+	// Quit calls the "quit" command. It takes no arguments.
+	Quit
+)
+
+// String returns the SteamCMD representation of the CommandType that will be used to call the command in the
+// steamcmd binary.
+func (ct CommandType) String() string {
+	switch ct {
+	case AppInfoPrint:
+		return "app_info_print"
+	case Quit:
+		return "quit"
+	default:
+		return "<nil>"
+	}
+}
+
+// CommandTypeFromString looks up the given string as a CommandType.
+func CommandTypeFromString(s string) (CommandType, error) {
+	switch s {
+	case "AppInfoPrint":
+		return AppInfoPrint, nil
+	case "Quit":
+		return Quit, nil
+	default:
+		return CommandType(0), fmt.Errorf("cannot get CommandType from \"%s\"", s)
+	}
+}
+
+// CommandOutputValidator validates whether a Command has completed successfully by validating the output of the
+// Command.
+type CommandOutputValidator func([]byte) bool
+
+// CommandOutputParser parses the output of a Command to a more usable format. Usually, JSON (map[string]any).
 type CommandOutputParser func([]byte) any
 
+// Command represents a command that can be executed in SteamCMD. User defined Command are possible, but users should
+// stick to executing Commands via their CommandType instead.
 type Command struct {
 	Type      CommandType
 	Parser    CommandOutputParser
 	Validator CommandOutputValidator
+	Args      []*Arg
+}
+
+// Serialise will return the string that will be used to execute this Command via the steamcmd binary.
+func (c *Command) Serialise(args ...any) string {
+	command := []string{fmt.Sprintf("+%s", c.Type.String())}
+	if len(args) > 0 && len(c.Args) > 0 {
+		for i, arg := range c.Args {
+			if i < len(args) {
+				command = append(command, arg.Serialise(args[i]))
+			}
+		}
+	}
+	return strings.Join(command, " ")
+}
+
+// ValidateArgs will validate the given args against the Arg.Validator for each Arg in Args. If the number of args given
+// exceeds the number of Arg in Args, then this will count as invalid. If a required Arg is not provided, this will also
+// count as invalid.
+func (c *Command) ValidateArgs(args ...any) bool {
+	if len(args) > len(c.Args) {
+		return false
+	}
+
+	valid := true
+	if len(args) > 0 && len(c.Args) > 0 {
+		for i, arg := range c.Args {
+			if i < len(args) {
+				value := args[i]
+				if !arg.Validate(value) {
+					valid = false
+					break
+				}
+			} else {
+				if arg.Required {
+					valid = false
+				}
+				break
+			}
+		}
+	}
+	return valid
+}
+
+// Parse the Command's output using their Parser, if it is not nil. Otherwise, the output will just be converted to a
+// string and returned.
+func (c *Command) Parse(out []byte) any {
+	if c.Parser != nil {
+		return c.Parser(out)
+	}
+	return string(out)
+}
+
+// ValidateOutput of the Command by using the Validator of the Command. If this is nil then true will be returned.
+func (c *Command) ValidateOutput(out []byte) bool {
+	if c.Validator == nil {
+		return true
+	}
+	return c.Validator(out)
+}
+
+// commands contains the default Command bindings for SteamCMD.
+var commands = map[CommandType]Command{
+	AppInfoPrint: {
+		Type: AppInfoPrint,
+		Parser: func(b []byte) any {
+			// SteamCMD object syntax (notice lack of ":"):
+			// "hello"
+			// {
+			//    "name"   "bob"
+			// }
+			b = bytes.Trim(b, " \t\r\n\x1b[1m\n")
+			indices := regexp.MustCompile(`"\d+"`).FindStringIndex(string(b))
+			// Remove the header of the response
+			jsonBody := strings.TrimSpace(string(b)[indices[1]+1:])
+			// Replace openings of json Objects with the correct syntax.
+			jsonBody = regexp.MustCompile(`"([^"]+)"\r\n\t+\{`).ReplaceAllString(jsonBody, "\"$1\": {")
+			// Replace key-value pairs with proper JSON syntax
+			jsonBody = regexp.MustCompile(`"([^"]+)"\t\t"([^"]*?)"`).ReplaceAllString(jsonBody, "\"$1\": '''$2'''")
+
+			var json map[string]any
+			if err := hjson.Unmarshal([]byte(jsonBody), &json); err != nil {
+				log.ERROR.Printf("AppInfoPrint output hjson parsing failed: %s", err.Error())
+			}
+			return json
+		},
+		Validator: func(b []byte) bool {
+			return regexp.MustCompile(`, change number : [1-9]`).Match(b)
+		},
+		Args: []*Arg{
+			{
+				Name:     "appid",
+				Type:     Number,
+				Required: true,
+			},
+		},
+	},
+	Quit: {Type: Quit},
 }
