@@ -136,6 +136,7 @@ func (sf Storefront) ScrapeGame(url string, game *Game, config ScrapeConfig) (st
 				return fmt.Errorf("cannot find \"name\" key in common details for %v", appID)
 			}
 			game.Name = null.StringFrom(appName.(string))
+			log.INFO.Printf("Name of app %v is %s", appID, game.Name.String)
 
 			if associations, ok = appDetails["associations"].(map[string]any); !ok {
 				return fmt.Errorf("cannot find \"associations\" key or could not assert it to a map for %v", appID)
@@ -158,6 +159,8 @@ func (sf Storefront) ScrapeGame(url string, game *Game, config ScrapeConfig) (st
 				}
 			}
 
+			log.INFO.Printf("Publisher for %v: %s", appID, publisherName.String())
+			log.INFO.Printf("Developer for %v: %s", appID, developerName.String())
 			if developerName.String() != publisherName.String() {
 				game.Publisher = null.StringFrom(strings.TrimRight(publisherName.String(), ","))
 			}

@@ -99,19 +99,16 @@ func (sc *SteamCMD) closeInteractive() (err error) {
 		if !sc.quitYet {
 			err = sc.AddCommandType(Quit)
 		}
-		if err2 := sc.cmd.Process.Kill(); err2 != nil {
-			err = errors.Wrap(err, err2.Error())
-		}
+
+		err = myErrors.MergeErrors(err, errors.Wrap(sc.cmd.Process.Kill(), "process kill failed"))
+		_, waitErr := sc.cmd.Process.Wait()
+		err = myErrors.MergeErrors(err, errors.Wrap(waitErr, "wait failed"))
+		sc.cmd = nil
 	}
 
 	if sc.console != nil {
-		if err3 := sc.console.Close(); err3 != nil {
-			if err != nil {
-				err = errors.Wrap(err, err3.Error())
-			} else {
-				err = err3
-			}
-		}
+		err = myErrors.MergeErrors(err, sc.console.Close())
+		sc.console = nil
 	}
 
 	if err != nil {

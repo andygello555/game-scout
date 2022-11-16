@@ -89,6 +89,8 @@ func worker() (err error) {
 			"cannot kill ScoutWebPipes (%s) process",
 			globalConfig.SteamWebPipes.BinaryLocation,
 		))
+		_, waitErr := scoutWebPipes.Process.Wait()
+		err = myErrors.MergeErrors(err, errors.Wrap(waitErr, "wait failed"))
 		websocketClientWg.Wait()
 	}()
 
