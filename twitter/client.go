@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/browser"
+	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/pkg/errors"
 	"net/http"
@@ -269,9 +270,11 @@ func (w *ClientWrapper) WriteTweetCap() (err error) {
 		return errors.Wrapf(err, "could not create TweetCap file %s", DefaultTweetCapLocation)
 	}
 	defer func(file *os.File) {
-		if err = file.Close(); err != nil {
-			err = errors.Wrapf(err, "could not close TweetCap file %s", DefaultTweetCapLocation)
-		}
+		err = myErrors.MergeErrors(err, errors.Wrapf(
+			file.Close(),
+			"could not close TweetCap file %s",
+			DefaultTweetCapLocation,
+		))
 	}(file)
 	if _, err = file.Write(jsonBytes); err != nil {
 		return errors.Wrapf(err, "could not write to TweetCap file %s", DefaultTweetCapLocation)

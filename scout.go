@@ -4,6 +4,7 @@ import (
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
+	myErrors "github.com/andygello555/game-scout/errors"
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
@@ -23,7 +24,7 @@ const (
 	// maxUpdateTweets is the maximum number of tweets fetched in the update phase.
 	maxUpdateTweets = 12
 	// secondsBetweenDiscoveryBatches is the number of seconds to sleep between DiscoveryBatch batches.
-	secondsBetweenDiscoveryBatches = time.Second * 7
+	secondsBetweenDiscoveryBatches = time.Second * 3
 	// secondsBetweenUpdateBatches is the number of seconds to sleep between queue batches of updateDeveloperJob.
 	secondsBetweenUpdateBatches = time.Second * 30
 	// maxTotalDiscoveryTweetsDailyPercent is the maximum percentage that the discoveryTweets number can be out of
@@ -36,15 +37,15 @@ const (
 	// maxEnabledDevelopers is the number of developers to keep in the Disable phase.
 	maxEnabledDevelopers = maxTotalUpdateTweets / maxUpdateTweets
 	// discoveryGameScrapeWorkers is the number of scrapeStorefrontsForGameWorker to start in the discovery phase.
-	discoveryGameScrapeWorkers = 5
+	discoveryGameScrapeWorkers = 10
 	// discoveryMaxConcurrentGameScrapeWorkers is number of scrapeStorefrontsForGameWorker that can be processing a job
 	// at the same time in the discovery phase.
-	discoveryMaxConcurrentGameScrapeWorkers = 4
+	discoveryMaxConcurrentGameScrapeWorkers = 9
 	// updateGameScrapeWorkers is the number of scrapeStorefrontsForGameWorker to start in the UpdatePhase.
-	updateGameScrapeWorkers = 3
+	updateGameScrapeWorkers = 10
 	// updateMaxConcurrentGameScrapeWorkers is number of scrapeStorefrontsForGameWorker that can be processing a job
 	// at the same time in the UpdatePhase.
-	updateMaxConcurrentGameScrapeWorkers = 2
+	updateMaxConcurrentGameScrapeWorkers = 9
 )
 
 // sleepBar will sleep for the given time.Duration (as seconds) and display a progress bar for the sleep.
@@ -78,7 +79,7 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 	// If the number of discovery tweets we requested is more than maxDiscoveryTweetsDailyPercent of the total tweets
 	// available for a day then we will error out.
 	if float64(discoveryTweets) > maxTotalDiscoveryTweets {
-		return myTwitter.TemporaryErrorf(
+		return myErrors.TemporaryErrorf(
 			false,
 			"cannot request more than %d tweets per day for discovery purposes",
 			int(myTwitter.TweetsPerDay),

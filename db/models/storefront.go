@@ -6,6 +6,8 @@ import (
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/anaskhan96/soup"
 	"github.com/andygello555/game-scout/browser"
+	myErrors "github.com/andygello555/game-scout/errors"
+	"github.com/andygello555/game-scout/steamcmd"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/pkg/errors"
 	"github.com/volatiletech/null/v9"
@@ -105,68 +107,67 @@ func (sf Storefront) ScrapeGame(url string, game *Game, config ScrapeConfig) (st
 		const maxTries = 3
 		const minDelay = time.Second * 2
 
-		// Fetch the appdetail json to gather info on the name and the publisher
-		if err = browser.SteamAppDetails.TryJSON(maxTries, minDelay, func(jsonBody map[string]any) (err error) {
-			var (
-				ok             bool
-				appDetailsBody any
-				appDetails     map[string]any
-				appDetailsData map[string]any
-			)
-
-			if appDetailsBody, ok = jsonBody[fmt.Sprintf("%d", appID.(int64))]; !ok {
-				return fmt.Errorf("cannot get %v from returned JSON", appID)
+		if err = myErrors.Retry(maxTries, minDelay, func(currentTry int, maxTries int, minDelay time.Duration, args ...any) (err error) {
+			cmd := steamcmd.New(true)
+			if err = cmd.Flow(
+				steamcmd.NewCommandWithArgs(steamcmd.AppInfoPrint, appID),
+				steamcmd.NewCommandWithArgs(steamcmd.Quit),
+			); err != nil {
+				return errors.Wrapf(err, "could not execute flow for app %d", appID)
 			}
-
-			if appDetails, ok = appDetailsBody.(map[string]any); !ok {
-				return fmt.Errorf("cannot assert app details for %v to map[string]any", appID)
-			}
-
-			if !appDetails["success"].(bool) {
-				return fmt.Errorf("value of \"success\" key in app details for %v is false", appID)
-			}
-
-			if appDetailsData, ok = appDetails["data"].(map[string]any); !ok {
-				return fmt.Errorf("cannot assert app details \"data\" key for %v to map[string]any", appID)
-			}
-			game.Name = null.StringFrom(appDetailsData["name"].(string))
 
 			var (
-				developerName, publisherName strings.Builder
-				developers, publishers       []any
+				ok           bool
+				jsonBody     map[string]any
+				appDetails   map[string]any
+				appName      any
+				associations map[string]any
 			)
-			developers, ok = appDetailsData["developers"].([]any)
-			publishers, ok = appDetailsData["publishers"].([]any)
-			if !ok {
-				return fmt.Errorf(
-					"cannot convert values of \"developers\" (%v)/\"publishers\" (%v) keys to arrays",
-					appDetailsData["developers"], appDetailsData["publishers"],
-				)
+
+			if jsonBody, ok = cmd.ParsedOutputs[0].(map[string]any); !ok {
+				return fmt.Errorf("cannot assert parsed output of app_info_print for %v to map", appID)
 			}
 
-			for i, developer := range developers {
-				developerName.WriteString(developer.(string))
-				if i < len(developers)-1 {
-					developerName.WriteString(",")
+			if appDetails, ok = jsonBody["common"].(map[string]any); !ok {
+				return fmt.Errorf("cannot get \"common\" from parsed output for %v", appID)
+			}
+
+			if appName, ok = appDetails["name"]; !ok {
+				return fmt.Errorf("cannot find \"name\" key in common details for %v", appID)
+			}
+			game.Name = null.StringFrom(appName.(string))
+
+			if associations, ok = appDetails["associations"].(map[string]any); !ok {
+				return fmt.Errorf("cannot find \"associations\" key or could not assert it to a map for %v", appID)
+			}
+
+			var developerName, publisherName strings.Builder
+			for i, association := range associations {
+				var associationMap map[string]any
+				if associationMap, ok = association.(map[string]any); !ok {
+					return fmt.Errorf("association %s in details for %v is not a map", i, appID)
 				}
-			}
-			for i, publisher := range publishers {
-				publisherName.WriteString(publisher.(string))
-				if i < len(publishers)-1 {
-					publisherName.WriteString(",")
+
+				switch associationMap["type"].(string) {
+				case "developer":
+					developerName.WriteString(associationMap["name"].(string) + ",")
+				case "publisher":
+					publisherName.WriteString(associationMap["name"].(string) + ",")
+				default:
+					break
 				}
 			}
 
 			if developerName.String() != publisherName.String() {
-				game.Publisher = null.StringFrom(publisherName.String())
+				game.Publisher = null.StringFrom(strings.TrimRight(publisherName.String(), ","))
 			}
 			return
-		}, appID); err != nil {
-			log.WARNING.Printf("Could not fetch info from SteamAppDetails for %d: %s", appID, err.Error())
+		}); err != nil {
+			log.WARNING.Printf("Could not fetch info from SteamCMD for %d: %s", appID, err.Error())
 		}
 
 		// Fetch reviews to gather headline stats on the number of reviews
-		if err = browser.SteamAppReviews.TryJSON(maxTries, minDelay, func(jsonBody map[string]any) error {
+		if err = browser.SteamAppReviews.RetryJSON(maxTries, minDelay, func(jsonBody map[string]any) error {
 			querySummary, ok := jsonBody["query_summary"].(map[string]any)
 			if ok {
 				game.TotalReviews = null.Int32From(int32(querySummary["total_reviews"].(float64)))
@@ -278,7 +279,48 @@ func (sf Storefront) ScrapeGame(url string, game *Game, config ScrapeConfig) (st
 		storefrontConfig := config.ScrapeGetStorefront(sf)
 		if storefrontConfig != nil {
 			tagConfig := storefrontConfig.StorefrontTags()
-			if err = browser.SteamSpyAppDetails.TryJSON(maxTries, minDelay, func(jsonBody map[string]any) (err error) {
+			if err = browser.SteamSpyAppDetails.RetryJSON(maxTries, minDelay, func(jsonBody map[string]any) (err error) {
+				// We fall back to SteamSpy for fetching the game's name and publisher if we haven't got them yet
+				if !game.Name.IsValid() && !game.Publisher.IsValid() {
+					log.INFO.Printf(
+						"We have not yet found the name and publisher for appID %d, falling back to SteamSpy",
+						appID,
+					)
+					if name, ok := jsonBody["name"]; ok {
+						var nameString string
+						if nameString, ok = name.(string); ok {
+							game.Name = null.StringFrom(nameString)
+						}
+					}
+
+					publisher, publisherOk := jsonBody["publisher"]
+					developer, developerOk := jsonBody["developer"]
+					var (
+						publisherName, developerName     string
+						publisherNameOk, developerNameOk bool
+					)
+					log.INFO.Printf("AppID %d SteamSpy publisher: %v, ", appID, publisher)
+					log.INFO.Printf("AppID %d SteamSpy developer: %v, ", appID, developer)
+					switch {
+					case publisherOk && developerOk, publisherOk && !developerOk:
+						if publisherName, publisherNameOk = publisher.(string); !publisherNameOk {
+							break
+						}
+						developerName, developerOk = "", true
+						if developerOk {
+							developerName, developerNameOk = developer.(string)
+						}
+						if (publisherNameOk && developerNameOk) && (publisherName != developerName) {
+							game.Publisher = null.StringFrom(publisherName)
+						}
+					case !publisherOk && developerOk:
+						// Developer is set but publisher isn't. So we assume that the game has no publisher
+						fallthrough
+					default:
+						break
+					}
+				}
+
 				if tagAny, ok := jsonBody["tags"]; ok {
 					var tags map[string]any
 					switch tagAny.(type) {
@@ -349,7 +391,7 @@ func (sf Storefront) ScrapeGame(url string, game *Game, config ScrapeConfig) (st
 		// (i.e. the Game's Developer field is not nil).
 		if game.Developer != nil {
 			twitterUserURLPattern := regexp.MustCompile(`^https?://(?:www\.)?twitter\.com/(?:#!/)?@?([^/?#]*)(?:[?#].*)?$`)
-			if err = browser.SteamAppPage.TrySoup(maxTries, minDelay, func(doc *soup.Root) (err error) {
+			if err = browser.SteamAppPage.RetrySoup(maxTries, minDelay, func(doc *soup.Root) (err error) {
 				links := doc.FindAll("a")
 				usernames := mapset.NewSet[string]()
 				for _, link := range links {

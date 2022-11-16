@@ -534,7 +534,15 @@ func main() {
 
 				// Print outputs
 				for i, output := range cmd.ParsedOutputs {
-					fmt.Printf("Output %d:\n%v\n\n", i+1, output)
+					fmt.Printf("Output %d:\n", i+1)
+					switch output.(type) {
+					case map[string]any:
+						jsonData, _ := json.MarshalIndent(output, "", "  ")
+						fmt.Println(string(jsonData))
+					default:
+						fmt.Printf("%v\n", output)
+					}
+					fmt.Println()
 				}
 				return
 			},

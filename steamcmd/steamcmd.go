@@ -12,8 +12,8 @@ package steamcmd
 
 import (
 	"bytes"
-	"fmt"
 	"github.com/Netflix/go-expect"
+	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/pkg/errors"
 	"os/exec"
 	"strings"
@@ -127,9 +127,8 @@ func (sc *SteamCMD) startInteractive() (err error) {
 	}
 	defer func() {
 		if err != nil {
-			if err2 := sc.closeInteractive(); err2 != nil {
-				err = fmt.Errorf("%w; %s", err, err2.Error())
-			}
+			// If an error has occurred whilst starting interactive mode we will close the SteamCMD
+			err = myErrors.MergeErrors(err, sc.closeInteractive())
 		}
 	}()
 
@@ -150,7 +149,7 @@ func (sc *SteamCMD) startInteractive() (err error) {
 // executeInteractive will execute the given Command immediately when SteamCMD is in interactive mode. The Command will
 // be retried until Command.ValidateOutput succeeds.
 func (sc *SteamCMD) executeInteractive(command *Command, args ...any) (err error) {
-	// Reset the buffers so we don't get any leaks from the previous command
+	// Reset the buffers, so we don't get any leaks from the previous command
 	sc.before.Reset()
 	sc.after.Reset()
 	serialisedCommand := command.Serialise(args...)[1:]
@@ -173,7 +172,12 @@ func (sc *SteamCMD) executeInteractive(command *Command, args ...any) (err error
 		//fmt.Printf("before: \"%s\"\n", sc.before.String())
 		//fmt.Printf("after: \"%s\"\n", sc.after.String())
 	}
-	sc.ParsedOutputs = append(sc.ParsedOutputs, command.Parse(sc.before.Bytes()))
+
+	var parsedOutput any
+	if parsedOutput, err = command.Parse(sc.before.Bytes()); err != nil {
+		err = errors.Wrapf(err, "could not parse output for command \"%s\"", serialisedCommand)
+	}
+	sc.ParsedOutputs = append(sc.ParsedOutputs, parsedOutput)
 	return
 }
 
@@ -272,8 +276,12 @@ func (sc *SteamCMD) Close() (err error) {
 		}
 
 		// Parse the output for each command
-		for _, command := range sc.commands {
-			sc.ParsedOutputs = append(sc.ParsedOutputs, command.Parse(stdout.Bytes()))
+		for i, command := range sc.commands {
+			var parsedOutput any
+			if parsedOutput, err = command.Parse(stdout.Bytes()); err != nil {
+				return errors.Wrapf(err, "could not parse output for command \"%s\"", sc.serialisedCommands[i])
+			}
+			sc.ParsedOutputs = append(sc.ParsedOutputs, parsedOutput)
 		}
 		return
 	} else {
@@ -308,9 +316,7 @@ func NewCommandWithArgs(commandType CommandType, args ...any) *CommandWithArgs {
 // call Close on the SteamCMD.
 func (sc *SteamCMD) Flow(commandWithArgs ...*CommandWithArgs) (err error) {
 	defer func(sc *SteamCMD) {
-		if err = sc.Close(); err != nil {
-			err = errors.Wrap(err, "cannot close flow")
-		}
+		err = myErrors.MergeErrors(err, errors.Wrap(sc.Close(), "cannot close flow"))
 	}(sc)
 
 	if err = sc.Start(); err != nil {
@@ -320,7 +326,10 @@ func (sc *SteamCMD) Flow(commandWithArgs ...*CommandWithArgs) (err error) {
 	for i, command := range commandWithArgs {
 		//fmt.Printf("CommandWithArgs no. %d: \"%s\"\n", i, command.Command.Serialise(command.Args...))
 		if err = sc.AddCommand(command.Command, command.Args...); err != nil {
-			return errors.Wrapf(err, "could not add command no. %d (%s)", i, command.Command.Serialise(command.Args...))
+			return errors.Wrapf(
+				err, "could not queue/execute command no. %d (%s)",
+				i, command.Command.Serialise(command.Args...),
+			)
 		}
 	}
 	return

@@ -7,6 +7,7 @@ import (
 	"github.com/RichardKnop/machinery/v1"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/RichardKnop/machinery/v1/tasks"
+	myErrors "github.com/andygello555/game-scout/errors"
 	task "github.com/andygello555/game-scout/tasks"
 	"github.com/gorilla/websocket"
 	"github.com/pkg/errors"
@@ -83,13 +84,11 @@ func worker() (err error) {
 	// client to finish processing its current job.
 	var websocketClientWg sync.WaitGroup
 	defer func() {
-		if err = scoutWebPipes.Process.Kill(); err != nil {
-			err = errors.Wrapf(
-				err,
-				"cannot kill ScoutWebPipes (%s) process",
-				globalConfig.SteamWebPipes.BinaryLocation,
-			)
-		}
+		err = myErrors.MergeErrors(err, errors.Wrapf(
+			scoutWebPipes.Process.Kill(),
+			"cannot kill ScoutWebPipes (%s) process",
+			globalConfig.SteamWebPipes.BinaryLocation,
+		))
 		websocketClientWg.Wait()
 	}()
 
@@ -113,11 +112,9 @@ func worker() (err error) {
 
 	// Defer a close to the websocket connection
 	defer func(c *websocket.Conn) {
-		if err = c.Close(); err != nil {
-			err = errors.Wrapf(
-				err, "could not close websocket connection to %s", globalConfig.SteamWebPipes.Location,
-			)
-		}
+		err = myErrors.MergeErrors(err, errors.Wrapf(
+			c.Close(), "could not close websocket connection to %s", globalConfig.SteamWebPipes.Location,
+		))
 	}(c)
 
 	// The second argument is a consumer tag

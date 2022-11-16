@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
+	"github.com/andygello555/game-scout/errors"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"strings"
 	"time"
@@ -180,7 +181,7 @@ func (brp *bindingResultProto) RateLimit() *twitter.RateLimit { return brp.rateL
 func (brp *bindingResultProto) MergeNext(nextBindingResult BindingResult, binding *Binding) (err error) {
 	newBindingResult := &bindingResultProto{}
 	createRawError := func() error {
-		return TemporaryErrorf(
+		return errors.TemporaryErrorf(
 			false,
 			"cannot merge BindingResults for %s as one/both do(es) not have a \"Raw\" field",
 			binding.Type.String(),
@@ -341,7 +342,7 @@ func (brp *bindingResultProto) MergeNext(nextBindingResult BindingResult, bindin
 			return resultMeta
 		}
 	} else {
-		return TemporaryErrorf(
+		return errors.TemporaryErrorf(
 			false,
 			"cannot merge BindingResults as one/both do(es) not have a \"Meta\" field",
 		)
@@ -354,7 +355,7 @@ func (brp *bindingResultProto) MergeNext(nextBindingResult BindingResult, bindin
 	if rateLimit1 != nil && rateLimit2 != nil {
 		newBindingResult.rateLimitMethod = func() *twitter.RateLimit { return rateLimit2 }
 	} else {
-		return TemporaryErrorf(
+		return errors.TemporaryErrorf(
 			false,
 			"cannot merge BindingResults as one/both do(es) not have a \"RateLimit\" field",
 		)

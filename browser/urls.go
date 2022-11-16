@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/anaskhan96/soup"
+	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/pkg/errors"
 	"io"
 	"net/http"
@@ -118,63 +119,21 @@ func (su ScrapeURL) Soup(args ...any) (*soup.Root, error) {
 	}
 }
 
-// TrySoup will run Soup with the given args and try the given function. If the function returns an error then the
+// RetrySoup will run Soup with the given args and try the given function. If the function returns an error then the
 // function will be retried up to a total of the given number of maxTries. If minDelay is given, and is not 0, then
 // before the function is retried it will sleep for (maxTries + 1 - currentTries) * minDelay.
-func (su ScrapeURL) TrySoup(maxTries int, minDelay time.Duration, try func(doc *soup.Root) error, args ...any) (err error) {
-	tries := maxTries
-	type returnType int
-	const (
-		con returnType = iota
-		brk
-		done
-	)
-	for {
-		rt := func() (rt returnType) {
-			log.INFO.Printf("TrySoup(%s, %v) is on try %d/%d", su.Name(), args, tries, maxTries)
-			// Defer a closure to recover from any panics and set the appropriate return type
-			defer func() {
-				if pan := recover(); pan != nil {
-					if tries > 0 {
-						tries--
-						time.Sleep(minDelay * time.Duration(maxTries+1-tries))
-						rt = con
-						return
-					}
-					err = fmt.Errorf("panic occurred: %v", pan)
-					rt = brk
-				}
-			}()
-
-			var doc *soup.Root
-			if doc, err = su.Soup(args...); err != nil {
-				if tries > 0 {
-					tries--
-					time.Sleep(minDelay * time.Duration(maxTries+1-tries))
-					return con
-				}
-				err = errors.Wrapf(err, "ran out of tries (%d total) whilst requesting Soup for %s", maxTries, su.String())
-				return brk
-			}
-
-			if err = try(doc); err != nil {
-				if tries > 0 {
-					tries--
-					time.Sleep(minDelay * time.Duration(maxTries+1-tries))
-					return con
-				}
-				err = errors.Wrapf(err, "ran out of tries (%d total) whilst calling try function for %s", maxTries, su.String())
-				return brk
-			}
-			return done
-		}()
-
-		if rt == con {
-			continue
+func (su ScrapeURL) RetrySoup(maxTries int, minDelay time.Duration, try func(doc *soup.Root) error, args ...any) error {
+	return myErrors.Retry(maxTries, minDelay, func(currentTry int, maxTries int, minDelay time.Duration, args ...any) (err error) {
+		log.INFO.Printf("RetryJSON(%s, %v) is on try %d/%d", su.Name(), args, currentTry, maxTries)
+		var doc *soup.Root
+		if doc, err = su.Soup(args...); err != nil {
+			return errors.Wrapf(err, "ran out of tries (%d total) whilst requesting Soup for %s", maxTries, su.String())
 		}
-		break
-	}
-	return
+		if err = try(doc); err != nil {
+			return errors.Wrapf(err, "ran out of tries (%d total) whilst calling try function for %s", maxTries, su.String())
+		}
+		return nil
+	}, args...)
 }
 
 // JSON makes a request to the ScrapeURL and parses the response to JSON.
@@ -196,9 +155,11 @@ func (su ScrapeURL) JSON(args ...any) (jsonBody map[string]any, err error) {
 
 	if res.Body != nil {
 		defer func(Body io.ReadCloser) {
-			if err = Body.Close(); err != nil {
-				err = errors.Wrapf(err, "request body for JSON fetched from \"%s\" could not be closed", url)
-			}
+			err = myErrors.MergeErrors(err, errors.Wrapf(
+				Body.Close(),
+				"request body for JSON fetched from \"%s\" could not be closed",
+				url,
+			))
 		}(res.Body)
 	}
 
@@ -216,61 +177,19 @@ func (su ScrapeURL) JSON(args ...any) (jsonBody map[string]any, err error) {
 	return
 }
 
-// TryJSON will run JSON with the given args and try the given function. If the function returns an error then the
+// RetryJSON will run JSON with the given args and try the given function. If the function returns an error then the
 // function will be retried up to a total of the given number of maxTries. If minDelay is given, and is not 0, then
 // before the function is retried it will sleep for (maxTries + 1 - currentTries) * minDelay.
-func (su ScrapeURL) TryJSON(maxTries int, minDelay time.Duration, try func(jsonBody map[string]any) error, args ...any) (err error) {
-	tries := maxTries
-	type returnType int
-	const (
-		con returnType = iota
-		brk
-		done
-	)
-	for {
-		rt := func() (rt returnType) {
-			log.INFO.Printf("TryJSON(%s, %v) is on try %d/%d", su.Name(), args, tries, maxTries)
-			// Defer a closure to recover from any panics and set the appropriate return type
-			defer func() {
-				if pan := recover(); pan != nil {
-					if tries > 0 {
-						tries--
-						time.Sleep(minDelay * time.Duration(maxTries+1-tries))
-						rt = con
-						return
-					}
-					err = fmt.Errorf("panic occurred: %v", pan)
-					rt = brk
-				}
-			}()
-
-			var jsonBody map[string]any
-			if jsonBody, err = su.JSON(args...); err != nil {
-				if tries > 0 {
-					tries--
-					time.Sleep(minDelay * time.Duration(maxTries+1-tries))
-					return con
-				}
-				err = errors.Wrapf(err, "ran out of tries (%d total) whilst requesting JSON for %s", maxTries, su.String())
-				return brk
-			}
-
-			if err = try(jsonBody); err != nil {
-				if tries > 0 {
-					tries--
-					time.Sleep(minDelay * time.Duration(maxTries+1-tries))
-					return con
-				}
-				err = errors.Wrapf(err, "ran out of tries (%d total) whilst calling try function for %s", maxTries, su.String())
-				return brk
-			}
-			return done
-		}()
-
-		if rt == con {
-			continue
+func (su ScrapeURL) RetryJSON(maxTries int, minDelay time.Duration, try func(jsonBody map[string]any) error, args ...any) error {
+	return myErrors.Retry(maxTries, minDelay, func(currentTry int, maxTries int, minDelay time.Duration, args ...any) (err error) {
+		log.INFO.Printf("RetryJSON(%s, %v) is on try %d/%d", su.Name(), args, currentTry, maxTries)
+		var jsonBody map[string]any
+		if jsonBody, err = su.JSON(args...); err != nil {
+			return errors.Wrapf(err, "ran out of tries (%d total) whilst requesting JSON for %s", maxTries, su.String())
 		}
-		break
-	}
-	return
+		if err = try(jsonBody); err != nil {
+			return errors.Wrapf(err, "ran out of tries (%d total) whilst calling try function for %s", maxTries, su.String())
+		}
+		return nil
+	}, args...)
 }

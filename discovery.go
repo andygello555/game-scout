@@ -6,6 +6,7 @@ import (
 	"github.com/andygello555/game-scout/browser"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
+	myErrors "github.com/andygello555/game-scout/errors"
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	"github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
@@ -22,10 +23,10 @@ import (
 const (
 	// minScrapeStorefrontsForGameWorkerWaitTime is the minimum amount of time for a scrapeStorefrontsForGameWorker to
 	// wait after completing a job.
-	minScrapeStorefrontsForGameWorkerWaitTime = time.Millisecond * 750
+	minScrapeStorefrontsForGameWorkerWaitTime = time.Millisecond * 100
 	// maxScrapeStorefrontsForGameWorkerWaitTime is the maximum amount of time for a scrapeStorefrontsForGameWorker to
 	// wait after completing a job.
-	maxScrapeStorefrontsForGameWorkerWaitTime = time.Second*2 + time.Millisecond*500
+	maxScrapeStorefrontsForGameWorkerWaitTime = time.Millisecond * 500
 	// maxGamesPerTweet is needed so that we don't overload the queue to the scrapeStorefrontsForGameWorker.
 	maxGamesPerTweet = 10
 )
@@ -53,6 +54,7 @@ func scrapeStorefrontsForGameWorker(
 	guard chan struct{},
 ) {
 	defer wg.Done()
+	time.Sleep(maxScrapeStorefrontsForGameWorkerWaitTime * time.Duration(no))
 	log.INFO.Printf("ScrapeStorefrontsForGameWorker no. %d has started...", no)
 	jobTotal := 0
 	for job := range jobs {
@@ -264,7 +266,7 @@ func DiscoveryBatch(
 		onConflict := value.(upsertable).OnConflict()
 		onConflict.DoUpdates = clause.AssignmentColumns(db.GetModel(value).ColumnDBNamesExcluding("id"))
 		if updateOrCreate = db.DB.Clauses(onConflict); updateOrCreate.Error != nil {
-			err = myTwitter.TemporaryWrapf(
+			err = myErrors.TemporaryWrapf(
 				false,
 				updateOrCreate.Error,
 				"could not create update or create clause for %s",
@@ -328,7 +330,7 @@ func DiscoveryBatch(
 				gameIDs.Add(result.game.ID)
 			}
 			if err != nil {
-				return gameIDs, myTwitter.TemporaryWrap(false, err, "could not insert either Developer or Game into DB")
+				return gameIDs, myErrors.TemporaryWrap(false, err, "could not insert either Developer or Game into DB")
 			}
 			// Add the developerSnap to the developerSnapshots
 			if _, ok := developerSnapshots[result.developer.ID]; !ok {
@@ -430,7 +432,7 @@ func DiscoveryPhase(
 			gameScrapeQueue,
 			userTweetTimes,
 			developerSnapshots,
-		); err != nil && !myTwitter.IsTemporary(err) {
+		); err != nil && !myErrors.IsTemporary(err) {
 			log.FATAL.Printf("Error returned by DiscoveryBatch is not temporary: %s. We have to stop :(", err.Error())
 			err = errors.Wrapf(err, "could not execute DiscoveryBatch for batch no. %d", batchNo)
 			return

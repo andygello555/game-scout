@@ -3,7 +3,6 @@ package steamcmd
 import (
 	"bytes"
 	"fmt"
-	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/hjson/hjson-go/v4"
 	"github.com/pkg/errors"
 	"reflect"
@@ -168,7 +167,7 @@ func CommandTypeFromString(s string) (CommandType, error) {
 type CommandOutputValidator func([]byte) bool
 
 // CommandOutputParser parses the output of a Command to a more usable format. Usually, JSON (map[string]any).
-type CommandOutputParser func([]byte) any
+type CommandOutputParser func([]byte) (any, error)
 
 // Command represents a command that can be executed in SteamCMD. User defined Command are possible, but users should
 // stick to executing Commands via their CommandType instead.
@@ -222,11 +221,11 @@ func (c *Command) ValidateArgs(args ...any) bool {
 
 // Parse the Command's output using their Parser, if it is not nil. Otherwise, the output will just be converted to a
 // string and returned.
-func (c *Command) Parse(out []byte) any {
+func (c *Command) Parse(out []byte) (any, error) {
 	if c.Parser != nil {
 		return c.Parser(out)
 	}
-	return string(out)
+	return string(out), nil
 }
 
 // ValidateOutput of the Command by using the Validator of the Command. If this is nil then true will be returned.
@@ -241,7 +240,7 @@ func (c *Command) ValidateOutput(out []byte) bool {
 var commands = map[CommandType]Command{
 	AppInfoPrint: {
 		Type: AppInfoPrint,
-		Parser: func(b []byte) any {
+		Parser: func(b []byte) (any, error) {
 			// SteamCMD object syntax (notice lack of ":"):
 			// "hello"
 			// {
@@ -251,16 +250,22 @@ var commands = map[CommandType]Command{
 			indices := regexp.MustCompile(`"\d+"`).FindStringIndex(string(b))
 			// Remove the header of the response
 			jsonBody := strings.TrimSpace(string(b)[indices[1]+1:])
+			//fmt.Println("jsonBody 1", strings.Join(strings.Split(jsonBody, "\r\n")[:200], "\r\n"))
+			//fmt.Println("jsonBody 1", jsonBody)
 			// Replace openings of json Objects with the correct syntax.
 			jsonBody = regexp.MustCompile(`"([^"]+)"\r\n\t+\{`).ReplaceAllString(jsonBody, "\"$1\": {")
+			//fmt.Println("jsonBody 2", strings.Join(strings.Split(jsonBody, "\r\n")[:200], "\r\n"))
+			//fmt.Println("jsonBody 2", jsonBody)
 			// Replace key-value pairs with proper JSON syntax
-			jsonBody = regexp.MustCompile(`"([^"]+)"\t\t"([^"]*?)"`).ReplaceAllString(jsonBody, "\"$1\": '''$2'''")
+			jsonBody = regexp.MustCompile(`"([^"]+)"\t\t"(([^\\]\\"|[^"])*?)"`).ReplaceAllString(jsonBody, "\"$1\": '''$2'''")
+			//fmt.Println("jsonBody 3", strings.Join(strings.Split(jsonBody, "\r\n")[:200], "\r\n"))
+			//fmt.Println("jsonBody 3", jsonBody)
 
 			var json map[string]any
 			if err := hjson.Unmarshal([]byte(jsonBody), &json); err != nil {
-				log.ERROR.Printf("AppInfoPrint output hjson parsing failed: %s", err.Error())
+				return jsonBody, err
 			}
-			return json
+			return json, nil
 		},
 		Validator: func(b []byte) bool {
 			return regexp.MustCompile(`, change number : [1-9]`).Match(b)

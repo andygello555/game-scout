@@ -5,6 +5,7 @@ import (
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
+	myErrors "github.com/andygello555/game-scout/errors"
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	"github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
@@ -29,13 +30,13 @@ func UpdateDeveloper(
 	log.INFO.Printf("Updating info for developer %s (%s)", developer.Username, developer.ID)
 	var developerSnap *models.DeveloperSnapshot
 	if developerSnap, err = developer.LatestDeveloperSnapshot(db.DB); err != nil {
-		return gameIDs, myTwitter.TemporaryWrapf(
+		return gameIDs, myErrors.TemporaryWrapf(
 			true, err, "could not get latest DeveloperSnapshot for %s in UpdateDeveloper",
 			developer.ID,
 		)
 	}
 	if developerSnap == nil {
-		return gameIDs, myTwitter.TemporaryErrorf(
+		return gameIDs, myErrors.TemporaryErrorf(
 			true,
 			"could not get latest DeveloperSnapshot for %s as there are no DeveloperSnapshots for it",
 			developer.ID,
@@ -47,7 +48,7 @@ func UpdateDeveloper(
 	var games []*models.Game
 	gameIDs = mapset.NewSet[uuid.UUID]()
 	if games, err = developer.Games(db.DB); err != nil {
-		return gameIDs, myTwitter.TemporaryWrapf(
+		return gameIDs, myErrors.TemporaryWrapf(
 			true, err, "could not find Games for Developer %s (%s)", developer.Username, developer.ID,
 		)
 	}
@@ -153,9 +154,9 @@ func UpdateDeveloper(
 	var subGameIDs mapset.Set[uuid.UUID]
 	if subGameIDs, err = DiscoveryBatch(
 		developerNo, tweetRaw.TweetDictionaries(), gameScrapeQueue, userTweetTimes, developerSnapshots,
-	); err != nil && !myTwitter.IsTemporary(err) {
+	); err != nil && !myErrors.IsTemporary(err) {
 		log.FATAL.Printf("Error returned by DiscoveryBatch is not temporary: %s. We have to stop :(", err.Error())
-		return gameIDs, myTwitter.TemporaryWrapf(
+		return gameIDs, myErrors.TemporaryWrapf(
 			false, err, "could not execute DiscoveryBatch for tweets fetched for Developer %s (%s)",
 			developer.Username, developer.ID,
 		)
@@ -266,7 +267,7 @@ func UpdatePhase(
 	}
 
 	if unscrapedDevelopersQuery.Error != nil {
-		err = myTwitter.TemporaryWrap(false, unscrapedDevelopersQuery.Error, "cannot construct query for unscraped developers")
+		err = myErrors.TemporaryWrap(false, unscrapedDevelopersQuery.Error, "cannot construct query for unscraped developers")
 		return
 	}
 
@@ -329,7 +330,7 @@ func UpdatePhase(
 					int(myTwitter.TweetsPerDay)-discoveryTweets,
 					initialDeveloperCount,
 				)
-				err = myTwitter.TemporaryErrorf(
+				err = myErrors.TemporaryErrorf(
 					false, "cannot run update phase as we couldn't find a totalTweetsForEachDeveloper "+
 						"number that didn't result in 0 unscrapedDevelopers",
 				)
@@ -476,7 +477,7 @@ func UpdatePhase(
 					producerDone <- struct{}{}
 				}()
 			} else {
-				err = myTwitter.TemporaryWrap(
+				err = myErrors.TemporaryWrap(
 					false,
 					err,
 					"do not know how long there is left on the rate limit for RecentSearch as it is stale",
@@ -495,7 +496,7 @@ func UpdatePhase(
 		// We start the consumer of the Update developer results in its own goroutine so we can
 		go func() {
 			for result := range results {
-				if result.error != nil && !myTwitter.IsTemporary(result.error) {
+				if result.error != nil && !myErrors.IsTemporary(result.error) {
 					consumerDone <- errors.Wrapf(result.error, "permanent error occurred whilst scraping unscraped developer %s", result.developer.Username)
 					return
 				} else if result.error != nil {
