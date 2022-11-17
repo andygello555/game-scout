@@ -95,7 +95,7 @@ type ScrapeConfig interface {
 }
 
 // ScrapeGame will fetch more info on the given game located at the given URL. The scrape procedure depends on what
-// Storefront the URL is for. This also returns a standardised URL for the game's webpage.
+// Storefront the URL is for. It also returns a standardised URL for the game's webpage.
 func (sf Storefront) ScrapeGame(url string, game *Game, config ScrapeConfig) (standardisedURL string) {
 	var err error
 	switch sf {
@@ -108,6 +108,7 @@ func (sf Storefront) ScrapeGame(url string, game *Game, config ScrapeConfig) (st
 		const minDelay = time.Second * 2
 
 		if err = myErrors.Retry(maxTries, minDelay, func(currentTry int, maxTries int, minDelay time.Duration, args ...any) (err error) {
+			log.INFO.Printf("SteamCMD \"app_info_print %d\" is on try %d/%d", appID, currentTry, maxTries)
 			cmd := steamcmd.New(true)
 			if err = cmd.Flow(
 				steamcmd.NewCommandWithArgs(steamcmd.AppInfoPrint, appID),

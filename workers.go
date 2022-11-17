@@ -35,9 +35,12 @@ type throughWriter struct {
 var timePrefixPattern = regexp.MustCompile(`^(\[.*?] ).*$`)
 
 func (w *throughWriter) Write(d []byte) (int, error) {
-	dString := string(d[:])
-	timePrefix := timePrefixPattern.FindStringSubmatch(dString)[1]
-	w.logger.Print(strings.TrimPrefix(strings.TrimSpace(dString), timePrefix))
+	dString := strings.TrimSpace(string(d[:]))
+	matches := timePrefixPattern.FindStringSubmatch(dString)
+	if len(matches) > 0 {
+		dString = strings.TrimPrefix(dString, matches[1])
+	}
+	w.logger.Print(dString)
 	return len(d), nil
 }
 

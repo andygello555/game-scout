@@ -396,94 +396,116 @@ func UpdatePhase(
 				"%d requests for %d developers will exceed our rate limit. We need to check if we can batch...",
 				len(unscrapedDevelopers), len(unscrapedDevelopers),
 			)
+
 			myTwitter.Client.Mutex.Lock()
 			rateLimit, ok := myTwitter.Client.RateLimits[myTwitter.RecentSearch]
 			myTwitter.Client.Mutex.Unlock()
-			log.WARNING.Printf("Managed to get rate limit for RecentSearch: %v", rateLimit)
-			if ok && rateLimit.Reset.Time().After(time.Now().UTC()) {
-				log.WARNING.Printf(
-					"Due to the number of unscrapedDevelopers (%d) this would exceed the current rate limit of "+
-						"RecentSearch: %d/%d %s. Switching to a batching approach...",
-					len(unscrapedDevelopers), rateLimit.Remaining, rateLimit.Limit, rateLimit.Reset.Time().String(),
+
+			// If we cannot find the rate limit, or it has already ended then we will keep making singleton requests
+			// until we refresh the rate limit.
+			for !ok || rateLimit.Reset.Time().Before(time.Now().UTC()) {
+				log.ERROR.Printf(
+					"Rate limit for RecentSearch doesn't exist or is stale (ok = %t, rateLimit = %v)",
+					ok, rateLimit,
 				)
 
-				// We start this in a separate goroutine, so we can process the results concurrently
-				go func() {
-					left := len(unscrapedDevelopers)
-					low := 0
-					high := rateLimit.Remaining
-					batchNo := 0
-					for left > 0 {
-						// Queue up all the jobs from ranges low -> high
-						finishedJobs = make(chan int, high-low)
-						log.INFO.Printf(
-							"batchNo: %d) There are %d developers left to queue up for updating. Queueing developers %d -> %d",
-							batchNo, left, low, high,
-						)
-						queueDeveloperRange(low, high)
-						left -= high - low
+				// Make a single throwaway query
+				query := globalConfig.Twitter.TwitterQuery()
+				if _, err = myTwitter.Client.ExecuteBinding(
+					myTwitter.RecentSearch,
+					&myTwitter.BindingOptions{Total: 10},
+					query,
+					twitter.TweetRecentSearchOpts{MaxResults: 10},
+				); err != nil {
+					log.ERROR.Printf(
+						"Could not make RecentSearch to refresh rate limit: %s, sleeping for 20s",
+						err.Error(),
+					)
+					sleepBar(time.Second * 20)
+				}
 
-						// We don't need to sleep if there are no jobs left
-						if left > 0 {
-							// Figure out the sleepDuration until the reset time and sleep until then
-							sleepDuration := rateLimit.Reset.Time().Sub(time.Now().UTC())
-							log.INFO.Printf(
-								"batchNo: %d) We are going to sleep until %s (%s)",
-								batchNo, rateLimit.Reset.Time().String(), sleepDuration.String(),
-							)
-							sleepBar(sleepDuration)
-						} else {
-							log.INFO.Printf(
-								"Left is 0, so we are not going to sleep until %s because we have finished",
-								rateLimit.Reset.Time().String(),
-							)
-						}
-
-						// We wait until all the results have been processed by the consumer
-						developerNumbersSeen := mapset.NewSet[int]()
-						for developerNumbersSeen.Cardinality() != high-low {
-							log.INFO.Printf("Developers seen %d/%d", developerNumbersSeen.Cardinality(), high-low)
-							select {
-							case developerNo := <-finishedJobs:
-								log.INFO.Printf("Consumer has been notified that job %d has finished. Adding to set...", developerNo)
-								developerNumbersSeen.Add(developerNo)
-							case <-time.After(2 * time.Second):
-								log.INFO.Printf("Did not get any finished jobs in 2s, trying again...")
-							}
-						}
-						close(finishedJobs)
-
-						// Check if there is a new rate limit
-						myTwitter.Client.Mutex.Lock()
-						rateLimit, ok = myTwitter.Client.RateLimits[myTwitter.RecentSearch]
-						myTwitter.Client.Mutex.Unlock()
-						log.INFO.Printf("batchNo: %d) I'm awake. New RateLimit?: %t", batchNo, ok)
-
-						// Set low and high for the next batch
-						low = high
-						if ok && rateLimit.Reset.Time().After(time.Now().UTC()) {
-							high += rateLimit.Remaining
-						} else {
-							high += myTwitter.RecentSearch.Binding().RequestRateLimit.Requests
-						}
-
-						// Clamp high to the length of unscraped developers
-						if high > len(unscrapedDevelopers) {
-							high = len(unscrapedDevelopers)
-						}
-						log.INFO.Printf("batchNo: %d) Setting low = %d, high = %d", batchNo, low, high)
-						batchNo++
-					}
-					producerDone <- struct{}{}
-				}()
-			} else {
-				err = myErrors.TemporaryWrap(
-					false,
-					err,
-					"do not know how long there is left on the rate limit for RecentSearch as it is stale",
-				)
-				return
+				// Get the rate limit again
+				myTwitter.Client.Mutex.Lock()
+				rateLimit, ok = myTwitter.Client.RateLimits[myTwitter.RecentSearch]
+				myTwitter.Client.Mutex.Unlock()
 			}
+
+			log.WARNING.Printf("Managed to get rate limit for RecentSearch: %v", rateLimit)
+			log.WARNING.Printf(
+				"Due to the number of unscrapedDevelopers (%d) this would exceed the current rate limit of "+
+					"RecentSearch: %d/%d %s. Switching to a batching approach...",
+				len(unscrapedDevelopers), rateLimit.Remaining, rateLimit.Limit, rateLimit.Reset.Time().String(),
+			)
+
+			// We start this in a separate goroutine, so we can process the results concurrently
+			go func() {
+				left := len(unscrapedDevelopers)
+				low := 0
+				high := rateLimit.Remaining
+				batchNo := 0
+				for left > 0 {
+					// Queue up all the jobs from ranges low -> high
+					finishedJobs = make(chan int, high-low)
+					log.INFO.Printf(
+						"batchNo: %d) There are %d developers left to queue up for updating. Queueing developers %d -> %d",
+						batchNo, left, low, high,
+					)
+					queueDeveloperRange(low, high)
+					left -= high - low
+
+					// We don't need to sleep if there are no jobs left
+					if left > 0 {
+						// Figure out the sleepDuration until the reset time and sleep until then
+						sleepDuration := rateLimit.Reset.Time().Sub(time.Now().UTC())
+						log.INFO.Printf(
+							"batchNo: %d) We are going to sleep until %s (%s)",
+							batchNo, rateLimit.Reset.Time().String(), sleepDuration.String(),
+						)
+						sleepBar(sleepDuration)
+					} else {
+						log.INFO.Printf(
+							"Left is 0, so we are not going to sleep until %s because we have finished",
+							rateLimit.Reset.Time().String(),
+						)
+					}
+
+					// We wait until all the results have been processed by the consumer
+					developerNumbersSeen := mapset.NewSet[int]()
+					for developerNumbersSeen.Cardinality() != high-low {
+						log.INFO.Printf("Developers seen %d/%d", developerNumbersSeen.Cardinality(), high-low)
+						select {
+						case developerNo := <-finishedJobs:
+							log.INFO.Printf("Consumer has been notified that job %d has finished. Adding to set...", developerNo)
+							developerNumbersSeen.Add(developerNo)
+						case <-time.After(2 * time.Second):
+							log.INFO.Printf("Did not get any finished jobs in 2s, trying again...")
+						}
+					}
+					close(finishedJobs)
+
+					// Check if there is a new rate limit
+					myTwitter.Client.Mutex.Lock()
+					rateLimit, ok = myTwitter.Client.RateLimits[myTwitter.RecentSearch]
+					myTwitter.Client.Mutex.Unlock()
+					log.INFO.Printf("batchNo: %d) I'm awake. New RateLimit?: %t", batchNo, ok)
+
+					// Set low and high for the next batch
+					low = high
+					if ok && rateLimit.Reset.Time().After(time.Now().UTC()) {
+						high += rateLimit.Remaining
+					} else {
+						high += myTwitter.RecentSearch.Binding().RequestRateLimit.Requests
+					}
+
+					// Clamp high to the length of unscraped developers
+					if high > len(unscrapedDevelopers) {
+						high = len(unscrapedDevelopers)
+					}
+					log.INFO.Printf("batchNo: %d) Setting low = %d, high = %d", batchNo, low, high)
+					batchNo++
+				}
+				producerDone <- struct{}{}
+			}()
 		} else {
 			// Otherwise, queue up the jobs for ALL the updateDeveloperWorkers
 			go func() {
