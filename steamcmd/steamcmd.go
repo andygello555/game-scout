@@ -17,10 +17,15 @@ import (
 	"github.com/pkg/errors"
 	"os/exec"
 	"strings"
+	"time"
 )
 
-// InteractivePrompt is the prompt that SteamCMD uses in interactive mode.
-const InteractivePrompt = "Steam>"
+const (
+	// InteractivePrompt is the prompt that SteamCMD uses in interactive mode.
+	InteractivePrompt = "Steam>"
+	// ExpectTimeout is the timeout for the Expect calls.
+	ExpectTimeout = time.Second * 15
+)
 
 // SteamCMD is a wrapper for the Steam CLI client (steamcmd). It can run a sequence of Command in both interactive and
 // non-interactive modes.
@@ -74,7 +79,7 @@ func (sc *SteamCMD) setBuffers(serialisedCommand string, read string, expected s
 // string read by ExpectString, and the before buffer to be the output that was read from the previous expectString up
 // until this one. interactiveBuffer will also be reset to accommodate the next call to expectString.
 func (sc *SteamCMD) expectString(serialisedCommand string, s string) error {
-	msg, err := sc.console.ExpectString(s)
+	msg, err := sc.console.Expect(expect.String(s), expect.WithTimeout(ExpectTimeout))
 	if err != nil {
 		return errors.Wrapf(err, "error whilst expecting \"%s\" from interactive SteamCMD", s)
 	}
@@ -84,7 +89,7 @@ func (sc *SteamCMD) expectString(serialisedCommand string, s string) error {
 
 // expectEOF will do a similar thing as expectString, but instead will call ExpectEOF on the console.
 func (sc *SteamCMD) expectEOF() error {
-	msg, err := sc.console.ExpectEOF()
+	msg, err := sc.console.Expect(expect.EOF, expect.PTSClosed, expect.WithTimeout(ExpectTimeout))
 	if err != nil {
 		return errors.Wrap(err, "error whilst expecting EOF from interactive SteamCMD")
 	}
