@@ -26,6 +26,9 @@ type Game struct {
 	Developer   *Developer `gorm:"constraint:OnDelete:CASCADE;"`
 	// DeveloperVerified indicates whether the developer's Twitter username can be found somewhere on the Game's Website.
 	DeveloperVerified bool
+	// Updates is the number of times this app has been updated. 0 means that the Game has just been created. Please
+	// don't set this yourself when creating a Game.
+	Updates uint64
 	// Publisher is the publisher for this game. Usually found via the Steam store API. If this cannot be found it is
 	// set to nil. If this is set then it negatively contributes to the Game's WeightedScore.
 	Publisher null.String
@@ -51,7 +54,7 @@ type Game struct {
 	// TagConfig for more info. Only set when Storefront is SteamStorefront.
 	TagScore null.Float64
 	// WeightedScore is a weighted average comprised of the values taken from Publisher, TotalReviews, ReviewScore,
-	// TotalUpvotes, TotalDownvotes, and TotalComments for this game. If Game.checkCalculateWeightedScore is false then
+	// TotalUpvotes, TotalDownvotes, and TotalComments for this game. If Game.CheckCalculateWeightedScore is false then
 	// this will be nil. This is a computed field, no need to set it before saving.
 	WeightedScore null.Float64
 }
@@ -176,9 +179,9 @@ func (gf gameWeightedField) Fields() []WeightedField {
 	}
 }
 
-// checkCalculateWeightedScore checks if we can calculate the WeightedScore for this Game. This is dependent on the
+// CheckCalculateWeightedScore checks if we can calculate the WeightedScore for this Game. This is dependent on the
 // Website field being set and the Storefront not being UnknownStorefront.
-func (g *Game) checkCalculateWeightedScore() bool {
+func (g *Game) CheckCalculateWeightedScore() bool {
 	return g.Website.IsValid() && g.Storefront != UnknownStorefront
 }
 
@@ -202,7 +205,7 @@ func (g *Game) UpdateComputedFields(tx *gorm.DB) (err error) {
 
 	// Then we set the WeightedScore
 	g.WeightedScore = null.Float64FromPtr(nil)
-	if g.checkCalculateWeightedScore() {
+	if g.CheckCalculateWeightedScore() {
 		g.WeightedScore = null.Float64From(CalculateWeightedScore(g, Publisher))
 	}
 	return
@@ -220,6 +223,8 @@ func (g *Game) BeforeCreate(tx *gorm.DB) (err error) {
 }
 
 func (g *Game) BeforeUpdate(tx *gorm.DB) (err error) {
+	// Increment the updates counter. Updates is not a computed field so should not be included in UpdateComputedField
+	g.Updates++
 	if err = g.UpdateComputedFields(tx); err != nil {
 		err = errors.Wrapf(err, "could not update computed fields for Game %s", g.ID.String())
 	}

@@ -48,6 +48,11 @@ type WeightedModel interface {
 	callbacks.BeforeUpdateInterface
 }
 
+type CheckedWeightedModel interface {
+	WeightedModel
+	CheckCalculateWeightedScore() bool
+}
+
 type WeightedField interface {
 	fmt.Stringer
 	Weight() (w float64, inverse bool)
