@@ -397,3 +397,41 @@ func TestDisablePhase(t *testing.T) {
 		)
 	}
 }
+
+func ExampleStateLoadOrCreate() {
+	var (
+		state *ScoutState
+		err   error
+	)
+	// Force the creation of a new ScoutState. This will remove any existing in-disk cache for ScoutStates for this day.
+	if state, err = StateLoadOrCreate(true); err != nil {
+		fmt.Printf("Could not create ScoutState: %v\n", err)
+		return
+	}
+	// Add some items to be cached
+	state.GetCachedField(UserTweetTimesType).SetOrAdd("1234", time.Now().UTC(), "12345", time.Now().UTC())
+	state.GetCachedField(DeveloperSnapshotsType).SetOrAdd("1234", &models.DeveloperSnapshot{DeveloperID: "1234"})
+	state.GetCachedField(GameIDsType).SetOrAdd(uuid.New(), uuid.New(), uuid.New())
+	state.GetCachedField(StateType).SetOrAdd("Phase", Disable)
+	// Save the ScoutState to disk
+	if err = state.Save(); err != nil {
+		fmt.Printf("Could not save ScoutState: %v\n", err)
+		return
+	}
+
+	// Now we drop the reference to the old ScoutState, and load the previously created ScoutState from the disk
+	state = nil
+	if state, err = StateLoadOrCreate(false); err != nil {
+		fmt.Printf("Could not create ScoutState: %v\n", err)
+		return
+	}
+	fmt.Println("userTweetTimes:", state.GetIterableCachedField(UserTweetTimesType).Len())
+	fmt.Println("developerSnapshots:", state.GetIterableCachedField(DeveloperSnapshotsType).Len())
+	fmt.Println("gameIDs:", state.GetIterableCachedField(GameIDsType).Len())
+	fmt.Println("phase:", state.GetCachedField(StateType).Get("Phase"))
+	// Output:
+	// userTweetTimes: 2
+	// developerSnapshots: 1
+	// gameIDs: 3
+	// phase: Disable
+}

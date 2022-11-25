@@ -134,8 +134,8 @@ func UpdateDeveloper(
 	var result myTwitter.BindingResult
 	if result, err = myTwitter.Client.ExecuteBinding(myTwitter.RecentSearch, &myTwitter.BindingOptions{Total: totalTweets}, query, opts); err != nil {
 		log.ERROR.Printf(
-			"Could not fetch %d tweets for developer %s (%s) after %s",
-			totalTweets, developer.Username, developer.ID, opts.StartTime.Format(time.RFC3339),
+			"Could not fetch %d tweets for developer %s (%s) after %s: %s",
+			totalTweets, developer.Username, developer.ID, opts.StartTime.Format(time.RFC3339), err.Error(),
 		)
 		return gameIDs, errors.Wrapf(
 			err, "could not fetch %d tweets for developer %s (%s) after %s",
@@ -517,12 +517,26 @@ func UpdatePhase(
 
 		// We start the consumer of the Update developer results in its own goroutine so we can
 		go func() {
+			var consumerErr error
 			for result := range results {
 				if result.error != nil && !myErrors.IsTemporary(result.error) {
-					consumerDone <- errors.Wrapf(result.error, "permanent error occurred whilst scraping unscraped developer %s", result.developer.Username)
+					finishedJobs <- result.developerNo
+					log.ERROR.Printf(
+						"Permanent error in result for %s (%s) contains an error: %s",
+						result.developer.Username, result.developer.ID, result.error.Error(),
+					)
+					consumerErr = myErrors.MergeErrors(consumerErr, errors.Wrapf(
+						result.error,
+						"permanent error occurred whilst scraping unscraped developer %s",
+						result.developer.Username,
+					))
 					return
 				} else if result.error != nil {
-					log.ERROR.Printf("UpdateDeveloper result for %s (%s) contains an error: %s", result.developer.Username, result.developer.ID, result.error.Error())
+					finishedJobs <- result.developerNo
+					log.ERROR.Printf(
+						"UpdateDeveloper result for %s (%s) contains an error: %s",
+						result.developer.Username, result.developer.ID, result.error.Error(),
+					)
 					continue
 				} else {
 					log.INFO.Printf("Got UpdateDeveloper result for %s (%s)", result.developer.Username, result.developer.ID)
@@ -570,7 +584,13 @@ func UpdatePhase(
 
 				finishedJobs <- result.developerNo
 			}
-			consumerDone <- nil
+
+			// Push the error into the done channel if there is one
+			if consumerErr != nil {
+				consumerDone <- consumerErr
+			} else {
+				consumerDone <- nil
+			}
 		}()
 
 		// First we wait for the producer to stop producing jobs. Once it has, we can also close the jobs queue.

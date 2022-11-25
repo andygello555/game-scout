@@ -81,7 +81,8 @@ type Enum interface {
 	Values() []string
 }
 
-// ComputedFieldsModel represents a model that has computed fields.
+// ComputedFieldsModel represents a model that has computed fields that should be updated each time an instance of that
+// model is created or updated. This does not cover fields that should only be computed solely on create or update.
 type ComputedFieldsModel interface {
 	// UpdateComputedFields updates the computed fields for the instance of the ComputedFieldsModel.
 	UpdateComputedFields(tx *gorm.DB) (err error)

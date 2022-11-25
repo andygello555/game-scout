@@ -22,6 +22,9 @@ SteamWebPipes
 config.json
 tweetCap.json
 
+# ScoutState files created to cache the progress of the Scout procedure
+.scout-*/**
+
 # .idea files created by Goland
 .idea/**
 **/.idea/**

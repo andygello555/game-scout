@@ -13,6 +13,7 @@ import (
 	"github.com/andygello555/game-scout/steamcmd"
 	task "github.com/andygello555/game-scout/tasks"
 	myTwitter "github.com/andygello555/game-scout/twitter"
+	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/google/uuid"
 	"github.com/urfave/cli"
@@ -21,6 +22,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -449,6 +451,45 @@ func main() {
 			},
 		},
 		{
+			Name: "discovery",
+			Flags: []cli.Flag{
+				cli.IntFlag{
+					Name:  "batchSize",
+					Usage: "the number of tweets that each batch will process",
+					Value: 100,
+				},
+				cli.IntFlag{
+					Name:  "discoveryTweets",
+					Usage: "the total number of tweets to process across all batches",
+					Value: 200,
+				},
+			},
+			Description: "run the discovery phase",
+			Action: func(c *cli.Context) (err error) {
+				userTweetTimes := make(map[string][]time.Time)
+				developerSnapshots := make(map[string][]*models.DeveloperSnapshot)
+				var gameIDs mapset.Set[uuid.UUID]
+				if gameIDs, err = DiscoveryPhase(c.Int("batchSize"), c.Int("discoveryTweets"), userTweetTimes, developerSnapshots); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+
+				fmt.Println("userTweetTimes:", userTweetTimes)
+				fmt.Println("developerSnapshots:", developerSnapshots)
+				fmt.Println("gameIDs:", gameIDs)
+				return
+			},
+		},
+		{
+			Name:        "disable",
+			Description: "run the disable phase",
+			Action: func(c *cli.Context) (err error) {
+				if err = DisablePhase(); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+				return
+			},
+		},
+		{
 			Name: "config",
 			Flags: []cli.Flag{
 				cli.BoolFlag{
@@ -477,8 +518,23 @@ func main() {
 					Required: true,
 				},
 				cli.BoolFlag{
+					Name:     "printBefore",
+					Usage:    "print the developer before any of the subcommands have been run",
+					Required: false,
+				},
+				cli.BoolFlag{
 					Name:     "games",
 					Usage:    "view the games for this developer",
+					Required: false,
+				},
+				cli.BoolFlag{
+					Name:     "update",
+					Usage:    "update the developer using the UpdateDeveloper procedure",
+					Required: false,
+				},
+				cli.BoolFlag{
+					Name:     "printAfter",
+					Usage:    "print the developer after all the subcommands have been run",
 					Required: false,
 				},
 			},
@@ -488,6 +544,11 @@ func main() {
 				if err = db.DB.Find(&developer, c.String("id")).Error; err != nil {
 					return cli.NewExitError(err.Error(), 1)
 				}
+
+				if c.Bool("printBefore") {
+					fmt.Println(developer)
+				}
+
 				if c.Bool("games") {
 					var games []*models.Game
 					if games, err = developer.Games(db.DB); err != nil {
@@ -503,6 +564,31 @@ func main() {
 							fmt.Printf("\t%d) %v\n", i+1, game)
 						}
 					}
+				}
+
+				if c.Bool("update") {
+					userTweetTimes := make(map[string][]time.Time)
+					developerSnapshots := make(map[string][]*models.DeveloperSnapshot)
+					var gameIDs mapset.Set[uuid.UUID]
+					gameScrapeQueue := make(chan *scrapeStorefrontsForGameJob, 12*maxGamesPerTweet)
+					gameScrapeGuard := make(chan struct{}, 1)
+					var gameScrapeWg sync.WaitGroup
+
+					gameScrapeWg.Add(1)
+					go scrapeStorefrontsForGameWorker(1, &gameScrapeWg, gameScrapeQueue, gameScrapeGuard)
+
+					if gameIDs, err = UpdateDeveloper(1, &developer, 12, gameScrapeQueue, userTweetTimes, developerSnapshots); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+					close(gameScrapeQueue)
+					gameScrapeWg.Wait()
+					fmt.Println("userTweetTimes:", userTweetTimes)
+					fmt.Println("developerSnapshots:", developerSnapshots)
+					fmt.Println("gameIDs:", gameIDs)
+				}
+
+				if c.Bool("printAfter") {
+					fmt.Println(developer)
 				}
 				return
 			},
