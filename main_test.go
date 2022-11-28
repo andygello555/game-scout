@@ -24,6 +24,26 @@ import (
 	"time"
 )
 
+func TestMain(m *testing.M) {
+	var keep = flag.Bool("keep", false, "keep test DB after tests")
+	flag.Parse()
+	dropTestDB := func() {
+		if err := db.DropDB(globalConfig.DB.TestDBName(), globalConfig.DB); err != nil {
+			panic(err)
+		}
+	}
+	if !*keep {
+		defer dropTestDB()
+	}
+	// First we have to delete the old test DB if it exists
+	dropTestDB()
+	if err := db.Open(globalConfig.DB); err != nil {
+		panic(err)
+	}
+	m.Run()
+	db.Close()
+}
+
 func ExampleScrapeURL_Match() {
 	fmt.Println(browser.SteamAppPage.Match("http://store.steampowered.com/app/477160"))
 	fmt.Println(browser.SteamAppPage.Match("http://store.steampowered.com/app/477160/Human_Fall_Flat/"))
@@ -76,31 +96,13 @@ func ExampleScrapeURL_JSON() {
 	// [num_reviews review_score review_score_desc total_negative total_positive total_reviews]
 }
 
-func TestMain(m *testing.M) {
-	var keep = flag.Bool("keep", false, "keep test DB after tests")
-	flag.Parse()
-	dropTestDB := func() {
-		if err := db.DropDB(globalConfig.DB.TestDBName(), globalConfig.DB); err != nil {
-			panic(err)
-		}
-	}
-	if !*keep {
-		defer dropTestDB()
-	}
-	// First we have to delete the old test DB if it exists
-	dropTestDB()
-	if err := db.Open(globalConfig.DB); err != nil {
-		panic(err)
-	}
-	m.Run()
-	db.Close()
-}
-
 func clearDB(t *testing.T) {
 	if err := db.DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.Developer{}).Error; err != nil {
 		t.Fatalf("Could not clearDB: %s", err.Error())
 	}
 }
+
+var keepState = flag.Bool("keepState", false, "whether to keep the ScoutState for TestDiscoveryBatch and TestUpdatePhase")
 
 func TestDiscoveryBatch(t *testing.T) {
 	clearDB(t)
@@ -118,8 +120,11 @@ func TestDiscoveryBatch(t *testing.T) {
 			t.Errorf("Cannot unmarshal %s into map[string]*twitter.TweetDictionary: %s", sampleTweetsPath, err.Error())
 		}
 
-		userTweetTimes := make(map[string][]time.Time)
-		developerSnapshots := make(map[string][]*models.DeveloperSnapshot)
+		// Create a brand new ScoutState
+		var state *ScoutState
+		if state, err = StateLoadOrCreate(true); err != nil {
+			t.Errorf("Error occurred when creating ScoutState: %s", err.Error())
+		}
 
 		gameScrapeQueue := make(chan *scrapeStorefrontsForGameJob, len(sampleTweets)*maxGamesPerTweet)
 		gameScrapeGuard := make(chan struct{}, 4)
@@ -131,11 +136,22 @@ func TestDiscoveryBatch(t *testing.T) {
 			go scrapeStorefrontsForGameWorker(i+1, &gameScrapeWg, gameScrapeQueue, gameScrapeGuard)
 		}
 
-		if _, err = DiscoveryBatch(1, sampleTweets, gameScrapeQueue, userTweetTimes, developerSnapshots); err != nil {
+		var subGameIDs mapset.Set[uuid.UUID]
+		if subGameIDs, err = DiscoveryBatch(1, sampleTweets, gameScrapeQueue, state); err != nil {
 			t.Errorf("Could not run DiscoveryBatch: %s", err.Error())
 		}
+		state.GetIterableCachedField(GameIDsType).Merge(&GameIDs{subGameIDs})
+
+		if err = state.Save(); err != nil {
+			t.Errorf("Error occurred when saving ScoutState: %s", err.Error())
+		}
+
+		// Cleanup
 		close(gameScrapeQueue)
 		gameScrapeWg.Wait()
+		if !(*keepState) {
+			state.Delete()
+		}
 	}
 
 	// Check if the database contains the right things
@@ -156,7 +172,7 @@ func TestDiscoveryBatch(t *testing.T) {
 	}
 }
 
-var developers = flag.Int("developers", 465, "the number of developers to ")
+var developers = flag.Int("developers", 465, "the number of developers to update in TestUpdatePhase")
 
 func TestUpdatePhase(t *testing.T) {
 	var (
@@ -251,16 +267,32 @@ func TestUpdatePhase(t *testing.T) {
 		t.Fatalf("Error occurred whilst making a test RecentSearch request: %s", err.Error())
 	}
 
+	// Create a brand new ScoutState
+	var state *ScoutState
+	if state, err = StateLoadOrCreate(true); err != nil {
+		t.Errorf("Error occurred when creating ScoutState: %s", err.Error())
+	}
+	state.GetCachedField(StateType).SetOrAdd("Phase", Update)
+	state.GetCachedField(StateType).SetOrAdd("BatchSize", batchSize)
+	state.GetCachedField(StateType).SetOrAdd("DiscoveryTweets", discoveryTweets)
+
 	// Then we run the UpdatePhase function
-	userTweetTimes := make(map[string][]time.Time)
-	developerSnapshots := make(map[string][]*models.DeveloperSnapshot)
 	var gameIDs mapset.Set[uuid.UUID]
-	if gameIDs, err = UpdatePhase(batchSize, discoveryTweets, []string{}, userTweetTimes, developerSnapshots); err != nil {
+	if gameIDs, err = UpdatePhase([]string{}, state); err != nil {
 		t.Errorf("Error occurred in update phase: %s", err.Error())
 	}
+	state.GetIterableCachedField(GameIDsType).Merge(&GameIDs{gameIDs})
 
-	if gameIDs.Cardinality() < developerNo {
+	if err = state.Save(); err != nil {
+		t.Errorf("Error occurred when saving ScoutState: %s", err.Error())
+	}
+
+	if state.GetIterableCachedField(GameIDsType).Len() < developerNo {
 		t.Errorf("There are only %d gameIDs, expected >=%d", gameIDs.Cardinality(), developerNo)
+	}
+
+	if !(*keepState) {
+		state.Delete()
 	}
 }
 
@@ -275,7 +307,7 @@ func TestDisablePhase(t *testing.T) {
 		maxDeveloperSnapshots = 10
 	)
 
-	expectedIDs := mapset.NewSet[int]()
+	expectedIDs := mapset.NewThreadUnsafeSet[int]()
 
 	// To test the "disable" phase, we need to create some fake developers and snapshots for said developers. The
 	// developers are created in a way that more "desirable" developers will be given a higher ID.
@@ -384,7 +416,7 @@ func TestDisablePhase(t *testing.T) {
 		t.Errorf("Could not get IDs of disabled developers: %s", err.Error())
 	}
 
-	seenIDs := mapset.NewSet[int]()
+	seenIDs := mapset.NewThreadUnsafeSet[int]()
 	for _, id := range developerIDs {
 		intID, _ := strconv.Atoi(id.ID)
 		seenIDs.Add(intID)
@@ -428,7 +460,9 @@ func ExampleStateLoadOrCreate() {
 	fmt.Println("userTweetTimes:", state.GetIterableCachedField(UserTweetTimesType).Len())
 	fmt.Println("developerSnapshots:", state.GetIterableCachedField(DeveloperSnapshotsType).Len())
 	fmt.Println("gameIDs:", state.GetIterableCachedField(GameIDsType).Len())
-	fmt.Println("phase:", state.GetCachedField(StateType).Get("Phase"))
+	phase, _ := state.GetCachedField(StateType).Get("Phase")
+	fmt.Println("phase:", phase)
+	state.Delete()
 	// Output:
 	// userTweetTimes: 2
 	// developerSnapshots: 1

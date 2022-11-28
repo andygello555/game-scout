@@ -196,7 +196,7 @@ func (sf Storefront) ScrapeGame(url string, game *Game, config ScrapeConfig) (st
 		const batchSize = 50
 		gidEvent := "0"
 		gidAnnouncement := "0"
-		gids := mapset.NewSet[string]()
+		gids := mapset.NewThreadUnsafeSet[string]()
 		tries := maxTries
 		type returnType int
 		const (
@@ -397,7 +397,7 @@ func (sf Storefront) ScrapeGame(url string, game *Game, config ScrapeConfig) (st
 			twitterUserURLPattern := regexp.MustCompile(`^https?://(?:www\.)?twitter\.com/(?:#!/)?@?([^/?#]*)(?:[?#].*)?$`)
 			if err = browser.SteamAppPage.RetrySoup(maxTries, minDelay, func(doc *soup.Root) (err error) {
 				links := doc.FindAll("a")
-				usernames := mapset.NewSet[string]()
+				usernames := mapset.NewThreadUnsafeSet[string]()
 				for _, link := range links {
 					attrs := link.Attrs()
 					if href, ok := attrs["href"]; ok {

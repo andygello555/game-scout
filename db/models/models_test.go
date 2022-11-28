@@ -81,7 +81,7 @@ func TestScrapeStorefrontsForGame(t *testing.T) {
 			expectedDeveloperVerified: true,
 			developer:                 &Developer{Username: "curvegames"},
 			storefrontMapping: map[Storefront]mapset.Set[string]{
-				SteamStorefront: mapset.NewSet[string](
+				SteamStorefront: mapset.NewThreadUnsafeSet[string](
 					"https://store.steampowered.com/app/477160",
 					"https://store.steampowered.com/app/477160/Human_Fall_Flat/",
 				),
@@ -89,7 +89,7 @@ func TestScrapeStorefrontsForGame(t *testing.T) {
 		},
 		{
 			storefrontMapping: map[Storefront]mapset.Set[string]{
-				SteamStorefront: mapset.NewSet[string](
+				SteamStorefront: mapset.NewThreadUnsafeSet[string](
 					"https://store.steampowered.com/app/0",
 				),
 			},

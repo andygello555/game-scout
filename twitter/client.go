@@ -144,14 +144,14 @@ func (w *ClientWrapper) GetTweetCap() (err error) {
 				Type:  browser.SelectAll,
 				Value: "div[role=button]",
 			},
-			// Find the buttons that contain the text: "Next", so that we can move onto the next part of the form
+			// Find the buttons that contain the text: "Continue", so that we can move onto the next part of the form
 			browser.Command{
 				Type: browser.FindInnerText,
 				FindFunc: func(element any) bool {
-					return strings.Contains(element.(string), "Next")
+					return strings.Contains(element.(string), "Continue")
 				},
 			},
-			// Click the Next button
+			// Click the Continue button
 			browser.Command{
 				Type: browser.Click,
 			},

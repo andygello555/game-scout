@@ -2,6 +2,7 @@ package twitter
 
 import (
 	"database/sql/driver"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	mapset "github.com/deckarep/golang-set/v2"
@@ -11,6 +12,10 @@ import (
 	"gorm.io/gorm/schema"
 	"strconv"
 )
+
+func init() {
+	gob.Register(mapset.NewThreadUnsafeSet[ContextAnnotation]())
+}
 
 // ContextAnnotationDomain represents a domain that is used by the context annotations returned by the Twitter API for
 // a tweet. This is defined so that we can weight each individual domain separately. For instance, VideoGame has a higher
@@ -321,7 +326,7 @@ func (cas *ContextAnnotationSet) Scan(value any) (err error) {
 		return errors.Wrapf(err, "could not unmarshal JSONB to ContextAnnotation \"%s\"", string(bytes))
 	}
 
-	set := mapset.NewSet[ContextAnnotation]()
+	set := mapset.NewThreadUnsafeSet[ContextAnnotation]()
 	for _, contextAnnotation := range contextAnnotations {
 		set.Add(contextAnnotation)
 	}
@@ -352,7 +357,7 @@ func (ContextAnnotationSet) GormDBDataType(db *gorm.DB, field *schema.Field) str
 // these will be converted to ContextAnnotation using ContextAnnotation.FromTweetContextAnnotationObj, then added to the
 // ContextAnnotationSet.
 func NewContextAnnotationSet(objs ...*twitter.TweetContextAnnotationObj) *ContextAnnotationSet {
-	set := mapset.NewSet[ContextAnnotation]()
+	set := mapset.NewThreadUnsafeSet[ContextAnnotation]()
 	for _, obj := range objs {
 		ca := ContextAnnotation{}
 		ca.FromTweetContextAnnotationObj(obj)
@@ -377,7 +382,7 @@ func (ca *ContextAnnotation) FromTweetContextAnnotationObj(obj *twitter.TweetCon
 
 // ToSet creates a mapset.Set for ContextAnnotation and pre-populates it with the referred to ContextAnnotation.
 func (ca *ContextAnnotation) ToSet() *ContextAnnotationSet {
-	set := mapset.NewSet[ContextAnnotation]()
+	set := mapset.NewThreadUnsafeSet[ContextAnnotation]()
 	set.Add(*ca)
 	return &ContextAnnotationSet{set}
 }

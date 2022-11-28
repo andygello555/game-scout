@@ -174,10 +174,10 @@ func worker() (err error) {
 			taskCountTable[signature.Name] += 1
 			taskTotalRuntimeTable[signature.Name] += duration
 			taskAverageRuntimeTable[signature.Name] = taskTotalRuntimeTable[signature.Name] / time.Duration(taskCountTable[signature.Name])
-			log.INFO.Printf("Finished %s: %s, in %s\n", signature.Name, constructCallSignature(signature), duration.String())
+			log.INFO.Printf("Continue %s: %s, in %s\n", signature.Name, constructCallSignature(signature), duration.String())
 			delete(taskStartTable, signature.UUID)
 		} else {
-			log.INFO.Printf("Finished %s: %s\n", signature.Name, constructCallSignature(signature))
+			log.INFO.Printf("Continue %s: %s\n", signature.Name, constructCallSignature(signature))
 		}
 
 		// We also display the average task runtimes as a sorted descending list

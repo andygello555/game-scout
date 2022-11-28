@@ -139,7 +139,7 @@ func TransformTweet(
 	developerSnap.UserPublicMetrics = developer.PublicMetrics
 	developerSnap.ContextAnnotationSet = myTwitter.NewContextAnnotationSet(tweet.Tweet.ContextAnnotations...)
 
-	// Next we find if there are any SteamURLAppPages that are linked in the tweet
+	// Continue we find if there are any SteamURLAppPages that are linked in the tweet
 	storefrontMap := make(map[models.Storefront]mapset.Set[string])
 	totalGames := 0
 out:
@@ -153,7 +153,7 @@ out:
 			// If the expanded URL is in the same format as the ScrapeURL
 			if check.url.Match(url.ExpandedURL) {
 				if _, ok := storefrontMap[check.storefront]; !ok {
-					storefrontMap[check.storefront] = mapset.NewSet[string]()
+					storefrontMap[check.storefront] = mapset.NewThreadUnsafeSet[string]()
 				}
 				if !storefrontMap[check.storefront].Contains(url.ExpandedURL) {
 					storefrontMap[check.storefront].Add(url.ExpandedURL)
@@ -239,8 +239,7 @@ func DiscoveryBatch(
 	batchNo int,
 	dictionary map[string]*twitter.TweetDictionary,
 	gameScrapeQueue chan *scrapeStorefrontsForGameJob,
-	userTweetTimes map[string][]time.Time,
-	developerSnapshots map[string][]*models.DeveloperSnapshot,
+	state *ScoutState,
 ) (gameIDs mapset.Set[uuid.UUID], err error) {
 	logPrefix := fmt.Sprintf("DiscoveryBatch %d: ", batchNo)
 	updateOrCreateModel := func(value any) (created bool) {
@@ -290,7 +289,7 @@ func DiscoveryBatch(
 	// Create the job and result channels for the transformTweetWorkers
 	jobs := make(chan *transformTweetJob, len(dictionary))
 	results := make(chan *transformTweetResult, len(dictionary))
-	gameIDs = mapset.NewSet[uuid.UUID]()
+	gameIDs = mapset.NewThreadUnsafeSet[uuid.UUID]()
 
 	// Start the transformTweetWorkers
 	for i := 0; i < transformTweetWorkers; i++ {
@@ -314,17 +313,16 @@ func DiscoveryBatch(
 		result := <-results
 		if result.err == nil {
 			log.INFO.Printf("%stransformed tweet no. %d successfully", logPrefix, result.tweetNo)
-			if _, ok := userTweetTimes[result.developer.ID]; !ok {
-				userTweetTimes[result.developer.ID] = make([]time.Time, 0)
-			}
-			userTweetTimes[result.developer.ID] = append(userTweetTimes[result.developer.ID], result.tweetCreatedAt)
+			state.GetIterableCachedField(UserTweetTimesType).SetOrAdd(result.developer.ID, result.tweetCreatedAt)
+
 			// At this point we only save the developer and the game. We still need to aggregate all the possible
 			// developerSnapshots
-			if _, ok := developerSnapshots[result.developer.ID]; !ok {
+			if _, ok := state.GetIterableCachedField(DeveloperSnapshotsType).Get(result.developer.ID); !ok {
 				// Create/update the developer if a developer snapshot for it hasn't been added yet
 				log.INFO.Printf("%sthis is the first time we have seen developer: %s (%s)", logPrefix, result.developer.Username, result.developer.ID)
 				updateOrCreateModel(result.developer)
 			}
+
 			// Create the game
 			if created := updateOrCreateModel(result.game); created {
 				gameIDs.Add(result.game.ID)
@@ -332,11 +330,9 @@ func DiscoveryBatch(
 			if err != nil {
 				return gameIDs, myErrors.TemporaryWrap(false, err, "could not insert either Developer or Game into DB")
 			}
+
 			// Add the developerSnap to the developerSnapshots
-			if _, ok := developerSnapshots[result.developer.ID]; !ok {
-				developerSnapshots[result.developer.ID] = make([]*models.DeveloperSnapshot, 0)
-			}
-			developerSnapshots[result.developer.ID] = append(developerSnapshots[result.developer.ID], result.developerSnap)
+			state.GetIterableCachedField(DeveloperSnapshotsType).SetOrAdd(result.developer.ID, result.developerSnap)
 			log.INFO.Printf("%sadded DeveloperSnapshot to mapping", logPrefix)
 		} else {
 			log.WARNING.Printf("%scouldn't transform tweet no. %d: %s. Skipping...", logPrefix, result.tweetNo, err.Error())
@@ -347,14 +343,15 @@ func DiscoveryBatch(
 
 // DiscoveryPhase executes batches of DiscoveryBatch sequentially and fills out the userTweetTimes, and
 // developerSnapshots maps with the data returned from each DiscoveryBatch.
-func DiscoveryPhase(
-	batchSize int,
-	discoveryTweets int,
-	userTweetTimes map[string][]time.Time,
-	developerSnapshots map[string][]*models.DeveloperSnapshot,
-) (gameIDs mapset.Set[uuid.UUID], err error) {
+func DiscoveryPhase(state *ScoutState) (gameIDs mapset.Set[uuid.UUID], err error) {
+	// Set the batchSize and discoveryTweets vars by reading from ScoutState
+	stateState := state.GetCachedField(StateType).(*State)
+	batchSize := stateState.BatchSize
+	discoveryTweets := stateState.DiscoveryTweets
+	batchNo := stateState.CurrentDiscoveryBatch
+
 	// Search the recent tweets on Twitter belonging to the hashtags given in config.json.
-	gameIDs = mapset.NewSet[uuid.UUID]()
+	gameIDs = mapset.NewThreadUnsafeSet[uuid.UUID]()
 	query := globalConfig.Twitter.TwitterQuery()
 	opts := twitter.TweetRecentSearchOpts{
 		Expansions: []twitter.Expansion{
@@ -385,6 +382,12 @@ func DiscoveryPhase(
 		SortOrder: twitter.TweetSearchSortOrderRecency,
 	}
 
+	// If we are continuing from a loaded state then we check if there is a token to continue the RecentSearch batches
+	// from
+	if state.Loaded && stateState.CurrentDiscoveryToken != "" {
+		opts.NextToken = stateState.CurrentDiscoveryToken
+	}
+
 	// Start the workers for scraping games.
 	// Note: in the discovery phase we can usually safely start a few more workers than in update as we are fetching
 	//       batches sequentially.
@@ -398,9 +401,8 @@ func DiscoveryPhase(
 		go scrapeStorefrontsForGameWorker(i+1, &gameScrapeWg, gameScrapeQueue, gameScrapeGuard)
 	}
 
-	batchNo := 1
 	log.INFO.Println("Starting Discovery phase")
-	for i := 0; i < discoveryTweets; i += batchSize {
+	for i := batchNo * batchSize; i < discoveryTweets; i += batchSize {
 		batchStart := time.Now().UTC()
 		offset := batchSize
 		if i+offset > discoveryTweets {
@@ -430,8 +432,7 @@ func DiscoveryPhase(
 			batchNo,
 			tweetRaw.TweetDictionaries(),
 			gameScrapeQueue,
-			userTweetTimes,
-			developerSnapshots,
+			state,
 		); err != nil && !myErrors.IsTemporary(err) {
 			log.FATAL.Printf("Error returned by DiscoveryBatch is not temporary: %s. We have to stop :(", err.Error())
 			err = errors.Wrapf(err, "could not execute DiscoveryBatch for batch no. %d", batchNo)
@@ -441,12 +442,24 @@ func DiscoveryPhase(
 
 		// Set up the next batch of requests by finding the NextToken of the current batch
 		opts.NextToken = result.Meta().NextToken()
+		log.INFO.Printf(
+			"Set NextToken for next batch (%d) to %s by getting the NextToken from the previous result",
+			batchNo, opts.NextToken,
+		)
 		batchNo++
-		log.INFO.Printf("Set NextToken for next batch (%d) to %s by getting the NextToken from the previous result", batchNo, opts.NextToken)
+
+		// Set the fields in the State which indicate the current batch info
+		state.GetCachedField(StateType).SetOrAdd("CurrentDiscoveryBatch", batchNo)
+		state.GetCachedField(StateType).SetOrAdd("CurrentDiscoveryToken", opts.NextToken)
+
+		// Save the ScoutState after each batch
+		if err = state.Save(); err != nil {
+			log.ERROR.Printf("Could not save ScoutState: %v", err)
+		}
 
 		// Nap time
 		log.INFO.Printf(
-			"Finished batch in %s. Sleeping for %s so we don't overdo it",
+			"Continue batch in %s. Sleeping for %s so we don't overdo it",
 			time.Now().UTC().Sub(batchStart).String(), secondsBetweenDiscoveryBatches.String(),
 		)
 		sleepBar(secondsBetweenDiscoveryBatches)

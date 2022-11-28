@@ -93,6 +93,7 @@ func (ftb *PathsToBytes) AddFilenameBytes(filename string, data []byte) {
 
 // Write will write all the paths in the lookup to the disk.
 func (ftb *PathsToBytes) Write() (err error) {
+	start := time.Now().UTC()
 	log.INFO.Printf("PathsToBytes is writing %d files to disk", len(ftb.inner))
 	for filename, data := range ftb.inner {
 		log.INFO.Printf("\tWriting %d bytes to file %s", len(data), filename)
@@ -109,6 +110,10 @@ func (ftb *PathsToBytes) Write() (err error) {
 			return
 		}
 	}
+	log.INFO.Printf(
+		"PathsToBytes has finished writing %d files to disk in %s",
+		len(ftb.inner), time.Now().UTC().Sub(start).String(),
+	)
 	return
 }
 
@@ -149,7 +154,9 @@ type CachedField interface {
 	// returned by the procedure in any way that is necessary.
 	Path(paths ...string) string
 	// Serialise will serialise the CachedField instance to bytes and add the resulting files to the PathsToBytes lookup.
-	// In this case PathsToBytes is write-only.
+	// In this case PathsToBytes is write-only. If the instance is going to be serialised to a directory structure then
+	// remember to add placeholder/metadata files in the root of each directory so that the directories are created by
+	// PathsToBytes and the structure can be deserialised.
 	Serialise(pathsToBytes *PathsToBytes) error
 	// Deserialise will deserialise the bytes pertaining to this CachedField by looking up the necessary files from the
 	// given PathsToBytes instance. In this case, PathsToBytes is read-only.
@@ -158,9 +165,9 @@ type CachedField interface {
 	// in any way the user deems appropriate. For instance, for a cached field that is a map[string]any, the arguments
 	// can be key-value pairs.
 	SetOrAdd(args ...any)
-	// Get will return the value at the given key/field. Like SetOrAdd this can be implemented in any way the user deems
-	// appropriate.
-	Get(key any) any
+	// Get will return the value at the given key/field. The second result value determines whether the key/field exists
+	// in the implemented instance. Like SetOrAdd this can be implemented in any way the user deems appropriate.
+	Get(key any) (any, bool)
 }
 
 // IterableCachedField represents a field in ScoutState that can be cached, but also can be iterated through using the
@@ -178,22 +185,35 @@ type IterableCachedField interface {
 
 // CachedFieldIterator is the iterator pattern that is returned by the IterableCachedField.Iter method.
 type CachedFieldIterator struct {
+	i           int
 	cachedField IterableCachedField
 	queue       []any
 }
 
-// Next checks whether the CachedFieldIterator has finished. I.e. there are no more elements to iterate over.
-func (cfi *CachedFieldIterator) Next() bool {
-	if len(cfi.queue) == 0 {
-		return false
-	}
-	cfi.queue = cfi.queue[1:]
-	return true
+// Continue checks whether the CachedFieldIterator has not finished. I.e. there are still more elements to iterate over.
+func (cfi *CachedFieldIterator) Continue() bool {
+	return len(cfi.queue) != 0
+}
+
+// I will return the current i value.
+func (cfi *CachedFieldIterator) I() int {
+	return cfi.i
+}
+
+// Key will return the current key of the element that is being iterated over.
+func (cfi *CachedFieldIterator) Key() any {
+	return cfi.queue[0]
 }
 
 // Get will return the current element that is being iterated over.
-func (cfi *CachedFieldIterator) Get() any {
-	return cfi.cachedField.Get(cfi.queue[0])
+func (cfi *CachedFieldIterator) Get() (any, bool) {
+	return cfi.cachedField.Get(cfi.Key())
+}
+
+// Next will dequeue the current element. This should be called at the end of each loop.
+func (cfi *CachedFieldIterator) Next() {
+	cfi.i++
+	cfi.queue = cfi.queue[1:]
 }
 
 // UserTweetTimes is used in the Scout procedure to store the times of the tweets for a Twitter user. The keys are
@@ -204,19 +224,19 @@ func (utt *UserTweetTimes) BaseDir() string { return "" }
 
 func (utt *UserTweetTimes) Path(paths ...string) string { return "userTweetTimes.json" }
 
-func (utt *UserTweetTimes) Serialise(filenamesToBytes *PathsToBytes) (err error) {
+func (utt *UserTweetTimes) Serialise(pathsToBytes *PathsToBytes) (err error) {
 	var data []byte
 	if data, err = json.Marshal(&utt); err != nil {
 		err = errors.Wrap(err, "cannot serialise UserTweetTimes")
 		return
 	}
-	filenamesToBytes.AddFilenameBytes(utt.Path(), data)
+	pathsToBytes.AddFilenameBytes(utt.Path(), data)
 	return
 }
 
-func (utt *UserTweetTimes) Deserialise(filenamesToBytes *PathsToBytes) (err error) {
+func (utt *UserTweetTimes) Deserialise(pathsToBytes *PathsToBytes) (err error) {
 	var data []byte
-	if data, err = filenamesToBytes.BytesForFilename(utt.Path()); err != nil {
+	if data, err = pathsToBytes.BytesForFilename(utt.Path()); err != nil {
 		err = errors.Wrap(err, "UserTweetTimes does not exist in cache")
 		return
 	}
@@ -253,8 +273,8 @@ func (utt *UserTweetTimes) Iter() *CachedFieldIterator {
 	return iter
 }
 
-func (utt *UserTweetTimes) Get(key any) any {
-	return (*utt)[key.(string)]
+func (utt *UserTweetTimes) Get(key any) (any, bool) {
+	return (*utt)[key.(string)], false
 }
 
 func (utt *UserTweetTimes) Merge(field CachedField) {
@@ -272,8 +292,8 @@ func (utt *UserTweetTimes) Merge(field CachedField) {
 // gathered for a specific Twitter user. Each of these lists of partial snapshots are then aggregated into a combined
 // models.DeveloperSnapshot for each models.Developer.
 //
-// DeveloperSnapshots is serialised to a directory containing gob encoded files for each Twitter user containing the list
-// of partial snapshots.
+// DeveloperSnapshots is serialised to a directory containing a meta.json file and gob encoded files for each Twitter user
+// containing the list of partial snapshots.
 //
 // The keys here are the IDs of the Twitter user that the snapshots apply to.
 type DeveloperSnapshots map[string][]*models.DeveloperSnapshot
@@ -284,7 +304,16 @@ func (ds *DeveloperSnapshots) Path(paths ...string) string {
 	return filepath.Join(ds.BaseDir(), strings.Join(paths, "_")+binExtension)
 }
 
-func (ds *DeveloperSnapshots) Serialise(filenamesToBytes *PathsToBytes) (err error) {
+func (ds *DeveloperSnapshots) Serialise(pathsToBytes *PathsToBytes) (err error) {
+	// We create an info file so that BaseDir is always created
+	pathsToBytes.AddFilenameBytes(
+		filepath.Join(ds.BaseDir(), "meta.json"),
+		[]byte(fmt.Sprintf(
+			"{\"count\": %d, \"ids\": [%s]}",
+			ds.Len(),
+			strings.Join(strings.Split(strings.Trim(fmt.Sprintf("%v", ds.Iter().queue), "[]"), " "), ", "),
+		)),
+	)
 	for developerID, snapshots := range *ds {
 		var data bytes.Buffer
 		enc := gob.NewEncoder(&data)
@@ -292,26 +321,29 @@ func (ds *DeveloperSnapshots) Serialise(filenamesToBytes *PathsToBytes) (err err
 			err = errors.Wrapf(err, "could not encode %d snapshots for developer \"%s\"", len(snapshots), developerID)
 			return
 		}
-		filenamesToBytes.AddFilenameBytes(ds.Path(developerID), data.Bytes())
+		pathsToBytes.AddFilenameBytes(ds.Path(developerID), data.Bytes())
 	}
 	return
 }
 
-func (ds *DeveloperSnapshots) Deserialise(filenamesToBytes *PathsToBytes) (err error) {
-	dsFtb := filenamesToBytes.BytesForDirectory(ds.BaseDir())
+func (ds *DeveloperSnapshots) Deserialise(pathsToBytes *PathsToBytes) (err error) {
+	dsFtb := pathsToBytes.BytesForDirectory(ds.BaseDir())
 	for filename, data := range dsFtb.inner {
-		developerID := strings.TrimSuffix(filename, binExtension)
-		dec := gob.NewDecoder(bytes.NewReader(data))
-		var snapshots []*models.DeveloperSnapshot
-		if err = dec.Decode(&snapshots); err != nil {
-			err = errors.Wrapf(err, "cannot deserialise snapshots for developer \"%s\"", developerID)
-		}
+		if filepath.Base(filename) != "meta.json" {
+			// Trim the PathToBytes BaseDir, the DeveloperSnapshots BaseDir, and the file extension
+			developerID := strings.TrimSuffix(filepath.Base(filename), binExtension)
+			dec := gob.NewDecoder(bytes.NewReader(data))
+			var snapshots []*models.DeveloperSnapshot
+			if err = dec.Decode(&snapshots); err != nil {
+				err = errors.Wrapf(err, "cannot deserialise snapshots for developer \"%s\"", developerID)
+			}
 
-		if _, ok := (*ds)[developerID]; !ok {
-			(*ds)[developerID] = make([]*models.DeveloperSnapshot, len(snapshots))
-			copy((*ds)[developerID], snapshots)
-		} else {
-			(*ds)[developerID] = append((*ds)[developerID], snapshots...)
+			if _, ok := (*ds)[developerID]; !ok {
+				(*ds)[developerID] = make([]*models.DeveloperSnapshot, len(snapshots))
+				copy((*ds)[developerID], snapshots)
+			} else {
+				(*ds)[developerID] = append((*ds)[developerID], snapshots...)
+			}
 		}
 	}
 	return
@@ -345,8 +377,8 @@ func (ds *DeveloperSnapshots) Iter() *CachedFieldIterator {
 	return iter
 }
 
-func (ds *DeveloperSnapshots) Get(key any) any {
-	return (*ds)[key.(string)]
+func (ds *DeveloperSnapshots) Get(key any) (any, bool) {
+	return (*ds)[key.(string)], false
 }
 
 func (ds *DeveloperSnapshots) Merge(field CachedField) {
@@ -370,19 +402,19 @@ func (ids *GameIDs) BaseDir() string { return "" }
 
 func (ids *GameIDs) Path(paths ...string) string { return "gameIDs.json" }
 
-func (ids *GameIDs) Serialise(filenamesToBytes *PathsToBytes) (err error) {
+func (ids *GameIDs) Serialise(pathsToBytes *PathsToBytes) (err error) {
 	var data []byte
 	if data, err = json.Marshal(&ids); err != nil {
 		err = errors.Wrap(err, "cannot serialise GameIDs")
 		return
 	}
-	filenamesToBytes.AddFilenameBytes(ids.Path(), data)
+	pathsToBytes.AddFilenameBytes(ids.Path(), data)
 	return
 }
 
-func (ids *GameIDs) Deserialise(filenamesToBytes *PathsToBytes) (err error) {
+func (ids *GameIDs) Deserialise(pathsToBytes *PathsToBytes) (err error) {
 	var data []byte
-	if data, err = filenamesToBytes.BytesForFilename(ids.Path()); err != nil {
+	if data, err = pathsToBytes.BytesForFilename(ids.Path()); err != nil {
 		err = errors.Wrap(err, "GameIDs does not exist in cache")
 		return
 	}
@@ -392,7 +424,7 @@ func (ids *GameIDs) Deserialise(filenamesToBytes *PathsToBytes) (err error) {
 		err = errors.Wrap(err, "could not deserialise GameIDs")
 		return
 	}
-	ids.Set = mapset.NewSet[uuid.UUID](uuids...)
+	ids.Set = mapset.NewThreadUnsafeSet[uuid.UUID](uuids...)
 	return
 }
 
@@ -421,12 +453,12 @@ func (ids *GameIDs) Iter() *CachedFieldIterator {
 	return cfi
 }
 
-func (ids *GameIDs) Get(key any) any {
-	return key
+func (ids *GameIDs) Get(key any) (any, bool) {
+	return key, ids.Contains(key.(uuid.UUID))
 }
 
 func (ids *GameIDs) Merge(field CachedField) {
-	ids.Union(field.(*GameIDs).Set)
+	ids.Set = ids.Union(field.(*GameIDs).Set)
 }
 
 // Phase represents a phase in the Scout procedure.
@@ -458,6 +490,15 @@ func (p Phase) String() string {
 	}
 }
 
+// Next returns the Phase after this one. If the referred to Phase is the last phase then the last Phase will be
+// returned.
+func (p Phase) Next() Phase {
+	if p == Measure {
+		return p
+	}
+	return p + 1
+}
+
 // State is some additional information given to the Scout procedure that should also be cached. It is serialised
 // straight to JSON.
 type State struct {
@@ -468,25 +509,41 @@ type State struct {
 	BatchSize int
 	// DiscoveryTweets is the total number of tweets that the DiscoveryPhase will fetch in batches of BatchSize.
 	DiscoveryTweets int
+	// CurrentDiscoveryBatch is the current batch that the DiscoveryPhase is on. Of course, this won't apply to any
+	// other Phase other than the Discovery phase.
+	CurrentDiscoveryBatch int
+	// CurrentDiscoveryToken is the token for the Twitter RecentSearch API that the DiscoveryPhase is on. Of course,
+	// this won't apply to any other Phase other than the Discovery phase.
+	CurrentDiscoveryToken string
+	// UpdatedDevelopers are the developer IDs that have been updated in a previous UpdatePhase. Of course, this won't
+	// apply to any other Phase other than the Discovery phase.
+	UpdatedDevelopers []string
+	// PhaseStart is the time that the most recent Phase was started.
+	PhaseStart time.Time
+	// Start time of the Scout procedure.
+	Start time.Time
+	// Finished is when the Scout procedure finished. This should technically never be set for long as the ScoutState
+	// should be deleted straight after the Scout procedure has completed.
+	Finished time.Time
 }
 
 func (s *State) BaseDir() string { return "" }
 
 func (s *State) Path(paths ...string) string { return "state.json" }
 
-func (s *State) Serialise(filenamesToBytes *PathsToBytes) (err error) {
+func (s *State) Serialise(pathsToBytes *PathsToBytes) (err error) {
 	var data []byte
 	if data, err = json.Marshal(s); err != nil {
 		err = errors.Wrap(err, "cannot serialise State")
 		return
 	}
-	filenamesToBytes.AddFilenameBytes(s.Path(), data)
+	pathsToBytes.AddFilenameBytes(s.Path(), data)
 	return
 }
 
-func (s *State) Deserialise(filenamesToBytes *PathsToBytes) (err error) {
+func (s *State) Deserialise(pathsToBytes *PathsToBytes) (err error) {
 	var data []byte
-	if data, err = filenamesToBytes.BytesForFilename(s.Path()); err != nil {
+	if data, err = pathsToBytes.BytesForFilename(s.Path()); err != nil {
 		err = errors.Wrap(err, "State does not exist in cache")
 		return
 	}
@@ -506,21 +563,46 @@ func (s *State) SetOrAdd(args ...any) {
 		s.BatchSize = args[1].(int)
 	case "DiscoveryTweets":
 		s.DiscoveryTweets = args[1].(int)
+	case "CurrentDiscoveryBatch":
+		s.CurrentDiscoveryBatch = args[1].(int)
+	case "CurrentDiscoveryToken":
+		s.CurrentDiscoveryToken = args[1].(string)
+	case "UpdatedDevelopers":
+		// We will append to UpdatedDevelopers rather than set it
+		s.UpdatedDevelopers = append(s.UpdatedDevelopers, args[1].(string))
+	case "PhaseStart":
+		s.PhaseStart = args[1].(time.Time)
+	case "Start":
+		s.Start = args[1].(time.Time)
+	case "Continue":
+		s.Finished = args[1].(time.Time)
 	default:
 		panic(fmt.Errorf("cannot set %s field of State to %v", key, args[1]))
 	}
 }
 
-func (s *State) Get(key any) any {
+func (s *State) Get(key any) (any, bool) {
 	switch key {
 	case "Phase":
-		return s.Phase
+		return s.Phase, true
 	case "BatchSize":
-		return s.BatchSize
+		return s.BatchSize, true
 	case "DiscoveryTweets":
-		return s.DiscoveryTweets
+		return s.DiscoveryTweets, true
+	case "CurrentDiscoveryBatch":
+		return s.CurrentDiscoveryBatch, true
+	case "CurrentDiscoveryToken":
+		return s.CurrentDiscoveryToken, true
+	case "UpdatedDevelopers":
+		return s.UpdatedDevelopers, true
+	case "PhaseStart":
+		return s.PhaseStart, true
+	case "Start":
+		return s.Start, true
+	case "Continue":
+		return s.Finished, true
 	default:
-		panic(fmt.Errorf("cannot get %s field of State", key))
+		return nil, false
 	}
 }
 
@@ -544,9 +626,9 @@ func (cft CachedFieldType) Make() CachedField {
 		ds := make(DeveloperSnapshots)
 		return &ds
 	case GameIDsType:
-		return &GameIDs{mapset.NewSet[uuid.UUID]()}
+		return &GameIDs{mapset.NewThreadUnsafeSet[uuid.UUID]()}
 	case StateType:
-		return &State{}
+		return &State{UpdatedDevelopers: make([]string, 0)}
 	default:
 		return nil
 	}
@@ -585,7 +667,12 @@ func (cft CachedFieldType) Types() []CachedFieldType {
 type ScoutState struct {
 	createdTime  time.Time
 	cachedFields map[CachedFieldType]CachedField
-	mutex        sync.Mutex
+	// Whether ScoutState was loaded from a previously cached ScoutState.
+	Loaded bool
+	// Whether the ScoutState only exists in memory. Useful for a temporary ScoutState that will be merged back into a
+	// main ScoutState.
+	InMemory bool
+	mutex    sync.Mutex
 }
 
 func newState(forceCreate bool, createdTime time.Time) *ScoutState {
@@ -605,11 +692,17 @@ func newState(forceCreate bool, createdTime time.Time) *ScoutState {
 	}
 
 	// Then we allocate memory for all the fields that will be cached
+	state.makeCachedFields()
+	return state
+}
+
+// makeCachedFields will call CachedFieldType.Make on all CachedFieldType and store the made CachedField in
+// ScoutState.cachedFields.
+func (state *ScoutState) makeCachedFields() {
 	for _, cachedFieldType := range UserTweetTimesType.Types() {
 		log.INFO.Printf("Creating cached field %s for %s", cachedFieldType.String(), state.BaseDir())
 		state.cachedFields[cachedFieldType] = cachedFieldType.Make()
 	}
-	return state
 }
 
 // BaseDir returns the directory that this ScoutState will Save to.
@@ -636,61 +729,115 @@ func (state *ScoutState) GetIterableCachedFields() map[CachedFieldType]IterableC
 
 // GetIterableCachedField will return the IterableCachedField of the given CachedFieldType.
 func (state *ScoutState) GetIterableCachedField(fieldType CachedFieldType) IterableCachedField {
-	return state.GetIterableCachedFields()[fieldType]
+	return state.GetCachedField(fieldType).(IterableCachedField)
 }
 
-// Load will deserialise the relevant files in BaseDir into the CachedField within the ScoutState.
+// MergeIterableCachedFields will merge each IterableCachedField in the given ScoutState into the referred to ScoutState
+// using the IterableCachedField.Merge method.
+func (state *ScoutState) MergeIterableCachedFields(stateToMerge *ScoutState) {
+	// First we merge each iterable cached field
+	iterableCachedFields := stateToMerge.GetIterableCachedFields()
+	for cachedFieldType, iterableCachedField := range iterableCachedFields {
+		log.INFO.Printf("Merging %d %s into the ScoutState", iterableCachedField.Len(), cachedFieldType.String())
+		state.GetIterableCachedField(cachedFieldType).Merge(iterableCachedField)
+	}
+}
+
+// Load will deserialise the relevant files in BaseDir into the CachedField within the ScoutState. If the InMemory flag is
+// set then this will do nothing.
 func (state *ScoutState) Load() (err error) {
-	log.INFO.Printf("Loading ScoutState from %s", state.BaseDir())
-	filenamesToBytes := NewPathsToBytes(state.BaseDir())
-	if err = filenamesToBytes.LoadBaseDir(); err != nil {
-		err = errors.Wrapf(err, "could not load ScoutState (%s) from disk", state.BaseDir())
-	}
+	if !state.InMemory {
+		log.INFO.Printf("Loading ScoutState from %s", state.BaseDir())
+		filenamesToBytes := NewPathsToBytes(state.BaseDir())
+		if err = filenamesToBytes.LoadBaseDir(); err != nil {
+			err = errors.Wrapf(err, "could not load ScoutState (%s) from disk", state.BaseDir())
+		}
 
-	for cachedFieldType, cacheField := range state.cachedFields {
-		if err = cacheField.Deserialise(filenamesToBytes); err != nil {
-			err = errors.Wrapf(err, "could not deserialise cached field %s", cachedFieldType.String())
+		for cachedFieldType, cacheField := range state.cachedFields {
+			if err = cacheField.Deserialise(filenamesToBytes); err != nil {
+				err = errors.Wrapf(err, "could not deserialise cached field %s", cachedFieldType.String())
+			}
 		}
 	}
 	return
 }
 
-// Save will serialise all the CachedField to BaseDir, caching them persistently for later use.
+// Save will serialise all the CachedField to BaseDir, caching them persistently for later use. If the InMemory flag is
+// set then this will do nothing.
 func (state *ScoutState) Save() (err error) {
-	// We remove the previous save from the disk
-	if err = os.RemoveAll(state.BaseDir()); err != nil {
-		err = errors.Wrapf(err, "could not remove \"%s\" before saving", state.BaseDir())
-		return
-	}
-
-	filenamesToBytes := NewPathsToBytes(state.BaseDir())
-	for cachedFieldType, cacheField := range state.cachedFields {
-		switch cacheField.(type) {
-		case IterableCachedField:
-			log.INFO.Printf("Serialising iterable field %s which contains %d", cachedFieldType.String(), cacheField.(IterableCachedField).Len())
-		default:
-			log.INFO.Printf("Serialising non-iterable field %s which contains", cachedFieldType.String())
+	if !state.InMemory {
+		// We remove the previous save from the disk
+		if err = os.RemoveAll(state.BaseDir()); err != nil {
+			err = errors.Wrapf(err, "could not remove \"%s\" before saving", state.BaseDir())
+			return
 		}
-		if err = cacheField.Serialise(filenamesToBytes); err != nil {
-			err = errors.Wrapf(err, "could not serialise cached field %s", cachedFieldType.String())
-		}
-	}
 
-	// Finally, we write the PathsToBytes to disk
-	if err = filenamesToBytes.Write(); err != nil {
-		err = errors.Wrap(err, "could not write serialised ScoutState to disk")
+		filenamesToBytes := NewPathsToBytes(state.BaseDir())
+		for cachedFieldType, cacheField := range state.cachedFields {
+			switch cacheField.(type) {
+			case IterableCachedField:
+				log.INFO.Printf("Serialising iterable field %s which contains %d", cachedFieldType.String(), cacheField.(IterableCachedField).Len())
+			default:
+				log.INFO.Printf("Serialising non-iterable field %s which contains", cachedFieldType.String())
+			}
+			if err = cacheField.Serialise(filenamesToBytes); err != nil {
+				err = errors.Wrapf(err, "could not serialise cached field %s", cachedFieldType.String())
+				return
+			}
+		}
+
+		// Finally, we write the PathsToBytes to disk
+		if err = filenamesToBytes.Write(); err != nil {
+			err = errors.Wrap(err, "could not write serialised ScoutState to disk")
+		}
 	}
 	return
 }
 
-// Delete will delete the cache by deleting the BaseDir (if it exists).
+// Delete will delete the cache by deleting the BaseDir (if it exists). If the InMemory flag is set then this will do
+// nothing.
 func (state *ScoutState) Delete() {
-	log.INFO.Printf("Deleting ScoutState cache %s", state.BaseDir())
-	if _, err := os.Stat(state.BaseDir()); !os.IsNotExist(err) {
-		_ = os.RemoveAll(state.BaseDir())
-	} else {
-		log.INFO.Printf("ScoutState cache %s does not exist", state.BaseDir())
+	if !state.InMemory {
+		log.INFO.Printf("Deleting ScoutState cache %s", state.BaseDir())
+		if _, err := os.Stat(state.BaseDir()); !os.IsNotExist(err) {
+			_ = os.RemoveAll(state.BaseDir())
+		} else {
+			log.INFO.Printf("ScoutState cache %s does not exist", state.BaseDir())
+		}
 	}
+}
+
+// String returns the top-line information for the ScoutState.
+func (state *ScoutState) String() string {
+	start, _ := state.GetCachedField(StateType).Get("Start")
+	finished, _ := state.GetCachedField(StateType).Get("Continue")
+	phase, _ := state.GetCachedField(StateType).Get("Phase")
+	phaseStart, _ := state.GetCachedField(StateType).Get("PhaseStart")
+	batchSize, _ := state.GetCachedField(StateType).Get("BatchSize")
+	discoveryTweets, _ := state.GetCachedField(StateType).Get("DiscoveryTweets")
+	return fmt.Sprintf(`Directory: %s
+Date: %s
+Start: %s
+Continue: %s
+Phase: %v
+Phase start: %s
+Batch size: %d
+Discovery tweets: %d
+User tweet times: %d
+Developer snapshots: %d
+Game IDs: %d`,
+		state.BaseDir(),
+		state.createdTime.String(),
+		start.(time.Time).String(),
+		finished.(time.Time).String(),
+		phase,
+		phaseStart.(time.Time).String(),
+		batchSize,
+		discoveryTweets,
+		state.GetIterableCachedField(UserTweetTimesType).Len(),
+		state.GetIterableCachedField(DeveloperSnapshotsType).Len(),
+		state.GetIterableCachedField(GameIDsType).Len(),
+	)
 }
 
 // StateLoadOrCreate will either create a new ScoutState for today, or load the latest ScoutState within the current
@@ -720,13 +867,24 @@ func StateLoadOrCreate(forceCreate bool) (state *ScoutState, err error) {
 			}
 		}
 	}
+	// Zero out the error so that we don't return it
+	err = nil
 
 	// We default to always creating a cache. If the newest cache time IsZero then the current date will be taken
 	// anyway.
 	state = newState(forceCreate, newestCacheTime)
 	if !newestCacheTime.IsZero() {
 		// If we did find an old cache then we will load it
+		state.Loaded = true
 		err = state.Load()
 	}
 	return
+}
+
+// StateInMemory will create a ScoutState that only exists in memory. Only the CachedField will be created and the
+// ScoutState.InMemory flag set.
+func StateInMemory() *ScoutState {
+	state := &ScoutState{InMemory: true, cachedFields: make(map[CachedFieldType]CachedField)}
+	state.makeCachedFields()
+	return state
 }

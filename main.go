@@ -263,7 +263,7 @@ func main() {
 					Required: false,
 				},
 			},
-			Description: "test insertion into DB",
+			Usage: "test insertion into DB",
 			Action: func(c *cli.Context) (err error) {
 				opts := twitter.TweetRecentSearchOpts{
 					Expansions: []twitter.Expansion{
@@ -399,7 +399,7 @@ func main() {
 					Required: true,
 				},
 			},
-			Description: "scrape the Steam game with the given appid",
+			Usage: "scrape the Steam game with the given appid",
 			Action: func(c *cli.Context) (err error) {
 				game := &models.Game{}
 				game.Website = null.StringFrom(models.SteamStorefront.ScrapeGame(
@@ -425,7 +425,7 @@ func main() {
 					Value: 100,
 				},
 			},
-			Description: "run the Scout function for the given number of tweets",
+			Usage: "run the Scout function for the given number of tweets",
 			Action: func(c *cli.Context) (err error) {
 				if err = Scout(c.Int("batchSize"), c.Int("tweets")); err != nil {
 					return cli.NewExitError(err.Error(), 1)
@@ -442,7 +442,7 @@ func main() {
 					Value: &cli.StringSlice{},
 				},
 			},
-			Description: "run UpdateComputedFieldsForModels for the given models names",
+			Usage: "run UpdateComputedFieldsForModels for the given models names",
 			Action: func(c *cli.Context) (err error) {
 				if err = db.UpdateComputedFieldsForModels(c.StringSlice("models")...); err != nil {
 					return cli.NewExitError(err.Error(), 1)
@@ -463,25 +463,43 @@ func main() {
 					Usage: "the total number of tweets to process across all batches",
 					Value: 200,
 				},
+				cli.BoolFlag{
+					Name:  "stateForceCreate",
+					Usage: "whether to forceCreate the ScoutState",
+				},
 			},
-			Description: "run the discovery phase",
+			Usage: "run the discovery phase",
 			Action: func(c *cli.Context) (err error) {
-				userTweetTimes := make(map[string][]time.Time)
-				developerSnapshots := make(map[string][]*models.DeveloperSnapshot)
-				var gameIDs mapset.Set[uuid.UUID]
-				if gameIDs, err = DiscoveryPhase(c.Int("batchSize"), c.Int("discoveryTweets"), userTweetTimes, developerSnapshots); err != nil {
+				var state *ScoutState
+				if state, err = StateLoadOrCreate(c.Bool("stateForceCreate")); err != nil {
 					return cli.NewExitError(err.Error(), 1)
 				}
 
-				fmt.Println("userTweetTimes:", userTweetTimes)
-				fmt.Println("developerSnapshots:", developerSnapshots)
+				if state.Loaded {
+					log.WARNING.Printf("Previous ScoutState \"%s\" was loaded from disk:")
+					log.WARNING.Println(state.String())
+				} else {
+					// If no state has been loaded, then we'll assume that the previous run of Scout was successful and set up
+					// ScoutState as usual
+					state.GetCachedField(StateType).SetOrAdd("Phase", Discovery)
+					state.GetCachedField(StateType).SetOrAdd("BatchSize", c.Int("batchSize"))
+					state.GetCachedField(StateType).SetOrAdd("DiscoveryTweets", c.Int("discoveryTweets"))
+				}
+
+				var gameIDs mapset.Set[uuid.UUID]
+				if gameIDs, err = DiscoveryPhase(state); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+
+				fmt.Println("userTweetTimes:", state.GetIterableCachedField(UserTweetTimesType))
+				fmt.Println("developerSnapshots:", state.GetIterableCachedField(DeveloperSnapshotsType))
 				fmt.Println("gameIDs:", gameIDs)
 				return
 			},
 		},
 		{
-			Name:        "disable",
-			Description: "run the disable phase",
+			Name:  "disable",
+			Usage: "run the disable phase",
 			Action: func(c *cli.Context) (err error) {
 				if err = DisablePhase(); err != nil {
 					return cli.NewExitError(err.Error(), 1)
@@ -497,7 +515,7 @@ func main() {
 					Usage: "view the entire config",
 				},
 			},
-			Description: "subcommand for viewing/manipulating the currently loaded config.json",
+			Usage: "subcommand for viewing/manipulating the currently loaded config.json",
 			Action: func(c *cli.Context) (err error) {
 				if c.Bool("view") {
 					var jsonData []byte
@@ -506,6 +524,24 @@ func main() {
 					}
 					fmt.Println(string(jsonData))
 				}
+				return
+			},
+		},
+		{
+			Name: "state",
+			Flags: []cli.Flag{
+				cli.BoolFlag{
+					Name:  "forceCreate",
+					Usage: "whether to forceCreate the ScoutState",
+				},
+			},
+			Usage: "view the most recent ScoutState or create a new ScoutState",
+			Action: func(c *cli.Context) (err error) {
+				var state *ScoutState
+				if state, err = StateLoadOrCreate(c.Bool("forceCreate")); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+				fmt.Println(state.String())
 				return
 			},
 		},
@@ -537,8 +573,12 @@ func main() {
 					Usage:    "print the developer after all the subcommands have been run",
 					Required: false,
 				},
+				cli.BoolFlag{
+					Name:  "stateForceCreate",
+					Usage: "whether to forceCreate the ScoutState",
+				},
 			},
-			Description: "subcommand for viewing resources related to a developer in the DB",
+			Usage: "subcommand for viewing resources related to a developer in the DB",
 			Action: func(c *cli.Context) (err error) {
 				var developer models.Developer
 				if err = db.DB.Find(&developer, c.String("id")).Error; err != nil {
@@ -567,9 +607,11 @@ func main() {
 				}
 
 				if c.Bool("update") {
-					userTweetTimes := make(map[string][]time.Time)
-					developerSnapshots := make(map[string][]*models.DeveloperSnapshot)
-					var gameIDs mapset.Set[uuid.UUID]
+					var state *ScoutState
+					if state, err = StateLoadOrCreate(c.Bool("stateForceCreate")); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+
 					gameScrapeQueue := make(chan *scrapeStorefrontsForGameJob, 12*maxGamesPerTweet)
 					gameScrapeGuard := make(chan struct{}, 1)
 					var gameScrapeWg sync.WaitGroup
@@ -577,13 +619,14 @@ func main() {
 					gameScrapeWg.Add(1)
 					go scrapeStorefrontsForGameWorker(1, &gameScrapeWg, gameScrapeQueue, gameScrapeGuard)
 
-					if gameIDs, err = UpdateDeveloper(1, &developer, 12, gameScrapeQueue, userTweetTimes, developerSnapshots); err != nil {
+					var gameIDs mapset.Set[uuid.UUID]
+					if gameIDs, err = UpdateDeveloper(1, &developer, 12, gameScrapeQueue, state); err != nil {
 						return cli.NewExitError(err.Error(), 1)
 					}
 					close(gameScrapeQueue)
 					gameScrapeWg.Wait()
-					fmt.Println("userTweetTimes:", userTweetTimes)
-					fmt.Println("developerSnapshots:", developerSnapshots)
+					fmt.Println("userTweetTimes:", state.GetIterableCachedField(UserTweetTimesType))
+					fmt.Println("developerSnapshots:", state.GetIterableCachedField(DeveloperSnapshotsType))
 					fmt.Println("gameIDs:", gameIDs)
 				}
 
@@ -594,8 +637,8 @@ func main() {
 			},
 		},
 		{
-			Name:        "steamcmd",
-			Description: "runs a flow of commands in the SteamCMD wrapper",
+			Name:  "steamcmd",
+			Usage: "runs a flow of commands in the SteamCMD wrapper",
 			Action: func(c *cli.Context) (err error) {
 				commands := make([]*steamcmd.CommandWithArgs, 0)
 				for _, arg := range c.Args() {

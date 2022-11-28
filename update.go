@@ -24,18 +24,25 @@ func UpdateDeveloper(
 	developer *models.Developer,
 	totalTweets int,
 	gameScrapeQueue chan *scrapeStorefrontsForGameJob,
-	userTweetTimes map[string][]time.Time,
-	developerSnapshots map[string][]*models.DeveloperSnapshot,
+	state *ScoutState,
 ) (gameIDs mapset.Set[uuid.UUID], err error) {
 	log.INFO.Printf("Updating info for developer %s (%s)", developer.Username, developer.ID)
 	var developerSnap *models.DeveloperSnapshot
 	if developerSnap, err = developer.LatestDeveloperSnapshot(db.DB); err != nil {
+		log.WARNING.Printf(
+			"Could not get latest DeveloperSnapshot for %s (%s) in UpdateDeveloper",
+			developer.Username, developer.ID,
+		)
 		return gameIDs, myErrors.TemporaryWrapf(
 			true, err, "could not get latest DeveloperSnapshot for %s in UpdateDeveloper",
 			developer.ID,
 		)
 	}
 	if developerSnap == nil {
+		log.WARNING.Printf(
+			"Could not get latest DeveloperSnapshot for %s (%s) as there are no DeveloperSnapshots",
+			developer.Username, developer.ID,
+		)
 		return gameIDs, myErrors.TemporaryErrorf(
 			true,
 			"could not get latest DeveloperSnapshot for %s as there are no DeveloperSnapshots for it",
@@ -46,8 +53,9 @@ func UpdateDeveloper(
 
 	// First we update the user's games that exist in the DB
 	var games []*models.Game
-	gameIDs = mapset.NewSet[uuid.UUID]()
+	gameIDs = mapset.NewThreadUnsafeSet[uuid.UUID]()
 	if games, err = developer.Games(db.DB); err != nil {
+		log.WARNING.Printf("Could not find any games for %s (%s)", developer.Username, developer.ID)
 		return gameIDs, myErrors.TemporaryWrapf(
 			true, err, "could not find Games for Developer %s (%s)", developer.Username, developer.ID,
 		)
@@ -148,20 +156,19 @@ func UpdateDeveloper(
 
 	log.INFO.Printf(
 		"Executing DiscoveryBatch for batch of %d tweets for developer %s (%s)",
-		result.Meta().ResultCount(), developer.Username, developer.ID,
+		len(tweetRaw.TweetDictionaries()), developer.Username, developer.ID,
 	)
 	// Run DiscoveryBatch for this batch of tweet dictionaries
 	var subGameIDs mapset.Set[uuid.UUID]
 	if subGameIDs, err = DiscoveryBatch(
-		developerNo, tweetRaw.TweetDictionaries(), gameScrapeQueue, userTweetTimes, developerSnapshots,
-	); err != nil && !myErrors.IsTemporary(err) {
+		developerNo, tweetRaw.TweetDictionaries(), gameScrapeQueue, state); err != nil && !myErrors.IsTemporary(err) {
 		log.FATAL.Printf("Error returned by DiscoveryBatch is not temporary: %s. We have to stop :(", err.Error())
 		return gameIDs, myErrors.TemporaryWrapf(
 			false, err, "could not execute DiscoveryBatch for tweets fetched for Developer %s (%s)",
 			developer.Username, developer.ID,
 		)
 	}
-	// Merge the gameIDs from DiscoveryBatch back into the local gameIDs
+	// MergeIterableCachedFields the gameIDs from DiscoveryBatch back into the local gameIDs
 	gameIDs = gameIDs.Union(subGameIDs)
 	return
 }
@@ -175,12 +182,10 @@ type updateDeveloperJob struct {
 
 // updateDeveloperResult represents a result that is produced by an updateDeveloperWorker.
 type updateDeveloperResult struct {
-	developerNo        int
-	developer          *models.Developer
-	userTweetTimes     map[string][]time.Time
-	developerSnapshots map[string][]*models.DeveloperSnapshot
-	gameIDs            mapset.Set[uuid.UUID]
-	error              error
+	developerNo int
+	developer   *models.Developer
+	tempState   *ScoutState
+	error       error
 }
 
 // updateDeveloperWorker is a worker for UpdateDeveloper that takes a channel of updateDeveloperJob and queues up the
@@ -194,15 +199,16 @@ func updateDeveloperWorker(
 	defer wg.Done()
 	for job := range jobs {
 		result := &updateDeveloperResult{
-			developerNo:        job.developerNo,
-			developer:          job.developer,
-			userTweetTimes:     make(map[string][]time.Time),
-			developerSnapshots: make(map[string][]*models.DeveloperSnapshot),
+			developerNo: job.developerNo,
+			developer:   job.developer,
+			tempState:   StateInMemory(),
 		}
-		result.gameIDs, result.error = UpdateDeveloper(
+		var subGameIDs mapset.Set[uuid.UUID]
+		subGameIDs, result.error = UpdateDeveloper(
 			job.developerNo, job.developer, job.totalTweets,
-			gameScrapeQueue, result.userTweetTimes, result.developerSnapshots,
+			gameScrapeQueue, result.tempState,
 		)
+		result.tempState.GetIterableCachedField(GameIDsType).Merge(&GameIDs{subGameIDs})
 		result.developer = job.developer
 		results <- result
 	}
@@ -226,13 +232,18 @@ func updateDeveloperWorker(
 // developerSnapshots, and gameIDs instances. Once a result has been processed, the developerNo of the
 // updateDeveloperResult will be pushed to a buffered channel to notify the producer that that job has been processed.
 func UpdatePhase(
-	batchSize int,
-	discoveryTweets int,
 	developerIDs []string,
-	userTweetTimes map[string][]time.Time,
-	developerSnapshots map[string][]*models.DeveloperSnapshot,
+	state *ScoutState,
 ) (gameIDs mapset.Set[uuid.UUID], err error) {
-	gameIDs = mapset.NewSet[uuid.UUID]()
+	// Set the batchSize and discoveryTweets vars by reading from ScoutState
+	stateState := state.GetCachedField(StateType).(*State)
+	batchSize := stateState.BatchSize
+	discoveryTweets := stateState.DiscoveryTweets
+
+	gameIDs = mapset.NewThreadUnsafeSet[uuid.UUID]()
+
+	// Find the enabled developers that don't exist in the developerIDs array and don't exist in the UpdatedDevelopers
+	// State field.
 	// SELECT developers.*
 	// FROM "developers"
 	// INNER JOIN developer_snapshots ON developer_snapshots.developer_id = developers.id
@@ -470,7 +481,7 @@ func UpdatePhase(
 					}
 
 					// We wait until all the results have been processed by the consumer
-					developerNumbersSeen := mapset.NewSet[int]()
+					developerNumbersSeen := mapset.NewThreadUnsafeSet[int]()
 					for developerNumbersSeen.Cardinality() != high-low {
 						log.INFO.Printf("Developers seen %d/%d", developerNumbersSeen.Cardinality(), high-low)
 						select {
@@ -515,8 +526,10 @@ func UpdatePhase(
 			}()
 		}
 
-		// We start the consumer of the Update developer results in its own goroutine so we can
-		go func() {
+		// We start the consumer of the Update developer results in its own goroutine, so we can process each result in
+		// parallel
+		go func(state *ScoutState) {
+			resultBatchCount := 0
 			var consumerErr error
 			for result := range results {
 				if result.error != nil && !myErrors.IsTemporary(result.error) {
@@ -539,47 +552,34 @@ func UpdatePhase(
 					)
 					continue
 				} else {
-					log.INFO.Printf("Got UpdateDeveloper result for %s (%s)", result.developer.Username, result.developer.ID)
+					log.INFO.Printf(
+						"Got UpdateDeveloper result for %s (%s)",
+						result.developer.Username, result.developer.ID,
+					)
 				}
 
-				// Merge the gameIDs, userTweetTimes, and developerSnapshots from the result into the maps in this function
+				// MergeIterableCachedFields the gameIDs, userTweetTimes, and developerSnapshots from the result into
+				// the main state.
 				log.INFO.Printf(
-					"Merging %d gameIDs from the result for %s (%s), back into gameIDs",
-					result.gameIDs.Cardinality(), result.developer.Username, result.developer.ID,
+					"Merging gameIDs, userTweetTimes, and developerSnapshots from the result for %s (%s), back into "+
+						"the main ScoutState",
+					result.developer.Username, result.developer.ID,
 				)
-				gameIDs = gameIDs.Union(result.gameIDs)
+				state.MergeIterableCachedFields(result.tempState)
 
-				log.INFO.Printf(
-					"Merging %d userTweetTimes from the result for %s (%s), back into userTweetTimes",
-					len(result.userTweetTimes), result.developer.Username, result.developer.ID,
-				)
-				for id, tweetTimes := range result.userTweetTimes {
-					if _, ok := userTweetTimes[id]; !ok {
-						// If the key doesn't exist then we have to make a new array at that key, but we can use the copy
-						// function to just copy the tweetTimes to the empty array
-						userTweetTimes[id] = make([]time.Time, len(tweetTimes))
-						copy(userTweetTimes[id], tweetTimes)
-					} else {
-						userTweetTimes[id] = append(userTweetTimes[id], tweetTimes...)
-					}
-				}
+				// Add the developer's ID to the UpdatedDevelopers array in the state info, so that if anything bad
+				// happens we can always continue the UpdatePhase and ignore the developers that we have already
+				// updated.
+				state.GetCachedField(StateType).SetOrAdd("UpdatedDevelopers", result.developer.ID)
 
-				log.INFO.Printf(
-					"Merging %d developerSnapshots from the result for %s (%s), back into developerSnapshots",
-					len(result.developerSnapshots), result.developer.Username, result.developer.ID,
-				)
-				for id, developerSnaps := range result.developerSnapshots {
-					if _, ok := developerSnapshots[id]; !ok {
-						developerSnapshots[id] = make([]*models.DeveloperSnapshot, len(developerSnaps))
-						copy(developerSnapshots[id], developerSnaps)
-						log.INFO.Printf(
-							"This is the first time we have merged developer %s (%s) back into developerSnapshots."+
-								" There are %d snapshots for it (%d after copying)",
-							result.developer.Username, result.developer.ID, len(developerSnaps), len(developerSnapshots[id]),
-						)
-					} else {
-						developerSnapshots[id] = append(developerSnapshots[id], developerSnaps...)
+				// Save the ScoutState after batchSize number of successful results have been consumed
+				resultBatchCount++
+				if resultBatchCount == batchSize {
+					log.INFO.Printf("We have consumed %d successful results, saving ScoutState...", resultBatchCount)
+					if err = state.Save(); err != nil {
+						log.ERROR.Printf("Could not save ScoutState: %v", err)
 					}
+					resultBatchCount = 0
 				}
 
 				finishedJobs <- result.developerNo
@@ -591,7 +591,7 @@ func UpdatePhase(
 			} else {
 				consumerDone <- nil
 			}
-		}()
+		}(state)
 
 		// First we wait for the producer to stop producing jobs. Once it has, we can also close the jobs queue.
 		<-producerDone
@@ -624,8 +624,8 @@ func UpdatePhase(
 	}
 
 	log.INFO.Printf("After running the update phase there are:")
-	log.INFO.Printf("\tThere are %d userTweetTimes", len(userTweetTimes))
-	log.INFO.Printf("\tThere are %d developerSnapshots", len(developerSnapshots))
+	log.INFO.Printf("\tThere are %d userTweetTimes", state.GetIterableCachedField(UserTweetTimesType).Len())
+	log.INFO.Printf("\tThere are %d developerSnapshots", state.GetIterableCachedField(UserTweetTimesType).Len())
 	log.INFO.Printf("\tThere are %d gameIDs", gameIDs.Cardinality())
 	return
 }

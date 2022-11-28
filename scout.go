@@ -75,135 +75,211 @@ func sleepBar(sleepDuration time.Duration) {
 // • 5th phase: Measure. For all the models.Developer that have a good number of models.DeveloperSnapshot we'll see if
 // any are shining above the rest.
 func Scout(batchSize int, discoveryTweets int) (err error) {
-	scoutStart := time.Now().UTC()
-	// If the number of discovery tweets we requested is more than maxDiscoveryTweetsDailyPercent of the total tweets
-	// available for a day then we will error out.
-	if float64(discoveryTweets) > maxTotalDiscoveryTweets {
-		return myErrors.TemporaryErrorf(
-			false,
-			"cannot request more than %d tweets per day for discovery purposes",
-			int(myTwitter.TweetsPerDay),
-		)
+	var state *ScoutState
+	if state, err = StateLoadOrCreate(false); err != nil {
+		return errors.Wrapf(err, "could not load/create ScoutState when starting Scout procedure")
 	}
 
-	// 1st phase: Discovery. Search the recent tweets on Twitter belonging to the hashtags given in config.json.
-	userTweetTimes := make(map[string][]time.Time)
-	developerSnapshots := make(map[string][]*models.DeveloperSnapshot)
-	gameIDs := mapset.NewSet[uuid.UUID]()
+	defer func() {
+		// If an error occurs we'll always attempt to save the state
+		if err != nil {
+			err = myErrors.MergeErrors(err, state.Save())
+		}
+	}()
 
-	phaseStart := time.Now().UTC()
-	log.INFO.Println("Starting Discovery phase")
-
-	var subGameIDs mapset.Set[uuid.UUID]
-	if subGameIDs, err = DiscoveryPhase(batchSize, discoveryTweets, userTweetTimes, developerSnapshots); err != nil {
-		return err
-	}
-	gameIDs = gameIDs.Union(subGameIDs)
-
-	log.INFO.Printf("Finished Discovery phase in %s", time.Now().UTC().Sub(phaseStart).String())
-
-	// 2nd phase: Update. For any developers, and games that exist in the DB but haven't been scraped we will fetch the
-	// details from the DB and initiate scrapes for them
-	log.INFO.Printf("We have scraped:")
-	log.INFO.Printf("\t%d developers", len(developerSnapshots))
-	log.INFO.Printf("\t%d games", gameIDs.Cardinality())
-
-	phaseStart = time.Now().UTC()
-	log.INFO.Printf("Starting Update phase")
-	// Extract the IDs of the developers that were just scraped in the discovery phase.
-	i := 0
-	scrapedDevelopers := make([]string, len(developerSnapshots))
-	for id := range developerSnapshots {
-		scrapedDevelopers[i] = id
-		i++
+	if state.Loaded {
+		log.WARNING.Printf("Previous ScoutState \"%s\" was loaded from disk:", state.BaseDir())
+		log.WARNING.Println(state.String())
+		batchSizeAny, _ := state.GetCachedField(StateType).Get("BatchSize")
+		discoveryTweetsAny, _ := state.GetCachedField(StateType).Get("DiscoveryTweets")
+		batchSize = batchSizeAny.(int)
+		discoveryTweets = discoveryTweetsAny.(int)
+	} else {
+		// If no state has been loaded, then we'll assume that the previous run of Scout was successful and set up
+		// ScoutState as usual
+		state.GetCachedField(StateType).SetOrAdd("Phase", Discovery)
+		state.GetCachedField(StateType).SetOrAdd("BatchSize", batchSize)
+		state.GetCachedField(StateType).SetOrAdd("DiscoveryTweets", discoveryTweets)
 	}
 
-	// Run the UpdatePhase.
-	if subGameIDs, err = UpdatePhase(batchSize, discoveryTweets, scrapedDevelopers, userTweetTimes, developerSnapshots); err != nil {
-		return err
+	var phaseStart time.Time
+	phaseBefore := func() {
+		phaseStart = time.Now().UTC()
+		state.GetCachedField(StateType).SetOrAdd("PhaseStart", phaseStart)
+		phase, _ := state.GetCachedField(StateType).Get("Phase")
+		log.INFO.Printf("Starting %s phase", phase.(Phase).String())
 	}
-	gameIDs = gameIDs.Union(subGameIDs)
-	log.INFO.Printf("Finished Update phase in %s", time.Now().UTC().Sub(phaseStart).String())
 
-	// 3rd phase: Snapshot. For all the partial DeveloperSnapshots that exist in the developerSnapshots map we will
-	// aggregate the information for them.
-	phaseStart = time.Now().UTC()
-	log.INFO.Printf("Starting Snapshot phase. Aggregating %d DeveloperSnapshots", len(developerSnapshots))
-	for id, snapshots := range developerSnapshots {
-		aggregatedSnap := &models.DeveloperSnapshot{
-			DeveloperID:                  id,
-			Tweets:                       int32(len(userTweetTimes[id])),
-			TweetTimeRange:               models.NullDurationFromPtr(nil),
-			LastTweetTime:                userTweetTimes[id][0].UTC(),
-			AverageDurationBetweenTweets: models.NullDurationFromPtr(nil),
-			TweetsPublicMetrics:          &twitter.TweetMetricsObj{},
-			UserPublicMetrics:            &twitter.UserMetricsObj{},
-			ContextAnnotationSet:         myTwitter.NewContextAnnotationSet(),
+	phaseAfter := func() {
+		phase, _ := state.GetCachedField(StateType).Get("Phase")
+		log.INFO.Printf("Continue %s phase in %s", phase.(Phase).String(), time.Now().UTC().Sub(phaseStart).String())
+		nextPhase := phase.(Phase).Next()
+		state.GetCachedField(StateType).SetOrAdd("Phase", nextPhase)
+		if err = state.Save(); err != nil {
+			log.ERROR.Printf("Could not save ScoutState: %v", err)
+		}
+	}
+
+	state.GetCachedField(StateType).SetOrAdd("Start", time.Now().UTC())
+	if phase, _ := state.GetCachedField(StateType).Get("Phase"); phase.(Phase) == Discovery {
+		// If the number of discovery tweets we requested is more than maxDiscoveryTweetsDailyPercent of the total tweets
+		// available for a day then we will error out.
+		if float64(discoveryTweets) > maxTotalDiscoveryTweets {
+			return myErrors.TemporaryErrorf(
+				false,
+				"cannot request more than %d tweets per day for discovery purposes",
+				int(myTwitter.TweetsPerDay),
+			)
 		}
 
-		// If we have more than one tweet, then we will calculate TweetTimeRange, and AverageDurationBetweenTweets
-		if aggregatedSnap.Tweets > 1 {
-			// Sort the tweet times for this user.
-			sort.Slice(userTweetTimes[id], func(i, j int) bool {
-				return userTweetTimes[id][i].Before(userTweetTimes[id][j])
-			})
-			// Find the max and min times by looking at the head and end of array
-			maxTime := userTweetTimes[id][len(userTweetTimes[id])-1]
-			minTime := userTweetTimes[id][0]
-			aggregatedSnap.LastTweetTime = maxTime.UTC()
-			// Aggregate the durations between all the tweets
-			betweenCount := time.Nanosecond * 0
-			for t, tweetTime := range userTweetTimes[id] {
-				// Aggregate the duration between this time and the last time
-				if t > 0 {
-					betweenCount += tweetTime.Sub(userTweetTimes[id][t-1])
+		phaseBefore()
+
+		// 1st phase: Discovery. Search the recent tweets on Twitter belonging to the hashtags given in config.json.
+		var subGameIDs mapset.Set[uuid.UUID]
+		if subGameIDs, err = DiscoveryPhase(state); err != nil {
+			return err
+		}
+		state.GetIterableCachedField(GameIDsType).Merge(&GameIDs{subGameIDs})
+
+		phaseAfter()
+	}
+
+	if phase, _ := state.GetCachedField(StateType).Get("Phase"); phase.(Phase) == Update {
+		// 2nd phase: Update. For any developers, and games that exist in the DB but haven't been scraped we will fetch the
+		// details from the DB and initiate scrapes for them
+		log.INFO.Printf("We have scraped:")
+		log.INFO.Printf("\t%d developers", state.GetIterableCachedField(DeveloperSnapshotsType).Len())
+		log.INFO.Printf("\t%d games", state.GetIterableCachedField(DeveloperSnapshotsType).Len())
+
+		phaseBefore()
+
+		// Extract the IDs of the developers that were just scraped in the discovery phase.
+		scrapedDevelopers := make([]string, state.GetIterableCachedField(DeveloperSnapshotsType).Len())
+		iter := state.GetIterableCachedField(DeveloperSnapshotsType).Iter()
+		for iter.Continue() {
+			scrapedDevelopers[iter.I()] = iter.Key().(string)
+			iter.Next()
+		}
+
+		// If there are already developers that have been updated in a previously run UpdatePhase, then we will add
+		// these to the scrapedDevelopers also
+		stateState := state.GetCachedField(StateType).(*State)
+		if len(stateState.UpdatedDevelopers) > 0 {
+			scrapedDevelopers = append(scrapedDevelopers, stateState.UpdatedDevelopers...)
+		}
+
+		// Run the UpdatePhase.
+		var subGameIDs mapset.Set[uuid.UUID]
+		if subGameIDs, err = UpdatePhase(scrapedDevelopers, state); err != nil {
+			return err
+		}
+		state.GetIterableCachedField(GameIDsType).Merge(&GameIDs{subGameIDs})
+
+		phaseAfter()
+	}
+
+	if phase, _ := state.GetCachedField(StateType).Get("Phase"); phase.(Phase) == Snapshot {
+		// 3rd phase: Snapshot. For all the partial DeveloperSnapshots that exist in the developerSnapshots map we will
+		// aggregate the information for them.
+		phaseBefore()
+
+		dsIter := state.GetIterableCachedField(DeveloperSnapshotsType).Iter()
+		for dsIter.Continue() {
+			idAny := dsIter.Key()
+			snapshotsAny, _ := state.GetIterableCachedField(DeveloperSnapshotsType).Get(idAny)
+			userTweetTimesAny, _ := state.GetIterableCachedField(UserTweetTimesType).Get(idAny)
+
+			id := idAny.(string)
+			snapshots := snapshotsAny.([]*models.DeveloperSnapshot)
+			userTweetTimes := userTweetTimesAny.([]time.Time)
+
+			aggregatedSnap := &models.DeveloperSnapshot{
+				DeveloperID:                  id,
+				Tweets:                       int32(len(userTweetTimes)),
+				TweetTimeRange:               models.NullDurationFromPtr(nil),
+				LastTweetTime:                userTweetTimes[0].UTC(),
+				AverageDurationBetweenTweets: models.NullDurationFromPtr(nil),
+				TweetsPublicMetrics:          &twitter.TweetMetricsObj{},
+				UserPublicMetrics:            &twitter.UserMetricsObj{},
+				ContextAnnotationSet:         myTwitter.NewContextAnnotationSet(),
+			}
+
+			// If we have more than one tweet, then we will calculate TweetTimeRange, and AverageDurationBetweenTweets
+			if aggregatedSnap.Tweets > 1 {
+				// Sort the tweet times for this user.
+				sort.Slice(userTweetTimes, func(i, j int) bool {
+					return userTweetTimes[i].Before(userTweetTimes[j])
+				})
+				// Find the max and min times by looking at the head and end of array
+				maxTime := userTweetTimes[len(userTweetTimes)-1]
+				minTime := userTweetTimes[0]
+				aggregatedSnap.LastTweetTime = maxTime.UTC()
+				// Aggregate the durations between all the tweets
+				betweenCount := time.Nanosecond * 0
+				for t, tweetTime := range userTweetTimes {
+					// Aggregate the duration between this time and the last time
+					if t > 0 {
+						betweenCount += tweetTime.Sub(userTweetTimes[t-1])
+					}
+				}
+				timeRange := maxTime.Sub(minTime)
+				aggregatedSnap.TweetTimeRange = models.NullDurationFromPtr(&timeRange)
+				averageDurationBetween := time.Duration(int64(betweenCount) / int64(aggregatedSnap.Tweets))
+				aggregatedSnap.AverageDurationBetweenTweets = models.NullDurationFromPtr(&averageDurationBetween)
+			}
+
+			// We then aggregate the tweet/user public metrics for each tweet as well as context annotations.
+			for _, snapshot := range snapshots {
+				aggregatedSnap.TweetsPublicMetrics.Impressions += snapshot.TweetsPublicMetrics.Impressions
+				aggregatedSnap.TweetsPublicMetrics.URLLinkClicks += snapshot.TweetsPublicMetrics.URLLinkClicks
+				aggregatedSnap.TweetsPublicMetrics.UserProfileClicks += snapshot.TweetsPublicMetrics.UserProfileClicks
+				aggregatedSnap.TweetsPublicMetrics.Likes += snapshot.TweetsPublicMetrics.Likes
+				aggregatedSnap.TweetsPublicMetrics.Replies += snapshot.TweetsPublicMetrics.Replies
+				aggregatedSnap.TweetsPublicMetrics.Retweets += snapshot.TweetsPublicMetrics.Retweets
+				aggregatedSnap.TweetsPublicMetrics.Quotes += snapshot.TweetsPublicMetrics.Quotes
+				aggregatedSnap.UserPublicMetrics.Followers += snapshot.UserPublicMetrics.Followers
+				aggregatedSnap.UserPublicMetrics.Following += snapshot.UserPublicMetrics.Following
+				aggregatedSnap.UserPublicMetrics.Tweets += snapshot.UserPublicMetrics.Tweets
+				aggregatedSnap.UserPublicMetrics.Listed += snapshot.UserPublicMetrics.Listed
+				it := snapshot.ContextAnnotationSet.Iterator()
+				for elem := range it.C {
+					aggregatedSnap.ContextAnnotationSet.Add(elem)
 				}
 			}
-			timeRange := maxTime.Sub(minTime)
-			aggregatedSnap.TweetTimeRange = models.NullDurationFromPtr(&timeRange)
-			averageDurationBetween := time.Duration(int64(betweenCount) / int64(aggregatedSnap.Tweets))
-			aggregatedSnap.AverageDurationBetweenTweets = models.NullDurationFromPtr(&averageDurationBetween)
-		}
-
-		// We then aggregate the tweet/user public metrics for each tweet as well as context annotations.
-		for _, snapshot := range snapshots {
-			aggregatedSnap.TweetsPublicMetrics.Impressions += snapshot.TweetsPublicMetrics.Impressions
-			aggregatedSnap.TweetsPublicMetrics.URLLinkClicks += snapshot.TweetsPublicMetrics.URLLinkClicks
-			aggregatedSnap.TweetsPublicMetrics.UserProfileClicks += snapshot.TweetsPublicMetrics.UserProfileClicks
-			aggregatedSnap.TweetsPublicMetrics.Likes += snapshot.TweetsPublicMetrics.Likes
-			aggregatedSnap.TweetsPublicMetrics.Replies += snapshot.TweetsPublicMetrics.Replies
-			aggregatedSnap.TweetsPublicMetrics.Retweets += snapshot.TweetsPublicMetrics.Retweets
-			aggregatedSnap.TweetsPublicMetrics.Quotes += snapshot.TweetsPublicMetrics.Quotes
-			aggregatedSnap.UserPublicMetrics.Followers += snapshot.UserPublicMetrics.Followers
-			aggregatedSnap.UserPublicMetrics.Following += snapshot.UserPublicMetrics.Following
-			aggregatedSnap.UserPublicMetrics.Tweets += snapshot.UserPublicMetrics.Tweets
-			aggregatedSnap.UserPublicMetrics.Listed += snapshot.UserPublicMetrics.Listed
-			it := snapshot.ContextAnnotationSet.Iterator()
-			for elem := range it.C {
-				aggregatedSnap.ContextAnnotationSet.Add(elem)
+			if err = db.DB.Create(aggregatedSnap).Error; err != nil {
+				return errors.Wrapf(err, "could not save aggregation of %d DeveloperSnapshots for dev. %s", len(snapshots), id)
 			}
+			log.INFO.Printf("\tSaved DeveloperSnapshot aggregation for %s which is comprised of %d partial snapshots", id, len(snapshots))
+			dsIter.Next()
 		}
-		if err = db.DB.Create(aggregatedSnap).Error; err != nil {
-			return errors.Wrapf(err, "could not save aggregation of %d DeveloperSnapshots for dev. %s", len(snapshots), id)
-		}
-		log.INFO.Printf("\tSaved DeveloperSnapshot aggregation for %s which is comprised of %d partial snapshots", id, len(snapshots))
-	}
-	log.INFO.Printf("Finished aggregating DeveloperSnapshots in %s", time.Now().UTC().Sub(phaseStart).String())
 
-	// 4th phase: Disable. Disable the developers who aren't doing so well. The number of developers to disable depends
-	// on the number of tweets we get to use in the update phase the next time around.
-	phaseStart = time.Now().UTC()
-	log.INFO.Println("Starting Disable phase")
-
-	if err = DisablePhase(); err != nil {
-		return errors.Wrap(err, "disable phase has failed")
+		phaseAfter()
 	}
 
-	log.INFO.Printf("Finished Disable phase in %s", time.Now().UTC().Sub(phaseStart))
+	if phase, _ := state.GetCachedField(StateType).Get("Phase"); phase.(Phase) == Disable {
+		// 4th phase: Disable. Disable the developers who aren't doing so well. The number of developers to disable depends
+		// on the number of tweets we get to use in the update phase the next time around.
+		phaseBefore()
 
-	// 5th phase: Measure. For all the users that have a good number of snapshots we'll see if any are shining above the
-	// rest
+		if err = DisablePhase(); err != nil {
+			return errors.Wrap(err, "disable phase has failed")
+		}
 
-	log.INFO.Printf("Finished Scout in %s", time.Now().UTC().Sub(scoutStart))
+		phaseAfter()
+	}
+
+	if phase, _ := state.GetCachedField(StateType).Get("Phase"); phase.(Phase) == Measure {
+		// 5th phase: Measure. For all the users that have a good number of snapshots we'll see if any are shining above the
+		// rest
+		phaseBefore()
+		phaseAfter()
+	}
+
+	state.GetCachedField(StateType).SetOrAdd("Continue", time.Now().UTC())
+	start, _ := state.GetCachedField(StateType).Get("Start")
+	finished, _ := state.GetCachedField(StateType).Get("Continue")
+	log.INFO.Printf("Continue Scout in %s", finished.(time.Time).Sub(start.(time.Time)).String())
+
+	state.Delete()
 	return
 }
