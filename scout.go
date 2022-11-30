@@ -112,7 +112,7 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 
 	phaseAfter := func() {
 		phase, _ := state.GetCachedField(StateType).Get("Phase")
-		log.INFO.Printf("Continue %s phase in %s", phase.(Phase).String(), time.Now().UTC().Sub(phaseStart).String())
+		log.INFO.Printf("Finished %s phase in %s", phase.(Phase).String(), time.Now().UTC().Sub(phaseStart).String())
 		nextPhase := phase.(Phase).Next()
 		state.GetCachedField(StateType).SetOrAdd("Phase", nextPhase)
 		if err = state.Save(); err != nil {
@@ -169,11 +169,9 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 		}
 
 		// Run the UpdatePhase.
-		var subGameIDs mapset.Set[uuid.UUID]
-		if subGameIDs, err = UpdatePhase(scrapedDevelopers, state); err != nil {
+		if err = UpdatePhase(scrapedDevelopers, state); err != nil {
 			return err
 		}
-		state.GetIterableCachedField(GameIDsType).Merge(&GameIDs{subGameIDs})
 
 		phaseAfter()
 	}
@@ -278,7 +276,7 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 	state.GetCachedField(StateType).SetOrAdd("Continue", time.Now().UTC())
 	start, _ := state.GetCachedField(StateType).Get("Start")
 	finished, _ := state.GetCachedField(StateType).Get("Continue")
-	log.INFO.Printf("Continue Scout in %s", finished.(time.Time).Sub(start.(time.Time)).String())
+	log.INFO.Printf("Finished Scout in %s", finished.(time.Time).Sub(start.(time.Time)).String())
 
 	state.Delete()
 	return

@@ -22,7 +22,6 @@ import (
 	"os"
 	"reflect"
 	"strconv"
-	"sync"
 	"time"
 )
 
@@ -401,12 +400,10 @@ func main() {
 			},
 			Usage: "scrape the Steam game with the given appid",
 			Action: func(c *cli.Context) (err error) {
-				game := &models.Game{}
-				game.Website = null.StringFrom(models.SteamStorefront.ScrapeGame(
-					browser.SteamAppPage.Fill(c.Int("appid")),
-					game,
-					globalConfig.Scrape,
-				))
+				game := &models.Game{Website: null.StringFrom(browser.SteamAppPage.Fill(c.Int("appid")))}
+				if err = game.Update(db.DB, globalConfig.Scrape); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
 				fmt.Println(game)
 				return
 			},
@@ -612,19 +609,17 @@ func main() {
 						return cli.NewExitError(err.Error(), 1)
 					}
 
-					gameScrapeQueue := make(chan *scrapeStorefrontsForGameJob, 12*maxGamesPerTweet)
-					gameScrapeGuard := make(chan struct{}, 1)
-					var gameScrapeWg sync.WaitGroup
-
-					gameScrapeWg.Add(1)
-					go scrapeStorefrontsForGameWorker(1, &gameScrapeWg, gameScrapeQueue, gameScrapeGuard)
+					gameScrapers := models.NewStorefrontScrapers[string](
+						globalConfig.Scrape, db.DB, 1, 1, 12*maxGamesPerTweet,
+						minScrapeStorefrontsForGameWorkerWaitTime, maxScrapeStorefrontsForGameWorkerWaitTime,
+					)
+					gameScrapers.Start()
 
 					var gameIDs mapset.Set[uuid.UUID]
-					if gameIDs, err = UpdateDeveloper(1, &developer, 12, gameScrapeQueue, state); err != nil {
+					if gameIDs, err = UpdateDeveloper(1, &developer, 12, gameScrapers, state); err != nil {
 						return cli.NewExitError(err.Error(), 1)
 					}
-					close(gameScrapeQueue)
-					gameScrapeWg.Wait()
+					gameScrapers.Wait()
 					fmt.Println("userTweetTimes:", state.GetIterableCachedField(UserTweetTimesType))
 					fmt.Println("developerSnapshots:", state.GetIterableCachedField(DeveloperSnapshotsType))
 					fmt.Println("gameIDs:", gameIDs)

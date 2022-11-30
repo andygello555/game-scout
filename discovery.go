@@ -14,9 +14,7 @@ import (
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	"math/rand"
 	"reflect"
-	"sync"
 	"time"
 )
 
@@ -31,74 +29,12 @@ const (
 	maxGamesPerTweet = 10
 )
 
-// scrapeStorefrontsForGameJob is a unit of work for the scrapeStorefrontsForGameWorker.
-type scrapeStorefrontsForGameJob struct {
-	// game is the game to fill/update.
-	game *models.Game
-	// update represents whether to call game.Update instead of models.ScrapeStorefrontsForGame.
-	update         bool
-	storefrontURLs map[models.Storefront]mapset.Set[string]
-	// result is a channel into which the resulting models.Game will be pushed once the job has finished. This is so that
-	// the producer of the job can wait until it has finished.
-	result chan *models.Game
-}
-
-// scrapeStorefrontsForGameWorker will execute the channel of jobs as arguments to the models.ScrapeStorefrontsForGame
-// function. This worker shouldn't be started more than 2 times as its entire purpose is to throttle the rate at which
-// games are scraped to make sure that we don't get rate limited. In fact, the guard parameter is given so that no more
-// than maxConcurrentScrapeStorefrontsForGameWorkers is running at once.
-func scrapeStorefrontsForGameWorker(
-	no int,
-	wg *sync.WaitGroup,
-	jobs <-chan *scrapeStorefrontsForGameJob,
-	guard chan struct{},
-) {
-	defer wg.Done()
-	time.Sleep(maxScrapeStorefrontsForGameWorkerWaitTime * time.Duration(no))
-	log.INFO.Printf("ScrapeStorefrontsForGameWorker no. %d has started...", no)
-	jobTotal := 0
-	for job := range jobs {
-		guard <- struct{}{}
-		log.INFO.Printf(
-			"ScrapeStorefrontsForGameWorker no. %d has acquired the guard, and is now executing a job marked as "+
-				"update = %t",
-			no, job.update,
-		)
-
-		if job.update {
-			if err := job.game.Update(db.DB, globalConfig.Scrape); err != nil {
-				log.WARNING.Printf(
-					"ScrapeStorefrontsForGameWorker no. %d could not save game %s: %s",
-					no, job.game.ID.String(), err.Error(),
-				)
-			}
-		} else {
-			models.ScrapeStorefrontsForGame(&job.game, job.storefrontURLs, globalConfig.Scrape)
-		}
-		job.result <- job.game
-		jobTotal++
-
-		// Find out how long to sleep for...
-		min := int64(minScrapeStorefrontsForGameWorkerWaitTime)
-		max := int64(maxScrapeStorefrontsForGameWorkerWaitTime)
-		random := rand.Int63n(max-min+1) + min
-		sleepDuration := time.Duration(random)
-		log.INFO.Printf(
-			"ScrapeStorefrontsForGameWorker no. %d has completed a job and is now sleeping for %s",
-			no, sleepDuration.String(),
-		)
-		time.Sleep(sleepDuration)
-		<-guard
-	}
-	log.INFO.Printf("ScrapeStorefrontsForGameWorker no. %d has finished. Executed %d jobs", no, jobTotal)
-}
-
 // TransformTweet takes a twitter.TweetDictionary and splits it out into instances of the models.Developer,
 // models.DeveloperSnapshot, and models.Game models. It also returns the time when the tweet was created so that we can
 // track the duration between tweets for models.DeveloperSnapshot.
 func TransformTweet(
 	tweet *twitter.TweetDictionary,
-	gameScrapeQueue chan<- *scrapeStorefrontsForGameJob,
+	gameScrapers *models.StorefrontScrapers[string],
 ) (
 	developer *models.Developer,
 	developerSnap *models.DeveloperSnapshot,
@@ -178,14 +114,8 @@ out:
 	// otherwise we'll end up waiting for nothing
 	game = nil
 	if len(storefrontMap) > 0 {
-		scrapeGameDone := make(chan *models.Game)
-		gameScrapeQueue <- &scrapeStorefrontsForGameJob{
-			game:           &models.Game{Developer: developer},
-			update:         false,
-			storefrontURLs: storefrontMap,
-			result:         scrapeGameDone,
-		}
-		game = <-scrapeGameDone
+		gameModel := <-gameScrapers.Add(false, &models.Game{Developer: developer}, storefrontMap)
+		game = gameModel.(*models.Game)
 		if game != nil {
 			game.DeveloperID = developer.ID
 		}
@@ -214,13 +144,13 @@ type transformTweetResult struct {
 func transformTweetWorker(
 	jobs <-chan *transformTweetJob,
 	results chan<- *transformTweetResult,
-	gameScrapeQueue chan *scrapeStorefrontsForGameJob,
+	gameScrapers *models.StorefrontScrapers[string],
 ) {
 	for job := range jobs {
 		result := &transformTweetResult{}
 		result.developer, result.developerSnap, result.game, result.tweetCreatedAt, result.err = TransformTweet(
 			job.tweet,
-			gameScrapeQueue,
+			gameScrapers,
 		)
 		result.tweetNo = job.tweetNo
 		results <- result
@@ -238,7 +168,7 @@ func transformTweetWorker(
 func DiscoveryBatch(
 	batchNo int,
 	dictionary map[string]*twitter.TweetDictionary,
-	gameScrapeQueue chan *scrapeStorefrontsForGameJob,
+	gameScrapers *models.StorefrontScrapers[string],
 	state *ScoutState,
 ) (gameIDs mapset.Set[uuid.UUID], err error) {
 	logPrefix := fmt.Sprintf("DiscoveryBatch %d: ", batchNo)
@@ -293,7 +223,7 @@ func DiscoveryBatch(
 
 	// Start the transformTweetWorkers
 	for i := 0; i < transformTweetWorkers; i++ {
-		go transformTweetWorker(jobs, results, gameScrapeQueue)
+		go transformTweetWorker(jobs, results, gameScrapers)
 	}
 
 	// Queue up all the jobs
@@ -389,17 +319,12 @@ func DiscoveryPhase(state *ScoutState) (gameIDs mapset.Set[uuid.UUID], err error
 	}
 
 	// Start the workers for scraping games.
-	// Note: in the discovery phase we can usually safely start a few more workers than in update as we are fetching
-	//       batches sequentially.
-	gameScrapeQueue := make(chan *scrapeStorefrontsForGameJob, batchSize*maxGamesPerTweet)
-	gameScrapeGuard := make(chan struct{}, discoveryMaxConcurrentGameScrapeWorkers)
-	var gameScrapeWg sync.WaitGroup
-
-	// Start the scrapeStorefrontsForGameWorkers
-	for i := 0; i < discoveryGameScrapeWorkers; i++ {
-		gameScrapeWg.Add(1)
-		go scrapeStorefrontsForGameWorker(i+1, &gameScrapeWg, gameScrapeQueue, gameScrapeGuard)
-	}
+	gameScrapers := models.NewStorefrontScrapers[string](
+		globalConfig.Scrape, db.DB,
+		discoveryGameScrapeWorkers, discoveryMaxConcurrentGameScrapeWorkers, batchSize*maxGamesPerTweet,
+		minScrapeStorefrontsForGameWorkerWaitTime, maxScrapeStorefrontsForGameWorkerWaitTime,
+	)
+	gameScrapers.Start()
 
 	log.INFO.Println("Starting Discovery phase")
 	for i := batchNo * batchSize; i < discoveryTweets; i += batchSize {
@@ -431,7 +356,7 @@ func DiscoveryPhase(state *ScoutState) (gameIDs mapset.Set[uuid.UUID], err error
 		if subGameIDs, err = DiscoveryBatch(
 			batchNo,
 			tweetRaw.TweetDictionaries(),
-			gameScrapeQueue,
+			gameScrapers,
 			state,
 		); err != nil && !myErrors.IsTemporary(err) {
 			log.FATAL.Printf("Error returned by DiscoveryBatch is not temporary: %s. We have to stop :(", err.Error())
@@ -465,10 +390,8 @@ func DiscoveryPhase(state *ScoutState) (gameIDs mapset.Set[uuid.UUID], err error
 		sleepBar(secondsBetweenDiscoveryBatches)
 	}
 
-	close(gameScrapeQueue)
-	log.INFO.Printf("Closed gameScrapeQueue")
-	gameScrapeWg.Wait()
-	log.INFO.Printf("Game scrape workers have all stopped")
+	gameScrapers.Wait()
+	log.INFO.Println("StorefrontScrapers have finished")
 
 	return
 }

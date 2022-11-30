@@ -8,6 +8,7 @@ import (
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/RichardKnop/machinery/v1/tasks"
 	myErrors "github.com/andygello555/game-scout/errors"
+	"github.com/andygello555/game-scout/sock"
 	task "github.com/andygello555/game-scout/tasks"
 	"github.com/gorilla/websocket"
 	"github.com/pkg/errors"
@@ -20,10 +21,17 @@ import (
 )
 
 var (
-	taskStartTable          map[string]*time.Time
-	taskTotalRuntimeTable   map[string]time.Duration
-	taskAverageRuntimeTable map[string]time.Duration
-	taskCountTable          map[string]int64
+	taskStartTable     map[string]*time.Time
+	taskStartTableSync sync.RWMutex
+
+	taskTotalRuntimeTable     map[string]time.Duration
+	taskTotalRuntimeTableSync sync.RWMutex
+
+	taskAverageRuntimeTable     map[string]time.Duration
+	taskAverageRuntimeTableSync sync.RWMutex
+
+	taskCountTable     map[string]int64
+	taskCountTableSync sync.RWMutex
 )
 
 // throughWriter is a writer that writes to the logger (logging.LoggerInterface), by converting the given
@@ -42,18 +50,6 @@ func (w *throughWriter) Write(d []byte) (int, error) {
 	}
 	w.logger.Print(dString)
 	return len(d), nil
-}
-
-func websocketClient(c *websocket.Conn, wg *sync.WaitGroup) {
-	defer wg.Done()
-	for {
-		_, message, err := c.ReadMessage()
-		if err != nil {
-			log.INFO.Println("read:", err)
-			return
-		}
-		log.INFO.Printf("recv: %s", message)
-	}
 }
 
 func worker() (err error) {
@@ -113,7 +109,7 @@ func worker() (err error) {
 
 	// Start the actual client that will read from the websocket
 	websocketClientWg.Add(1)
-	go websocketClient(c, &websocketClientWg)
+	go sock.WebsocketClient(c, &websocketClientWg)
 
 	// Defer a close to the websocket connection
 	defer func(c *websocket.Conn) {
@@ -144,15 +140,19 @@ func worker() (err error) {
 
 	// We have a table that holds the start times of each running task
 	taskStartTable = make(map[string]*time.Time)
+	taskStartTableSync = sync.RWMutex{}
 
 	// Another table for recording the total runtime of tasks that have been run to completion
 	taskTotalRuntimeTable = make(map[string]time.Duration)
+	taskTotalRuntimeTableSync = sync.RWMutex{}
 
 	// We also have a table that records the average runtime for tasks
 	taskAverageRuntimeTable = make(map[string]time.Duration)
+	taskAverageRuntimeTableSync = sync.RWMutex{}
 
 	// And finally a table that records the number of times a task has been run to completion
 	taskCountTable = make(map[string]int64)
+	taskCountTableSync = sync.RWMutex{}
 
 	// Here we inject some custom code for error handling,
 	// start and end of task hooks, useful for metrics for example.
@@ -162,26 +162,51 @@ func worker() (err error) {
 
 	preTaskHandler := func(signature *tasks.Signature) {
 		startTime := time.Now().UTC()
+
+		taskStartTableSync.Lock()
 		taskStartTable[signature.UUID] = &startTime
+		taskStartTableSync.Unlock()
+
 		log.INFO.Printf("Starting %s: %s\n", signature.UUID, constructCallSignature(signature))
 	}
 
 	postTaskHandler := func(signature *tasks.Signature) {
+		taskStartTableSync.RLock()
 		startTime, ok := taskStartTable[signature.UUID]
+		taskStartTableSync.RUnlock()
+
 		endTime := time.Now().UTC()
 		if ok {
 			duration := endTime.Sub(*startTime)
+
+			taskCountTableSync.Lock()
 			taskCountTable[signature.Name] += 1
+			taskCountTableSync.Unlock()
+
+			taskTotalRuntimeTableSync.Lock()
 			taskTotalRuntimeTable[signature.Name] += duration
-			taskAverageRuntimeTable[signature.Name] = taskTotalRuntimeTable[signature.Name] / time.Duration(taskCountTable[signature.Name])
+			taskTotalRuntimeTableSync.Unlock()
+
+			taskCountTableSync.RLock()
+			taskCount := taskCountTable[signature.Name]
+			taskCountTableSync.RUnlock()
+
+			taskAverageRuntimeTableSync.Lock()
+			taskAverageRuntimeTable[signature.Name] = duration / time.Duration(taskCount)
+			taskAverageRuntimeTableSync.Unlock()
+
 			log.INFO.Printf("Continue %s: %s, in %s\n", signature.Name, constructCallSignature(signature), duration.String())
+
+			taskStartTableSync.Lock()
 			delete(taskStartTable, signature.UUID)
+			taskStartTableSync.Unlock()
 		} else {
 			log.INFO.Printf("Continue %s: %s\n", signature.Name, constructCallSignature(signature))
 		}
 
 		// We also display the average task runtimes as a sorted descending list
 		log.INFO.Println("Average task runtimes:")
+		taskAverageRuntimeTableSync.RLock()
 		durations := make([]struct {
 			name     string
 			duration time.Duration
@@ -192,10 +217,14 @@ func worker() (err error) {
 				duration time.Duration
 			}{name: name, duration: duration})
 		}
+		taskAverageRuntimeTableSync.RUnlock()
+
+		// Sort the durations
 		sort.Slice(durations, func(i, j int) bool {
 			return durations[i].duration > durations[j].duration
 		})
 
+		// Print the durations in descending order
 		for i, duration := range durations {
 			log.INFO.Printf("%d: %s - %s", i+1, duration.name, duration.duration)
 		}

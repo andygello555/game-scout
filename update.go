@@ -23,7 +23,7 @@ func UpdateDeveloper(
 	developerNo int,
 	developer *models.Developer,
 	totalTweets int,
-	gameScrapeQueue chan *scrapeStorefrontsForGameJob,
+	gameScrapers *models.StorefrontScrapers[string],
 	state *ScoutState,
 ) (gameIDs mapset.Set[uuid.UUID], err error) {
 	log.INFO.Printf("Updating info for developer %s (%s)", developer.Username, developer.ID)
@@ -72,13 +72,7 @@ func UpdateDeveloper(
 				game.Name.String, game.ID.String(), developer.Username, developer.ID,
 			)
 			game.Developer = developer
-			scrapeGameDone := make(chan *models.Game)
-			gameScrapeQueue <- &scrapeStorefrontsForGameJob{
-				game:   game,
-				update: true,
-				result: scrapeGameDone,
-			}
-			<-scrapeGameDone
+			<-gameScrapers.Add(true, game, nil)
 			log.INFO.Printf(
 				"Updated Game \"%s\" (%s) for Developer %s (%s)",
 				game.Name.String, game.ID.String(), developer.Username, developer.ID,
@@ -161,7 +155,8 @@ func UpdateDeveloper(
 	// Run DiscoveryBatch for this batch of tweet dictionaries
 	var subGameIDs mapset.Set[uuid.UUID]
 	if subGameIDs, err = DiscoveryBatch(
-		developerNo, tweetRaw.TweetDictionaries(), gameScrapeQueue, state); err != nil && !myErrors.IsTemporary(err) {
+		developerNo, tweetRaw.TweetDictionaries(), gameScrapers, state,
+	); err != nil && !myErrors.IsTemporary(err) {
 		log.FATAL.Printf("Error returned by DiscoveryBatch is not temporary: %s. We have to stop :(", err.Error())
 		return gameIDs, myErrors.TemporaryWrapf(
 			false, err, "could not execute DiscoveryBatch for tweets fetched for Developer %s (%s)",
@@ -194,7 +189,7 @@ func updateDeveloperWorker(
 	wg *sync.WaitGroup,
 	jobs <-chan *updateDeveloperJob,
 	results chan<- *updateDeveloperResult,
-	gameScrapeQueue chan *scrapeStorefrontsForGameJob,
+	gameScrapers *models.StorefrontScrapers[string],
 ) {
 	defer wg.Done()
 	for job := range jobs {
@@ -206,7 +201,7 @@ func updateDeveloperWorker(
 		var subGameIDs mapset.Set[uuid.UUID]
 		subGameIDs, result.error = UpdateDeveloper(
 			job.developerNo, job.developer, job.totalTweets,
-			gameScrapeQueue, result.tempState,
+			gameScrapers, result.tempState,
 		)
 		result.tempState.GetIterableCachedField(GameIDsType).Merge(&GameIDs{subGameIDs})
 		result.developer = job.developer
@@ -231,16 +226,11 @@ func updateDeveloperWorker(
 // • Consumer (no = 1): dequeues results from the results channel and aggregates them into the userTweetTimes,
 // developerSnapshots, and gameIDs instances. Once a result has been processed, the developerNo of the
 // updateDeveloperResult will be pushed to a buffered channel to notify the producer that that job has been processed.
-func UpdatePhase(
-	developerIDs []string,
-	state *ScoutState,
-) (gameIDs mapset.Set[uuid.UUID], err error) {
+func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 	// Set the batchSize and discoveryTweets vars by reading from ScoutState
 	stateState := state.GetCachedField(StateType).(*State)
 	batchSize := stateState.BatchSize
 	discoveryTweets := stateState.DiscoveryTweets
-
-	gameIDs = mapset.NewThreadUnsafeSet[uuid.UUID]()
 
 	// Find the enabled developers that don't exist in the developerIDs array and don't exist in the UpdatedDevelopers
 	// State field.
@@ -378,26 +368,19 @@ func UpdatePhase(
 		}
 
 		// Start the workers for scraping games.
-		// Note: in the update phase we have to be a bit more cautious with the number of workers that we start. This is
-		//       because each developer in a batch is updated in parallel.
-		gameScrapeQueue := make(
-			chan *scrapeStorefrontsForGameJob,
+		gameScrapers := models.NewStorefrontScrapers[string](
+			globalConfig.Scrape, db.DB,
+			updateGameScrapeWorkers, updateMaxConcurrentGameScrapeWorkers,
 			len(unscrapedDevelopers)*totalTweetsForEachDeveloper*maxGamesPerTweet,
+			minScrapeStorefrontsForGameWorkerWaitTime, maxScrapeStorefrontsForGameWorkerWaitTime,
 		)
-		gameScrapeGuard := make(chan struct{}, updateMaxConcurrentGameScrapeWorkers)
-		var gameScrapeWg sync.WaitGroup
-
-		// Start the scrapeStorefrontsForGameWorkers
-		for i := 0; i < updateGameScrapeWorkers; i++ {
-			gameScrapeWg.Add(1)
-			go scrapeStorefrontsForGameWorker(i+1, &gameScrapeWg, gameScrapeQueue, gameScrapeGuard)
-		}
+		gameScrapers.Start()
 
 		// Start the workers
 		for w := 0; w < updateDeveloperWorkers; w++ {
 			log.INFO.Printf("Starting updateDeveloperWorker no. %d", w)
 			updateDeveloperWorkerWg.Add(1)
-			go updateDeveloperWorker(&updateDeveloperWorkerWg, jobs, results, gameScrapeQueue)
+			go updateDeveloperWorker(&updateDeveloperWorkerWg, jobs, results, gameScrapers)
 		}
 
 		// We also check if the rate limit will be exceeded by the number of requests. We use 100 * unscrapedDevelopers
@@ -611,10 +594,8 @@ func UpdatePhase(
 		log.INFO.Printf("Consumer has finished")
 
 		// Finally, we wait for the game scrapers to finish
-		close(gameScrapeQueue)
-		log.INFO.Printf("Closed gameScrapeQueue")
-		gameScrapeWg.Wait()
-		log.INFO.Printf("Game scrape workers have all stopped")
+		gameScrapers.Wait()
+		log.INFO.Println("StorefrontScrapers have finished")
 
 		// If the consumer returned an error then we will wrap it and return it.
 		if err != nil {
@@ -625,7 +606,7 @@ func UpdatePhase(
 
 	log.INFO.Printf("After running the update phase there are:")
 	log.INFO.Printf("\tThere are %d userTweetTimes", state.GetIterableCachedField(UserTweetTimesType).Len())
-	log.INFO.Printf("\tThere are %d developerSnapshots", state.GetIterableCachedField(UserTweetTimesType).Len())
-	log.INFO.Printf("\tThere are %d gameIDs", gameIDs.Cardinality())
+	log.INFO.Printf("\tThere are %d developerSnapshots", state.GetIterableCachedField(DeveloperSnapshotsType).Len())
+	log.INFO.Printf("\tThere are %d gameIDs", state.GetIterableCachedField(GameIDsType).Len())
 	return
 }

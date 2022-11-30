@@ -346,6 +346,7 @@ func (ds *DeveloperSnapshots) Deserialise(pathsToBytes *PathsToBytes) (err error
 			}
 		}
 	}
+	dsFtb = nil
 	return
 }
 
@@ -748,16 +749,17 @@ func (state *ScoutState) MergeIterableCachedFields(stateToMerge *ScoutState) {
 func (state *ScoutState) Load() (err error) {
 	if !state.InMemory {
 		log.INFO.Printf("Loading ScoutState from %s", state.BaseDir())
-		filenamesToBytes := NewPathsToBytes(state.BaseDir())
-		if err = filenamesToBytes.LoadBaseDir(); err != nil {
+		pathsToBytes := NewPathsToBytes(state.BaseDir())
+		if err = pathsToBytes.LoadBaseDir(); err != nil {
 			err = errors.Wrapf(err, "could not load ScoutState (%s) from disk", state.BaseDir())
 		}
 
 		for cachedFieldType, cacheField := range state.cachedFields {
-			if err = cacheField.Deserialise(filenamesToBytes); err != nil {
+			if err = cacheField.Deserialise(pathsToBytes); err != nil {
 				err = errors.Wrapf(err, "could not deserialise cached field %s", cachedFieldType.String())
 			}
 		}
+		pathsToBytes = nil
 	}
 	return
 }
@@ -772,24 +774,28 @@ func (state *ScoutState) Save() (err error) {
 			return
 		}
 
-		filenamesToBytes := NewPathsToBytes(state.BaseDir())
+		pathsToBytes := NewPathsToBytes(state.BaseDir())
 		for cachedFieldType, cacheField := range state.cachedFields {
 			switch cacheField.(type) {
 			case IterableCachedField:
-				log.INFO.Printf("Serialising iterable field %s which contains %d", cachedFieldType.String(), cacheField.(IterableCachedField).Len())
+				log.INFO.Printf(
+					"Serialising iterable field %s which contains %d",
+					cachedFieldType.String(), cacheField.(IterableCachedField).Len(),
+				)
 			default:
 				log.INFO.Printf("Serialising non-iterable field %s which contains", cachedFieldType.String())
 			}
-			if err = cacheField.Serialise(filenamesToBytes); err != nil {
+			if err = cacheField.Serialise(pathsToBytes); err != nil {
 				err = errors.Wrapf(err, "could not serialise cached field %s", cachedFieldType.String())
 				return
 			}
 		}
 
 		// Finally, we write the PathsToBytes to disk
-		if err = filenamesToBytes.Write(); err != nil {
+		if err = pathsToBytes.Write(); err != nil {
 			err = errors.Wrap(err, "could not write serialised ScoutState to disk")
 		}
+		pathsToBytes = nil
 	}
 	return
 }

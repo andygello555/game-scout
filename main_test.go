@@ -19,7 +19,6 @@ import (
 	"os"
 	"sort"
 	"strconv"
-	"sync"
 	"testing"
 	"time"
 )
@@ -126,18 +125,15 @@ func TestDiscoveryBatch(t *testing.T) {
 			t.Errorf("Error occurred when creating ScoutState: %s", err.Error())
 		}
 
-		gameScrapeQueue := make(chan *scrapeStorefrontsForGameJob, len(sampleTweets)*maxGamesPerTweet)
-		gameScrapeGuard := make(chan struct{}, 4)
-		var gameScrapeWg sync.WaitGroup
-
-		// Start the scrapeStorefrontsForGameWorkers
-		for i := 0; i < 5; i++ {
-			gameScrapeWg.Add(1)
-			go scrapeStorefrontsForGameWorker(i+1, &gameScrapeWg, gameScrapeQueue, gameScrapeGuard)
-		}
+		gameScrapers := models.NewStorefrontScrapers[string](
+			globalConfig.Scrape, db.DB, 5, 4, len(sampleTweets)*maxGamesPerTweet,
+			minScrapeStorefrontsForGameWorkerWaitTime, maxScrapeStorefrontsForGameWorkerWaitTime,
+		)
+		gameScrapers.Start()
 
 		var subGameIDs mapset.Set[uuid.UUID]
-		if subGameIDs, err = DiscoveryBatch(1, sampleTweets, gameScrapeQueue, state); err != nil {
+		//if subGameIDs, err = DiscoveryBatch(1, sampleTweets, gameScrapeQueue, state); err != nil {
+		if subGameIDs, err = DiscoveryBatch(1, sampleTweets, gameScrapers, state); err != nil {
 			t.Errorf("Could not run DiscoveryBatch: %s", err.Error())
 		}
 		state.GetIterableCachedField(GameIDsType).Merge(&GameIDs{subGameIDs})
@@ -147,8 +143,7 @@ func TestDiscoveryBatch(t *testing.T) {
 		}
 
 		// Cleanup
-		close(gameScrapeQueue)
-		gameScrapeWg.Wait()
+		gameScrapers.Wait()
 		if !(*keepState) {
 			state.Delete()
 		}
@@ -277,18 +272,19 @@ func TestUpdatePhase(t *testing.T) {
 	state.GetCachedField(StateType).SetOrAdd("DiscoveryTweets", discoveryTweets)
 
 	// Then we run the UpdatePhase function
-	var gameIDs mapset.Set[uuid.UUID]
-	if gameIDs, err = UpdatePhase([]string{}, state); err != nil {
+	if err = UpdatePhase([]string{}, state); err != nil {
 		t.Errorf("Error occurred in update phase: %s", err.Error())
 	}
-	state.GetIterableCachedField(GameIDsType).Merge(&GameIDs{gameIDs})
 
 	if err = state.Save(); err != nil {
 		t.Errorf("Error occurred when saving ScoutState: %s", err.Error())
 	}
 
 	if state.GetIterableCachedField(GameIDsType).Len() < developerNo {
-		t.Errorf("There are only %d gameIDs, expected >=%d", gameIDs.Cardinality(), developerNo)
+		t.Errorf(
+			"There are only %d gameIDs, expected >=%d",
+			state.GetIterableCachedField(GameIDsType).Len(), developerNo,
+		)
 	}
 
 	if !(*keepState) {
