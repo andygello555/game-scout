@@ -109,7 +109,7 @@ func worker() (err error) {
 
 	// Start the actual client that will read from the websocket
 	websocketClientWg.Add(1)
-	go sock.WebsocketClient(c, &websocketClientWg)
+	go sock.WebsocketClient(c, &websocketClientWg, globalConfig.Scrape)
 
 	// Defer a close to the websocket connection
 	defer func(c *websocket.Conn) {

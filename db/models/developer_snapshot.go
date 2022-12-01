@@ -66,7 +66,7 @@ const (
 	TweetTimeRangeWeight               developerSnapshotWeight = -0.35
 	AverageDurationBetweenTweetsWeight developerSnapshotWeight = -0.45
 	TweetsPublicMetricsWeight          developerSnapshotWeight = 0.75
-	UserPublicMetricsWeight            developerSnapshotWeight = 0.7
+	UserPublicMetricsWeight            developerSnapshotWeight = 0.45
 	ContextAnnotationSetWeight         developerSnapshotWeight = 0.55
 	GamesWeight                        developerSnapshotWeight = -0.2
 	GameWeightedScoresSumWeight        developerSnapshotWeight = 0.8
@@ -123,44 +123,68 @@ func (wf developerSnapshotWeightedField) Weight() (w float64, inverse bool) {
 func (wf developerSnapshotWeightedField) GetValueFromWeightedModel(model WeightedModel) []float64 {
 	r := reflect.ValueOf(model)
 	f := reflect.Indirect(r).FieldByName(wf.String())
-	switch f.Interface().(type) {
-	case float64:
+	switch wf {
+	case GameWeightedScoresSum:
 		return []float64{f.Float()}
-	case int32:
-		return []float64{float64(int32(f.Int()))}
-	case NullDuration:
+	case Tweets:
+		// Tweets are clamped to 100, anymore is kinda sus within a 7-day period (this is usually against bots and AI)
+		tweets := f.Int()
+		if tweets > 100 {
+			tweets = 100
+		}
+		return []float64{float64(int32(tweets))}
+	case Games:
+		// We multiply the number of games by 1000
+		return []float64{float64(int32(f.Int())) * 1000.0}
+	case TweetTimeRange, AverageDurationBetweenTweets:
 		val := 0.0
 		duration := f.Interface().(NullDuration)
 		if duration.IsValid() {
 			val = duration.Ptr().Minutes()
 		}
-		return []float64{val}
-	case *twitter.TweetMetricsObj:
+		return []float64{val / 10000.0}
+	case TweetsPublicMetrics:
 		tweetMetricsObj := f.Interface().(*twitter.TweetMetricsObj)
 		if tweetMetricsObj != nil {
-			return []float64{
-				float64(tweetMetricsObj.Impressions),
-				float64(tweetMetricsObj.URLLinkClicks),
-				float64(tweetMetricsObj.UserProfileClicks),
-				float64(tweetMetricsObj.Likes),
-				float64(tweetMetricsObj.Replies),
-				float64(tweetMetricsObj.Retweets),
-				float64(tweetMetricsObj.Quotes),
+			// Clamp all tweet public metrics to 5000
+			metrics := make([]float64, 7)
+			for i, metric := range []int{
+				tweetMetricsObj.Impressions,
+				tweetMetricsObj.URLLinkClicks,
+				tweetMetricsObj.UserProfileClicks,
+				tweetMetricsObj.Likes,
+				tweetMetricsObj.Replies,
+				tweetMetricsObj.Retweets,
+				tweetMetricsObj.Quotes,
+			} {
+				if metric > 5000 {
+					metric = 5000
+				}
+				metrics[i] = float64(metric)
 			}
+			return metrics
 		}
 		return []float64{0.0}
-	case *twitter.UserMetricsObj:
+	case UserPublicMetrics:
 		userMetricsObj := f.Interface().(*twitter.UserMetricsObj)
 		if userMetricsObj != nil {
-			return []float64{
-				float64(userMetricsObj.Followers),
-				float64(userMetricsObj.Following),
-				float64(userMetricsObj.Tweets),
-				float64(userMetricsObj.Listed),
+			// Clamp all user public metrics to 2000
+			metrics := make([]float64, 4)
+			for i, metric := range []int{
+				userMetricsObj.Followers,
+				userMetricsObj.Following,
+				userMetricsObj.Tweets,
+				userMetricsObj.Listed,
+			} {
+				if metric > 2000 {
+					metric = 2000
+				}
+				metrics[i] = float64(metric)
 			}
+			return metrics
 		}
 		return []float64{0.0}
-	case *myTwitter.ContextAnnotationSet:
+	case ContextAnnotationSet:
 		contextAnnotationSet := f.Interface().(*myTwitter.ContextAnnotationSet)
 		if contextAnnotationSet != nil {
 			values := make([]float64, contextAnnotationSet.Cardinality())
@@ -189,6 +213,8 @@ func (wf developerSnapshotWeightedField) Fields() []WeightedField {
 		TweetsPublicMetrics,
 		UserPublicMetrics,
 		ContextAnnotationSet,
+		Games,
+		GameWeightedScoresSum,
 	}
 }
 

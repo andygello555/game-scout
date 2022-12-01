@@ -141,3 +141,37 @@ func benchmarkSteamCMDFlow(workers int, b *testing.B) {
 
 func BenchmarkSteamCMD_Flow5(b *testing.B)  { benchmarkSteamCMDFlow(5, b) }
 func BenchmarkSteamCMD_Flow10(b *testing.B) { benchmarkSteamCMDFlow(10, b) }
+
+func ExampleParseSteamDate() {
+	fmt.Println(ParseSteamDate("8 Oct, 2019"))
+	fmt.Println(ParseSteamDate("8 Oct 2019"))
+	fmt.Println(ParseSteamDate("Oct 8, 2019"))
+	fmt.Println(ParseSteamDate("8. Oct. 2019"))
+	fmt.Println(ParseSteamDate("July 2nd, 2021"))
+	fmt.Println(ParseSteamDate("July 1st, 2021"))
+	fmt.Println(ParseSteamDate("July 3rd, 2021"))
+	fmt.Println(ParseSteamDate("July 30th, 2021"))
+	fmt.Println(ParseSteamDate("Sep 2021"))
+	fmt.Println(ParseSteamDate("Q1 2021"))
+	fmt.Println(ParseSteamDate("Q2 2021"))
+	fmt.Println(ParseSteamDate("Q3 2021"))
+	fmt.Println(ParseSteamDate("Q4 2021"))
+	fmt.Println(ParseSteamDate("2022"))
+	fmt.Println(ParseSteamDate("Coming Soon"))
+	// Output:
+	// 2019-10-08 00:00:00 +0000 UTC <nil>
+	// 2019-10-08 00:00:00 +0000 UTC <nil>
+	// 2019-10-08 00:00:00 +0000 UTC <nil>
+	// 2019-10-08 00:00:00 +0000 UTC <nil>
+	// 2021-07-02 00:00:00 +0000 UTC <nil>
+	// 2021-07-01 00:00:00 +0000 UTC <nil>
+	// 2021-07-03 00:00:00 +0000 UTC <nil>
+	// 2021-07-30 00:00:00 +0000 UTC <nil>
+	// 2021-09-01 00:00:00 +0000 UTC <nil>
+	// 2021-01-01 00:00:00 +0000 UTC <nil>
+	// 2021-04-01 00:00:00 +0000 UTC <nil>
+	// 2021-07-01 00:00:00 +0000 UTC <nil>
+	// 2021-10-01 00:00:00 +0000 UTC <nil>
+	// 2022-01-01 00:00:00 +0000 UTC <nil>
+	// 0001-01-01 00:00:00 +0000 UTC could not parse Coming Soon using DayShortMonthYear: parsing time "Coming Soon" as "2 Jan, 2006": cannot parse "Coming Soon" as "2"; could not parse Coming Soon using DayShortMonthYearNoCommas: parsing time "Coming Soon" as "2 Jan 2006": cannot parse "Coming Soon" as "2"; could not parse Coming Soon using ShortMonthDayYear: parsing time "Coming Soon" as "Jan 2, 2006": cannot parse "Coming Soon" as "Jan"; could not parse Coming Soon using DayShortMonthYearDots: parsing time "Coming Soon" as "2. Jan. 2006": cannot parse "Coming Soon" as "2"; could not parse Coming Soon using MonthDayNdOrdYear: parsing time "Coming Soon" as "January 2nd, 2006": cannot parse "Coming Soon" as "January"; could not parse Coming Soon using MonthDayRdOrdYear: parsing time "Coming Soon" as "January 2rd, 2006": cannot parse "Coming Soon" as "January"; could not parse Coming Soon using MonthDayStOrdYear: parsing time "Coming Soon" as "January 2st, 2006": cannot parse "Coming Soon" as "January"; could not parse Coming Soon using MonthDayThOrdYear: parsing time "Coming Soon" as "January 2th, 2006": cannot parse "Coming Soon" as "January"; could not parse Coming Soon using ShortMonthYear: parsing time "Coming Soon" as "Jan 2006": cannot parse "Coming Soon" as "Jan"; could not parse Coming Soon using QuarterYear: parsing time "Coming Soon" as "Q2 2006": cannot parse "Coming Soon" as "Q"; could not parse Coming Soon using Year: parsing time "Coming Soon" as "2006": cannot parse "Coming Soon" as "2006"
+}

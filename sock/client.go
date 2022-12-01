@@ -3,8 +3,19 @@ package sock
 import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
+	"github.com/andygello555/game-scout/db"
+	"github.com/andygello555/game-scout/db/models"
 	"github.com/gorilla/websocket"
 	"sync"
+	"time"
+)
+
+const (
+	maxStorefrontScrapersWorkers           = 10
+	maxConcurrentStorefrontScrapersWorkers = 9
+	maxStorefrontScraperJobs               = 2048
+	minStorefrontScraperWaitTime           = time.Millisecond * 100
+	maxStorefrontScraperWaitTime           = time.Millisecond * 500
 )
 
 type WebsocketMessageType string
@@ -35,7 +46,14 @@ Type: %s
 `, wsm.Users, wsm.ChangeNumber, wsm.Apps, wsm.Packages, wsm.Type.String())
 }
 
-func WebsocketClient(c *websocket.Conn, wg *sync.WaitGroup) {
+func WebsocketClient(c *websocket.Conn, wg *sync.WaitGroup, config models.ScrapeConfig) {
+	gameScrapers := models.NewStorefrontScrapers[uint64](
+		config, db.DB, maxStorefrontScrapersWorkers, maxConcurrentStorefrontScrapersWorkers,
+		maxStorefrontScraperJobs, minStorefrontScraperWaitTime, maxStorefrontScraperWaitTime,
+	)
+	gameScrapers.Start()
+
+	defer gameScrapers.Wait()
 	defer wg.Done()
 	for {
 		var msg WebsocketMessage

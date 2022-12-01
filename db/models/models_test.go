@@ -4,6 +4,7 @@ import (
 	mapset "github.com/deckarep/golang-set/v2"
 	"strconv"
 	"testing"
+	"time"
 )
 
 // We setup fake types that implement the TagConfig, StorefrontConfig, and ScrapeConfig.
@@ -69,6 +70,7 @@ func TestScrapeStorefrontsForGameWrapper(t *testing.T) {
 		expectedWebsite           string
 		expectedPublisher         string
 		expectedDeveloperVerified bool
+		expectedReleaseDate       time.Time
 		gameModel                 GameModel[string]
 		storefrontMapping         map[Storefront]mapset.Set[string]
 		fail                      bool
@@ -80,11 +82,26 @@ func TestScrapeStorefrontsForGameWrapper(t *testing.T) {
 			expectedWebsite:           "https://store.steampowered.com/app/477160",
 			expectedPublisher:         "Curve Games",
 			expectedDeveloperVerified: true,
+			expectedReleaseDate:       time.Unix(1469206680, 0),
 			gameModel:                 &Game{Developer: &Developer{Username: "curvegames"}},
 			storefrontMapping: map[Storefront]mapset.Set[string]{
 				SteamStorefront: mapset.NewThreadUnsafeSet[string](
 					"https://store.steampowered.com/app/477160",
 					"https://store.steampowered.com/app/477160/Human_Fall_Flat/",
+				),
+			},
+		},
+		{
+			expectedName:              "Human: Fall Flat",
+			expectedStorefront:        SteamStorefront,
+			expectedWebsite:           "https://store.steampowered.com/app/477160",
+			expectedPublisher:         "Curve Games",
+			expectedDeveloperVerified: false,
+			expectedReleaseDate:       time.Unix(1469206680, 0),
+			gameModel:                 &Game{},
+			storefrontMapping: map[Storefront]mapset.Set[string]{
+				SteamStorefront: mapset.NewThreadUnsafeSet[string](
+					"https://store.steampowered.com/app/477160",
 				),
 			},
 		},
@@ -116,6 +133,7 @@ func TestScrapeStorefrontsForGameWrapper(t *testing.T) {
 				{"website", gameModel.(*Game).Website.String, test.expectedWebsite},
 				{"publisher", gameModel.(*Game).Publisher.String, test.expectedPublisher},
 				{"developer_verified", strconv.FormatBool(gameModel.(*Game).DeveloperVerified), strconv.FormatBool(test.expectedDeveloperVerified)},
+				{"release_date", gameModel.(*Game).ReleaseDate.Time.String(), test.expectedReleaseDate.String()},
 			} {
 				if check.actual != check.expected {
 					t.Errorf("%s: \"%s\" is not equal to \"%s\" on test no. %d", check.name, check.actual, check.expected, i)

@@ -783,7 +783,7 @@ func (state *ScoutState) Save() (err error) {
 					cachedFieldType.String(), cacheField.(IterableCachedField).Len(),
 				)
 			default:
-				log.INFO.Printf("Serialising non-iterable field %s which contains", cachedFieldType.String())
+				log.INFO.Printf("Serialising non-iterable field %s: %v", cachedFieldType.String(), cacheField)
 			}
 			if err = cacheField.Serialise(pathsToBytes); err != nil {
 				err = errors.Wrapf(err, "could not serialise cached field %s", cachedFieldType.String())

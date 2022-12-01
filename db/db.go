@@ -160,7 +160,11 @@ func UpdateComputedFieldsForModels(modelNames ...string) (err error) {
 		}
 	}()
 
-	const pageSize = 100
+	const (
+		pageSize    = 100
+		pageWorkers = 20
+	)
+
 	for i, modelName := range modelNames {
 		model := models[modelName]
 		if _, ok := model.Model.(ComputedFieldsModel); ok {
@@ -170,48 +174,55 @@ func UpdateComputedFieldsForModels(modelNames ...string) (err error) {
 			}
 			if count > 0 {
 				log.INFO.Printf("\t%d: Updating computed fields for %s, %d rows", i+1, modelName, count)
-				var wg sync.WaitGroup
 				pages := int(math.Ceil(float64(count) / float64(pageSize)))
-				wg.Add(pages)
-				for page := 0; page < pages; page++ {
-					// We start a new goroutine for each page to handle the rows for that page
-					go func(page int, model *DBModel) {
+
+				var wg sync.WaitGroup
+				jobs := make(chan int, pages)
+
+				// Start workers that will update pages of the current model
+				for w := 0; w < pageWorkers; w++ {
+					wg.Add(1)
+					go func() {
 						defer wg.Done()
-						var err error
-						var rows *sql.Rows
+						for job := range jobs {
+							var workerErr error
+							var rows *sql.Rows
 
-						// We find the rows with the limit and the offset for the page
-						if rows, err = DB.Model(model.Model).Limit(pageSize).Offset(page * pageSize).Rows(); err != nil {
-							panic(err)
-						}
+							// We find the rows with the limit and the offset for the page
+							if rows, workerErr = DB.Model(model.Model).Limit(pageSize).Offset(job * pageSize).Rows(); workerErr != nil {
+								panic(workerErr)
+							}
 
-						// We defer a function to close the rows and panic on any errors
-						defer func(rows *sql.Rows) {
+							for rows.Next() {
+								// For each row we will scan the row into an empty instance of the ComputedFieldsModel.
+								instance := model.Model.(ComputedFieldsModel).Empty()
+								if workerErr = DB.ScanRows(rows, instance); workerErr != nil {
+									panic(workerErr)
+								}
+
+								// We then assert the instance to a ComputedFieldsModel and call the UpdateComputedFields
+								// method.
+								if workerErr = instance.(ComputedFieldsModel).UpdateComputedFields(DB); workerErr != nil {
+									panic(workerErr)
+								}
+
+								// Finally, save the instance
+								DB.Save(instance)
+							}
 							if err := rows.Close(); err != nil {
 								panic(err)
 							}
-						}(rows)
-
-						for rows.Next() {
-							// For each row we will scan the row into an empty instance of the ComputedFieldsModel.
-							instance := model.Model.(ComputedFieldsModel).Empty()
-							if err = DB.ScanRows(rows, instance); err != nil {
-								panic(err)
-							}
-
-							// We then assert the instance to a ComputedFieldsModel and call the UpdateComputedFields
-							// method.
-							if err = instance.(ComputedFieldsModel).UpdateComputedFields(DB); err != nil {
-								panic(err)
-							}
-
-							// Finally, save the instance
-							DB.Save(instance)
 						}
-					}(page, model)
+					}()
+				}
+
+				// Queue up all the pages to the workers
+				for page := 0; page < pages; page++ {
+					jobs <- page
 				}
 
 				// Wait for each goroutine for each page to finish
+				close(jobs)
 				wg.Wait()
 			} else {
 				log.INFO.Printf("\t%d: %s has no rows. Skipping", i+1, modelName)
