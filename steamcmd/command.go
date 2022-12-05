@@ -62,6 +62,9 @@ func (at ArgType) DefaultSerialiser(value any) string {
 		case int, int8, int16, int32, int64:
 			v := reflect.ValueOf(value)
 			return strconv.Itoa(int(v.Int()))
+		case uint, uint8, uint16, uint32, uint64:
+			v := reflect.ValueOf(value)
+			return strconv.Itoa(int(v.Uint()))
 		case float32, float64:
 			v := reflect.ValueOf(value)
 			return fmt.Sprintf("%f", v.Float())
@@ -83,7 +86,7 @@ func (at ArgType) DefaultValidator(value any) bool {
 	switch at {
 	case Number:
 		switch value.(type) {
-		case int, int8, int16, int32, int64, float32, float64:
+		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
 			return true
 		default:
 			return false

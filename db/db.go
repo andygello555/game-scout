@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	myModels "github.com/andygello555/game-scout/db/models"
+	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/pkg/errors"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm/schema"
 	"math"
 	"reflect"
@@ -89,6 +91,11 @@ type ComputedFieldsModel interface {
 	// Empty returns a pointer to an empty instance of the ComputedFieldsModel that can be used as the output for
 	// gorm.DB.ScanRows for instance.
 	Empty() any
+}
+
+type Upsertable interface {
+	OnConflict() clause.OnConflict
+	OnCreateOmit() []string
 }
 
 // Open and initialise the DB global variable and run AutoMigrate for all the registered models.
@@ -231,6 +238,38 @@ func UpdateComputedFieldsForModels(modelNames ...string) (err error) {
 			log.INFO.Printf("\t%d: %s is not a ComputedFieldsModel. Skipping...", i+1, modelName)
 		}
 	}
+	return
+}
+
+// Upsert will upsert the given Upsertable value in the current DB.
+func Upsert(value Upsertable) (created bool, err error) {
+	created = false
+	// First we do a null check
+	var updateOrCreate *gorm.DB
+	if value == nil || (reflect.ValueOf(value).Kind() == reflect.Ptr && reflect.ValueOf(value).IsNil()) {
+		return
+	}
+
+	// Then we construct the upsert clause
+	onConflict := value.OnConflict()
+	onConflict.DoUpdates = clause.AssignmentColumns(GetModel(value).ColumnDBNamesExcluding("id"))
+	if updateOrCreate = DB.Clauses(onConflict); updateOrCreate.Error != nil {
+		err = myErrors.TemporaryWrapf(
+			false,
+			updateOrCreate.Error,
+			"could not create update or create clause for %s",
+			reflect.TypeOf(value).Elem().Name(),
+		)
+		return
+	}
+
+	// Finally, we create the model instance, omitting any fields that should be omitted
+	if after := updateOrCreate.Omit(value.OnCreateOmit()...).Create(value); after.Error != nil {
+		err = errors.Wrapf(after.Error, "could not upsert %s", reflect.TypeOf(value).Elem().Name())
+		return
+	}
+	log.INFO.Printf("Upserted %s", reflect.TypeOf(value).Elem().Name())
+	created = true
 	return
 }
 

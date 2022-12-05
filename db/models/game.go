@@ -82,7 +82,7 @@ const (
 	GameTotalReviewsWeight      gameWeight = -0.75
 	GameReviewScoreWeight       gameWeight = 0.65
 	GameTotalUpvotesWeight      gameWeight = 0.45
-	GameTotalDownvotesWeight    gameWeight = -0.35
+	GameTotalDownvotesWeight    gameWeight = 0.25
 	GameTotalCommentsWeight     gameWeight = 0.35
 	GameTagScoreWeight          gameWeight = 0.25
 	GameUpdatesWeight           gameWeight = -0.15
@@ -176,7 +176,7 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 		nullInt32 := f.Interface().(null.Int32)
 		var val float64
 		if nullInt32.IsValid() {
-			val = float64(*nullInt32.Ptr())
+			val = float64(*nullInt32.Ptr()) * 2
 		}
 		return []float64{val}
 	case GameTagScore:
@@ -204,7 +204,7 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 			// months.
 			timeDiff := nullTime.Time.Sub(time.Now().UTC()) - time.Hour*24*30
 			if timeDiff.Abs() > time.Hour*24*30*5 {
-				timeDiff = time.Hour * 24 * 30 * 5
+				timeDiff = map[bool]time.Duration{true: -1, false: 1}[timeDiff < 0] * time.Hour * 24 * 30 * 5
 			}
 			val = timeDiff.Hours()
 		}
@@ -389,7 +389,11 @@ func (g *GameSteamStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, minD
 		// Game. However, it sometimes does not appear for unreleased games. In cases where it doesn't appear we will
 		// skip over it rather than retry the flow.
 		if appReleaseDate, ok = appDetails["steam_release_date"].(string); !ok {
-			log.WARNING.Printf("Cannot find \"steam_release_date\" key in common details for %v. Unreleased?", appID)
+			log.WARNING.Printf(
+				"Cannot find \"steam_release_date\" key in common details for %v. Unreleased? Further info to come "+
+					"in ScrapeExtra",
+				appID,
+			)
 		} else {
 			// Parse the release date timestamp to an int and then convert it to a time using time.Unix
 			if appReleaseDateInt, err = strconv.ParseInt(appReleaseDate, 10, 64); err != nil {
@@ -680,7 +684,7 @@ func (g *GameSteamStorefront) ScrapeExtra(config ScrapeConfig, maxTries int, min
 
 			if !g.Game.ReleaseDate.IsValid() {
 				if date := doc.Find("div", "class", "date"); date.Error != nil {
-					log.WARNING.Printf("Could not find release date on store page for %d: %v", appID, err.Error())
+					log.WARNING.Printf("Could not find release date on store page for %d: %v", appID, date.Error.Error())
 				} else {
 					releaseDateString := strings.TrimSpace(date.Text())
 					var releaseDate time.Time

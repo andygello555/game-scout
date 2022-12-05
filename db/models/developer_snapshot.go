@@ -22,6 +22,9 @@ type DeveloperSnapshot struct {
 	CreatedAt time.Time
 	// Version is the number of this snapshot out of the set of all DeveloperSnapshot for this Developer.
 	Version int32
+	// TimesHighlighted is the number of times the Developer for this DeveloperSnapshot has been highlighted by the
+	// Measure phase.
+	TimesHighlighted int32
 	// DeveloperID is the foreign key to the Developer this snapshot is for.
 	DeveloperID string
 	Developer   *Developer `gorm:"constraint:OnDelete:CASCADE;"`
@@ -70,6 +73,7 @@ const (
 	ContextAnnotationSetWeight         developerSnapshotWeight = 0.55
 	GamesWeight                        developerSnapshotWeight = -0.2
 	GameWeightedScoresSumWeight        developerSnapshotWeight = 0.8
+	TimesHighlightedWeight             developerSnapshotWeight = 0.9
 )
 
 // developerSnapshotWeightedField represents a field that can have a weighting calculation applied to it in
@@ -85,6 +89,7 @@ const (
 	ContextAnnotationSet         developerSnapshotWeightedField = "ContextAnnotationSet"
 	Games                        developerSnapshotWeightedField = "Games"
 	GameWeightedScoresSum        developerSnapshotWeightedField = "GameWeightedScoresSum"
+	TimesHighlighted             developerSnapshotWeightedField = "TimesHighlighted"
 )
 
 // String returns the string value of the developerSnapshotWeightedField.
@@ -110,6 +115,8 @@ func (wf developerSnapshotWeightedField) Weight() (w float64, inverse bool) {
 		w = float64(GamesWeight)
 	case GameWeightedScoresSum:
 		w = float64(GameWeightedScoresSumWeight)
+	case TimesHighlighted:
+		w = float64(TimesHighlightedWeight)
 	default:
 		panic(fmt.Errorf("\"%s\" is not a developerSnapshotWeightedField", wf))
 	}
@@ -197,6 +204,10 @@ func (wf developerSnapshotWeightedField) GetValueFromWeightedModel(model Weighte
 			return values
 		}
 		return []float64{0.0}
+	case TimesHighlighted:
+		// TimesHighlighted is turned into a negative number that is in the thousands, we really don't want highlighted
+		// developers to come up again.
+		return []float64{float64(f.Int()) * -1000.0}
 	default:
 		panic(fmt.Errorf(
 			"developerSnapshotWeightedField has type %s, and cannot be converted to []float64",
@@ -215,6 +226,7 @@ func (wf developerSnapshotWeightedField) Fields() []WeightedField {
 		ContextAnnotationSet,
 		Games,
 		GameWeightedScoresSum,
+		TimesHighlighted,
 	}
 }
 

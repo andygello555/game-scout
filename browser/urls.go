@@ -27,6 +27,8 @@ const (
 	SteamAppReviews ScrapeURL = "%s://store.steampowered.com/appreviews/%d?json=1&cursor=%s&language=%s&day_range=9223372036854775807&num_per_page=%d&review_type=all&purchase_type=%s&filter=%s&start_date=%d&end_date=%d&date_range_type=%s"
 	// SteamCommunityPosts fetches a JSON object of the required number of community posts by the partner (publisher).
 	SteamCommunityPosts ScrapeURL = "%s://store.steampowered.com/events/ajaxgetadjacentpartnerevents/?appid=%d&count_before=%d&count_after=%d&gidevent=%s&gidannouncement=%s&lang_list=0&origin=https://steamcommunity.com"
+	// SteamGetAppList fetches a JSON object of all the names and IDs of the current apps on Steam.
+	SteamGetAppList ScrapeURL = "%s://api.steampowered.com/ISteamApps/GetAppList/v2/"
 	// SteamSpyAppDetails is the URL for the app details API from Steamspy. Can fetch the details, in JSON, for the
 	// given appid.
 	SteamSpyAppDetails ScrapeURL = "%s://steamspy.com/api.php?request=appdetails&appid=%d"
@@ -43,6 +45,8 @@ func (su ScrapeURL) Name() string {
 		return "SteamAppReviews"
 	case SteamCommunityPosts:
 		return "SteamCommunityPosts"
+	case SteamGetAppList:
+		return "SteamGetAppList"
 	case SteamSpyAppDetails:
 		return "SteamSpyAppDetails"
 	default:
@@ -124,7 +128,7 @@ func (su ScrapeURL) Soup(args ...any) (*soup.Root, error) {
 // before the function is retried it will sleep for (maxTries + 1 - currentTries) * minDelay.
 func (su ScrapeURL) RetrySoup(maxTries int, minDelay time.Duration, try func(doc *soup.Root) error, args ...any) error {
 	return myErrors.Retry(maxTries, minDelay, func(currentTry int, maxTries int, minDelay time.Duration, args ...any) (err error) {
-		log.INFO.Printf("RetryJSON(%s, %v) is on try %d/%d", su.Name(), args, currentTry, maxTries)
+		log.INFO.Printf("RetrySoup(%s, %v) is on try %d/%d", su.Name(), args, currentTry, maxTries)
 		var doc *soup.Root
 		if doc, err = su.Soup(args...); err != nil {
 			return errors.Wrapf(err, "ran out of tries (%d total) whilst requesting Soup for %s", maxTries, su.String())

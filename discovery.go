@@ -12,9 +12,6 @@ import (
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
-	"reflect"
 	"time"
 )
 
@@ -172,48 +169,6 @@ func DiscoveryBatch(
 	state *ScoutState,
 ) (gameIDs mapset.Set[uuid.UUID], err error) {
 	logPrefix := fmt.Sprintf("DiscoveryBatch %d: ", batchNo)
-	updateOrCreateModel := func(value any) (created bool) {
-		created = false
-		// First we do a null check
-		var updateOrCreate *gorm.DB
-		switch value.(type) {
-		case *models.Game:
-			if value.(*models.Game) == nil {
-				return
-			}
-		case *models.Developer:
-			if value.(*models.Developer) == nil {
-				return
-			}
-		}
-
-		type upsertable interface {
-			OnConflict() clause.OnConflict
-			OnCreateOmit() []string
-		}
-		// Then we construct the upsert clause
-		onConflict := value.(upsertable).OnConflict()
-		onConflict.DoUpdates = clause.AssignmentColumns(db.GetModel(value).ColumnDBNamesExcluding("id"))
-		if updateOrCreate = db.DB.Clauses(onConflict); updateOrCreate.Error != nil {
-			err = myErrors.TemporaryWrapf(
-				false,
-				updateOrCreate.Error,
-				"could not create update or create clause for %s",
-				reflect.TypeOf(value).Elem().Name(),
-			)
-			return
-		}
-
-		// Finally, we create the model instance, omitting any fields that should be omitted
-		if after := updateOrCreate.Omit(value.(upsertable).OnCreateOmit()...).Create(value); after.Error != nil {
-			err = after.Error
-			return
-		}
-		log.INFO.Printf("%screated %s", logPrefix, reflect.TypeOf(value).Elem().Name())
-		created = true
-		return
-	}
-
 	log.INFO.Printf("Starting DiscoveryBatch no. %d", batchNo)
 
 	// Create the job and result channels for the transformTweetWorkers
@@ -250,13 +205,18 @@ func DiscoveryBatch(
 			if _, ok := state.GetIterableCachedField(DeveloperSnapshotsType).Get(result.developer.ID); !ok {
 				// Create/update the developer if a developer snapshot for it hasn't been added yet
 				log.INFO.Printf("%sthis is the first time we have seen developer: %s (%s)", logPrefix, result.developer.Username, result.developer.ID)
-				updateOrCreateModel(result.developer)
+				_, err = db.Upsert(result.developer)
 			}
 
 			// Create the game
-			if created := updateOrCreateModel(result.game); created {
+			var (
+				created bool
+				gameErr error
+			)
+			if created, gameErr = db.Upsert(result.game); created {
 				gameIDs.Add(result.game.ID)
 			}
+			err = myErrors.MergeErrors(err, gameErr)
 			if err != nil {
 				return gameIDs, myErrors.TemporaryWrap(false, err, "could not insert either Developer or Game into DB")
 			}

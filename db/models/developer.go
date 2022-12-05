@@ -25,6 +25,8 @@ type Developer struct {
 	PublicMetrics *twitter.UserMetricsObj `gorm:"embedded;embeddedPrefix:current_"`
 	// UpdatedAt is when this developer was updated. So we know up until when the PublicMetrics are fresh to.
 	UpdatedAt time.Time
+	// TimesHighlighted is the number of times this Developer has been highlighted by the Measure phase.
+	TimesHighlighted int32
 	// Disabled represents whether this Developer should be included in the Update phase of the Scout procedure.
 	Disabled bool
 }

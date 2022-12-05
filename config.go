@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"github.com/andygello555/game-scout/db/models"
 	task "github.com/andygello555/game-scout/tasks"
 	"github.com/pkg/errors"
@@ -71,12 +72,13 @@ func (c *TaskConfig) TasksResultBackend() string   { return c.ResultBackend }
 func (c *TaskConfig) TasksRedis() task.RedisConfig { return c.Redis }
 
 type TwitterConfig struct {
-	APIKey       string   `json:"api_key"`
-	APIKeySecret string   `json:"api_key_secret"`
-	BearerToken  string   `json:"bearer_token"`
-	Username     string   `json:"username"`
-	Password     string   `json:"password"`
-	Hashtags     []string `json:"hashtags"`
+	APIKey              string   `json:"api_key"`
+	APIKeySecret        string   `json:"api_key_secret"`
+	BearerToken         string   `json:"bearer_token"`
+	Username            string   `json:"username"`
+	Password            string   `json:"password"`
+	Hashtags            []string `json:"hashtags"`
+	BlacklistedHashtags []string `json:"blacklisted_hashtags"`
 }
 
 func (c *TwitterConfig) TwitterAPIKey() string       { return c.APIKey }
@@ -86,14 +88,20 @@ func (c *TwitterConfig) TwitterUsername() string     { return c.Username }
 func (c *TwitterConfig) TwitterPassword() string     { return c.Password }
 func (c *TwitterConfig) TwitterHashtags() []string   { return c.Hashtags }
 
-// TwitterQuery constructs a query from the Hashtags array by first prefixing each hashtag with a hash ("#"), then joining
-// the list with the " OR " separator.
+// TwitterQuery constructs a query from the Hashtags array and the BlacklistedHashtags array by first prefixing each
+// hashtag with a hash ("#") and each blacklisted hashtag with "-#", then joining them with the " OR " separator.
 func (c *TwitterConfig) TwitterQuery() string {
 	hashtags := make([]string, len(c.Hashtags))
 	for i, hashtag := range c.Hashtags {
 		hashtags[i] = "#" + hashtag
 	}
-	return strings.Join(hashtags, " OR ")
+	query := strings.Join(hashtags, " OR ")
+
+	hashtags = make([]string, len(c.BlacklistedHashtags))
+	for i, blacklistedHashtag := range c.BlacklistedHashtags {
+		hashtags[i] = "-#" + blacklistedHashtag
+	}
+	return fmt.Sprintf("%s (%s)", query, strings.Join(hashtags, " OR "))
 }
 
 type TagConfig struct {

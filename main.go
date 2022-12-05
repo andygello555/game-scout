@@ -400,7 +400,10 @@ func main() {
 			},
 			Usage: "scrape the Steam game with the given appid",
 			Action: func(c *cli.Context) (err error) {
-				game := &models.Game{Website: null.StringFrom(browser.SteamAppPage.Fill(c.Int("appid")))}
+				game := &models.Game{
+					Storefront: models.SteamStorefront,
+					Website:    null.StringFrom(browser.SteamAppPage.Fill(c.Int("appid"))),
+				}
 				if err = game.Update(db.DB, globalConfig.Scrape); err != nil {
 					return cli.NewExitError(err.Error(), 1)
 				}

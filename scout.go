@@ -191,6 +191,12 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 			snapshots := snapshotsAny.([]*models.DeveloperSnapshot)
 			userTweetTimes := userTweetTimesAny.([]time.Time)
 
+			// Find the developer so that we can set the TimesHighlighted field appropriately
+			developer := models.Developer{}
+			if err = db.DB.Find(&developer, id).Error; err != nil {
+				log.ERROR.Printf("Could not find developer %s in the DB, TimesHighlighted will be set to 0", id)
+			}
+
 			aggregatedSnap := &models.DeveloperSnapshot{
 				DeveloperID:                  id,
 				Tweets:                       int32(len(userTweetTimes)),
@@ -200,6 +206,7 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 				TweetsPublicMetrics:          &twitter.TweetMetricsObj{},
 				UserPublicMetrics:            &twitter.UserMetricsObj{},
 				ContextAnnotationSet:         myTwitter.NewContextAnnotationSet(),
+				TimesHighlighted:             developer.TimesHighlighted,
 			}
 
 			// If we have more than one tweet, then we will calculate TweetTimeRange, and AverageDurationBetweenTweets
