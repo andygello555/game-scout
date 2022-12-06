@@ -8,7 +8,6 @@ import (
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/RichardKnop/machinery/v1/tasks"
 	myErrors "github.com/andygello555/game-scout/errors"
-	"github.com/andygello555/game-scout/sock"
 	task "github.com/andygello555/game-scout/tasks"
 	"github.com/gorilla/websocket"
 	"github.com/pkg/errors"
@@ -109,7 +108,7 @@ func worker() (err error) {
 
 	// Start the actual client that will read from the websocket
 	websocketClientWg.Add(1)
-	go sock.SteamAppWebsocketScraper(c, &websocketClientWg, globalConfig.Scrape)
+	go SteamAppWebsocketScraper(c, &websocketClientWg, globalConfig.Scrape)
 
 	// Defer a close to the websocket connection
 	defer func(c *websocket.Conn) {

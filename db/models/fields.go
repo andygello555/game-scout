@@ -61,12 +61,18 @@ type WeightedField interface {
 	Fields() []WeightedField
 }
 
+// ScaleRange scales a value x, that is between xMin and xMax, to be between yMin and yMax.
+func ScaleRange(x, xMin, xMax, yMin, yMax float64) float64 {
+	return (x-xMin)/(xMax-xMin)*(yMax-yMin) + yMin
+}
+
 func CalculateWeightedScore(model WeightedModel, singleField WeightedField) float64 {
 	weightSum := 0.0
 	weightFactorSum := 0.0
 	// For each weighted field we will fetch its float64 values, sum these values, then calculate the weighted value using
 	// the weight factor retrieved from the WeightedField.
 	for _, field := range singleField.Fields() {
+		//log.WARNING.Printf("Calculating weighted value for %s.%s", reflect.TypeOf(model).Elem().String(), field.String())
 		weightFactor, inverse := field.Weight()
 		weightFactorSum += weightFactor
 		valueSum := 0.0
@@ -77,9 +83,12 @@ func CalculateWeightedScore(model WeightedModel, singleField WeightedField) floa
 		if inverse && valueSum != 0.0 {
 			valueSum = 1 / valueSum
 		}
+		//log.WARNING.Printf("\tValue of %s = %f, inverse = %t", field.String(), valueSum, inverse)
 		//fmt.Printf("field: %s, value: %f, factor: %f, weightedValue: %f, sum: %f\n", field.String(), valueSum, weightFactor, valueSum*weightFactor, weightSum)
 		// Then we calculate the weighted value and add it to the sum of the weighted values
 		weightSum += valueSum * weightFactor
+		//log.WARNING.Printf("\tWeighted value of %s = %f, weightSum = %f", field.String(), valueSum*weightFactor, weightSum)
 	}
+	//log.WARNING.Printf("Weighted score for %s = %f", reflect.TypeOf(model).Elem().String(), weightSum/weightFactorSum)
 	return weightSum / weightFactorSum
 }

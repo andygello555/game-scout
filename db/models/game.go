@@ -165,7 +165,7 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 		nullInt32 := f.Interface().(null.Int32)
 		var val float64
 		if nullInt32.IsValid() {
-			valInt := *nullInt32.Ptr()
+			valInt := (*nullInt32.Ptr()) + 1
 			if valInt > 5000 {
 				valInt = 5000
 			}
@@ -187,7 +187,7 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 		}
 		return []float64{val}
 	case GameUpdates:
-		return []float64{float64(f.Uint()) / 1500.0}
+		return []float64{float64(f.Uint()+1) / 1500.0}
 	case GameDeveloperVerified:
 		val := -7000.0
 		if f.Bool() {
@@ -556,7 +556,7 @@ func (g *GameSteamStorefront) ScrapeTags(config ScrapeConfig, maxTries int, minD
 		// We fall back to SteamSpy for fetching the game's name and publisher if we haven't got them yet
 		if !g.Game.Name.IsValid() && !g.Game.Publisher.IsValid() {
 			log.INFO.Printf(
-				"We have not yet found the name and publisher for appID %d, falling back to SteamSpy",
+				"We have not yet found the name or publisher for appID %d, falling back to SteamSpy",
 				appID,
 			)
 			if name, ok := jsonBody["name"]; ok {

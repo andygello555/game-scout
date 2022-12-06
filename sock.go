@@ -1,4 +1,4 @@
-package sock
+package main
 
 import (
 	"fmt"
@@ -7,6 +7,8 @@ import (
 	"github.com/andygello555/game-scout/db/models"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/gorilla/websocket"
+	"github.com/pkg/errors"
+	"gorm.io/gorm"
 	"strconv"
 	"sync"
 	"time"
@@ -49,6 +51,51 @@ Type: %s
 `, wsm.Users, wsm.ChangeNumber, wsm.Apps, wsm.Packages, wsm.Type.String())
 }
 
+// steamAppWebsocketConsumer is the worker procedure that is used within the SteamAppWebsocketScraper client to consume
+// the scraped models.SteamApp. Once it has received a SteamApp, it will try and find whether the models.Developer for
+// the models.SteamApp exists in the DB to be linked to it. Finally, the models.SteamApp will be upserted into the DB.
+func steamAppWebsocketConsumer(wg *sync.WaitGroup, jobs chan (<-chan models.GameModel[uint64])) {
+	defer wg.Done()
+	for job := range jobs {
+		// Wait for the scrape to have finished...
+		app := (<-job).(*models.SteamApp)
+
+		if app.Developer != nil {
+			// If the developer is set in the SteamApp, then we will search for the Developer in the DB to see if we can
+			// link it to a developer that we are tracking
+			if err := db.DB.Find(
+				app.Developer,
+				"username = ?",
+				app.Developer.Username,
+			).Error; err == nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				log.INFO.Printf("Found Twitter user %s (%s)")
+				app.DeveloperID = &app.Developer.ID
+			} else if err != nil && errors.Is(err, gorm.ErrRecordNotFound) {
+				log.INFO.Printf(
+					"Could not find Twitter user %s in DB for SteamApp %s (%d), so we are skipping linking this developer",
+					app.Developer.Username, app.Name, app.ID,
+				)
+				app.DeveloperID = nil
+				app.Developer = nil
+			} else {
+				log.ERROR.Printf(
+					"Error occurred whilst trying to find Twitter user %s in DB for SteamApp %s (%d): %v",
+					app.Developer.Username, app.Name, app.ID, err,
+				)
+				app.DeveloperID = nil
+				app.Developer = nil
+			}
+		}
+
+		// Finally, upsert the SteamApp
+		if created, err := db.Upsert(app); err != nil {
+			log.ERROR.Printf("Could not upsert SteamApp %d: %v", app.ID, err)
+		} else {
+			log.INFO.Printf("Scraped and upserted SteamApp %d: created = %t", app.ID, created)
+		}
+	}
+}
+
 func SteamAppWebsocketScraper(c *websocket.Conn, wg *sync.WaitGroup, config models.ScrapeConfig) {
 	gameScrapers := models.NewStorefrontScrapers[uint64](
 		config, db.DB, maxStorefrontScrapersWorkers, maxConcurrentStorefrontScrapersWorkers,
@@ -60,30 +107,7 @@ func SteamAppWebsocketScraper(c *websocket.Conn, wg *sync.WaitGroup, config mode
 	var consumerWg sync.WaitGroup
 	for w := 0; w < gameScrapeConsumers; w++ {
 		consumerWg.Add(1)
-		go func() {
-			defer consumerWg.Done()
-			for job := range consumerJobs {
-				app := (<-job).(*models.SteamApp)
-				if created, err := db.Upsert(app.Developer); err != nil {
-					log.ERROR.Printf(
-						"Could not upsert Developer %s (%s) for SteamApp %d",
-						app.Developer.Username, app.Developer.ID, app.ID,
-					)
-				} else {
-					log.INFO.Printf(
-						"Upserted Developer %s (%s) for SteamApp %d: created = %t",
-						app.Developer.Username, app.Developer.ID, created,
-					)
-				}
-				app.Developer = nil
-
-				if created, err := db.Upsert(app); err != nil {
-					log.ERROR.Printf("Could not upsert SteamApp %d: %v", app.ID, err)
-				} else {
-					log.INFO.Printf("Scraped and upserted SteamApp %d: created = %t", app.ID, created)
-				}
-			}
-		}()
+		go steamAppWebsocketConsumer(&consumerWg, consumerJobs)
 	}
 
 	defer gameScrapers.Wait()

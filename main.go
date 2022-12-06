@@ -22,19 +22,20 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 )
 
 var (
-	app *cli.App
+	cliApp *cli.App
 )
 
 func init() {
 	// Initialise a CLI app
-	app = cli.NewApp()
-	app.Name = "game-scout"
-	app.Usage = "the game-scout worker"
-	app.Version = "0.0.0"
+	cliApp = cli.NewApp()
+	cliApp.Name = "game-scout"
+	cliApp.Usage = "the game-scout worker"
+	cliApp.Version = "0.0.0"
 	if err := LoadConfig(); err != nil {
 		panic(err)
 	}
@@ -73,7 +74,7 @@ func main() {
 	}
 
 	// Set the CLI app commands
-	app.Commands = []cli.Command{
+	cliApp.Commands = []cli.Command{
 		{
 			Name:  "worker",
 			Usage: "launch game-scout worker",
@@ -392,22 +393,46 @@ func main() {
 		{
 			Name: "scrapeSteamGame",
 			Flags: []cli.Flag{
-				cli.IntFlag{
+				cli.UintFlag{
 					Name:     "appid",
 					Usage:    "the appid of the Steam game to scrape",
 					Required: true,
 				},
+				cli.StringFlag{
+					Name:  "model",
+					Usage: "the model to use for the scrape of the Steam game. Accepted values: game, steamapp",
+					Value: "game",
+				},
 			},
 			Usage: "scrape the Steam game with the given appid",
 			Action: func(c *cli.Context) (err error) {
-				game := &models.Game{
-					Storefront: models.SteamStorefront,
-					Website:    null.StringFrom(browser.SteamAppPage.Fill(c.Int("appid"))),
+				var gameAny any
+				switch strings.ToLower(c.String("model")) {
+				case "game":
+					game := &models.Game{
+						Storefront: models.SteamStorefront,
+						Website:    null.StringFrom(browser.SteamAppPage.Fill(c.Uint("appid"))),
+					}
+					if err = game.Update(db.DB, globalConfig.Scrape); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+					gameAny = game
+				case "steamapp":
+					game := &models.SteamApp{ID: uint64(c.Uint("appid"))}
+					if err = game.Update(db.DB, globalConfig.Scrape); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+					gameAny = game
+				default:
+					return cli.NewExitError(
+						fmt.Sprintf(
+							"model \"%s\" is not an accepted model name. Choices: game, steamapp",
+							strings.ToLower(c.String("model")),
+						),
+						1,
+					)
 				}
-				if err = game.Update(db.DB, globalConfig.Scrape); err != nil {
-					return cli.NewExitError(err.Error(), 1)
-				}
-				fmt.Println(game)
+				fmt.Println(gameAny)
 				return
 			},
 		},
@@ -677,7 +702,7 @@ func main() {
 	}
 
 	// Run the CLI app
-	err := app.Run(os.Args)
+	err := cliApp.Run(os.Args)
 	if err != nil {
 		return
 	}

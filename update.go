@@ -39,10 +39,7 @@ func UpdateDeveloper(
 		)
 	}
 	if developerSnap == nil {
-		log.WARNING.Printf(
-			"Could not get latest DeveloperSnapshot for %s (%s) as there are no DeveloperSnapshots",
-			developer.Username, developer.ID,
-		)
+		log.WARNING.Printf("Could not get latest DeveloperSnapshot for %s (%s)", developer.Username, developer.ID)
 		return gameIDs, myErrors.TemporaryErrorf(
 			true,
 			"could not get latest DeveloperSnapshot for %s as there are no DeveloperSnapshots for it",
