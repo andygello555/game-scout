@@ -86,7 +86,7 @@ type steamAppWeight float64
 
 const (
 	SteamAppPublisherWeight         steamAppWeight = 0.55
-	SteamAppTotalReviewsWeight      steamAppWeight = -0.75
+	SteamAppTotalReviewsWeight      steamAppWeight = 0.75
 	SteamAppReviewScoreWeight       steamAppWeight = 0.65
 	SteamAppTotalUpvotesWeight      steamAppWeight = 0.45
 	SteamAppTotalDownvotesWeight    steamAppWeight = 0.25
@@ -174,13 +174,22 @@ func (sf steamAppWeightedField) GetValueFromWeightedModel(model WeightedModel) [
 		if totalReviews > 5000 {
 			totalReviews = 5000
 		}
-		return []float64{float64(totalReviews) / 1000000.0}
+		return []float64{ScaleRange(float64(totalReviews), 1.0, 5000.0, 1000000.0, -1000000.0)}
 	case SteamAppReviewScore:
 		return []float64{f.Float() * 1500.0}
 	case SteamAppTotalUpvotes, SteamAppTotalDownvotes, SteamAppTotalComments:
-		return []float64{float64(f.Int() * 2)}
+		total := f.Int()
+		if total > 5000 {
+			total = 5000
+		}
+		return []float64{ScaleRange(float64(total*2), 0, 10000, -1000, 10000)}
 	case SteamAppTagScore:
-		return []float64{f.Float()}
+		// If the game has no tags and a release date that is in the future, we will give the tag score a boost
+		tagScore := f.Float()
+		if f.Float() == 0 && reflect.Indirect(r).FieldByName("ReleaseDate").Interface().(time.Time).After(time.Now().UTC()) {
+			tagScore = 5000
+		}
+		return []float64{tagScore}
 	case SteamAppUpdates:
 		updates := f.Uint()
 		// Give a boost to the score when on the first update
@@ -280,14 +289,39 @@ func (app *SteamApp) BeforeUpdate(tx *gorm.DB) (err error) {
 	return
 }
 
-// OnConflict returns the clause.OnConflict that should be checked in an upsert clause.
+// OnConflict returns the clause.OnConflict that should be checked in an upsert clause. For SteamApp the
+// clause.OnConflict.DoUpdates field will be set as the Updates will need to be incremented and the CreatedAt field
+// excluded from being updated.
 func (app *SteamApp) OnConflict() clause.OnConflict {
-	return clause.OnConflict{Columns: []clause.Column{{Name: "id"}}}
+	doUpdates := clause.Assignments(map[string]interface{}{"updates": gorm.Expr("\"excluded\".\"updates\" + 1")})
+	doUpdates = append(doUpdates, clause.AssignmentColumns([]string{
+		"name",
+		"bare",
+		"developer_id",
+		"release_date",
+		"publisher",
+		"total_reviews",
+		"positive_reviews",
+		"negative_reviews",
+		"review_score",
+		"total_upvotes",
+		"total_downvotes",
+		"total_comments",
+		"tag_score",
+		"asset_modified_time",
+		"last_changelist_id",
+		"times_highlighted",
+		"weighted_score",
+	})...)
+	return clause.OnConflict{
+		Columns:   []clause.Column{{Name: "id"}},
+		DoUpdates: doUpdates,
+	}
 }
 
 // OnCreateOmit returns the fields that should be omitted when creating a SteamApp.
 func (app *SteamApp) OnCreateOmit() []string {
-	return []string{"Developer"}
+	return []string{"Developer", "CreatedAt"}
 }
 
 func (app *SteamApp) Update(db *gorm.DB, config ScrapeConfig) error {

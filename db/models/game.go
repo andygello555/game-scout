@@ -79,7 +79,7 @@ type gameWeight float64
 
 const (
 	GamePublisherWeight         gameWeight = 0.55
-	GameTotalReviewsWeight      gameWeight = -0.75
+	GameTotalReviewsWeight      gameWeight = 0.75
 	GameReviewScoreWeight       gameWeight = 0.65
 	GameTotalUpvotesWeight      gameWeight = 0.45
 	GameTotalDownvotesWeight    gameWeight = 0.25
@@ -169,7 +169,7 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 			if valInt > 5000 {
 				valInt = 5000
 			}
-			val = float64(valInt) / 1000000.0
+			val = ScaleRange(float64(valInt), 1.0, 5000.0, 1000000.0, -1000000.0)
 		}
 		return []float64{val}
 	case GameTotalUpvotes, GameTotalDownvotes, GameTotalComments:
@@ -177,6 +177,10 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 		var val float64
 		if nullInt32.IsValid() {
 			val = float64(*nullInt32.Ptr()) * 2
+			if val > 5000 {
+				val = 5000
+			}
+			val = ScaleRange(val*2, 0, 10000, -1000, 10000)
 		}
 		return []float64{val}
 	case GameTagScore:

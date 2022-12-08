@@ -406,23 +406,26 @@ func main() {
 			},
 			Usage: "scrape the Steam game with the given appid",
 			Action: func(c *cli.Context) (err error) {
-				var gameAny any
+				var gameUpsertable db.Upsertable
 				switch strings.ToLower(c.String("model")) {
 				case "game":
-					game := &models.Game{
-						Storefront: models.SteamStorefront,
-						Website:    null.StringFrom(browser.SteamAppPage.Fill(c.Uint("appid"))),
-					}
-					if err = game.Update(db.DB, globalConfig.Scrape); err != nil {
-						return cli.NewExitError(err.Error(), 1)
-					}
-					gameAny = game
+					gameScrapers := models.NewStorefrontScrapers[string](globalConfig.Scrape, db.DB, 1, 1, 1, 0, 0)
+					gameScrapers.Start()
+					game := <-gameScrapers.Add(false, &models.Game{}, map[models.Storefront]mapset.Set[string]{
+						models.SteamStorefront: mapset.NewThreadUnsafeSet[string](
+							browser.SteamAppPage.Fill(c.Uint("appid")),
+						),
+					})
+					gameUpsertable = game.(*models.Game)
+					gameScrapers.Wait()
 				case "steamapp":
-					game := &models.SteamApp{ID: uint64(c.Uint("appid"))}
-					if err = game.Update(db.DB, globalConfig.Scrape); err != nil {
-						return cli.NewExitError(err.Error(), 1)
-					}
-					gameAny = game
+					gameScrapers := models.NewStorefrontScrapers[uint64](globalConfig.Scrape, db.DB, 1, 1, 1, 0, 0)
+					gameScrapers.Start()
+					game := <-gameScrapers.Add(false, &models.SteamApp{}, map[models.Storefront]mapset.Set[uint64]{
+						models.SteamStorefront: mapset.NewThreadUnsafeSet[uint64](uint64(c.Uint("appid"))),
+					})
+					gameUpsertable = game.(*models.SteamApp)
+					gameScrapers.Wait()
 				default:
 					return cli.NewExitError(
 						fmt.Sprintf(
@@ -432,7 +435,11 @@ func main() {
 						1,
 					)
 				}
-				fmt.Println(gameAny)
+
+				if _, err = db.Upsert(gameUpsertable); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+				fmt.Println(gameUpsertable)
 				return
 			},
 		},

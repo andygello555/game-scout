@@ -252,7 +252,9 @@ func Upsert(value Upsertable) (created bool, err error) {
 
 	// Then we construct the upsert clause
 	onConflict := value.OnConflict()
-	onConflict.DoUpdates = clause.AssignmentColumns(GetModel(value).ColumnDBNamesExcluding("id"))
+	if len(onConflict.DoUpdates) == 0 {
+		onConflict.DoUpdates = clause.AssignmentColumns(GetModel(value).ColumnDBNamesExcluding("id"))
+	}
 	if updateOrCreate = DB.Clauses(onConflict); updateOrCreate.Error != nil {
 		err = myErrors.TemporaryWrapf(
 			false,
