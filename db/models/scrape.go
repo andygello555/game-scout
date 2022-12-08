@@ -313,6 +313,11 @@ func (ss *StorefrontScrapers[ID]) Start() {
 	ss.started = true
 }
 
+// Jobs returns the number of unprocessed jobs left.
+func (ss *StorefrontScrapers[ID]) Jobs() int {
+	return len(ss.jobs)
+}
+
 // Add adds a job to be executed by the started workers. This returns a channel that can be read from to block until the
 // game has been scraped.
 func (ss *StorefrontScrapers[ID]) Add(update bool, gameModel GameModel[ID], storefrontIDs map[Storefront]mapset.Set[ID]) <-chan GameModel[ID] {
@@ -405,7 +410,7 @@ func ScrapeStorefrontForGameModel[ID comparable](id ID, gameModelScraper GameMod
 
 		if err != nil {
 			log.WARNING.Printf(
-				"Could not scrape %s for %s for game on ID %s: %s",
+				"Could not scrape %s for %s for game on ID %d: %s",
 				source.String(), gameModelScraper.GetStorefront().String(), id, err.Error(),
 			)
 		}

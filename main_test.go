@@ -465,3 +465,9 @@ func ExampleStateLoadOrCreate() {
 	// gameIDs: 3
 	// phase: Disable
 }
+
+func TestCreateInitialSteamApps(t *testing.T) {
+	if err := models.CreateInitialSteamApps(db.DB); err != nil {
+		t.Errorf("Error occurred whilst running CreateInitialSteamApps: %v", err)
+	}
+}

@@ -9,7 +9,6 @@ import (
 	"github.com/RichardKnop/machinery/v1/tasks"
 	myErrors "github.com/andygello555/game-scout/errors"
 	task "github.com/andygello555/game-scout/tasks"
-	"github.com/gorilla/websocket"
 	"github.com/pkg/errors"
 	"os/exec"
 	"regexp"
@@ -78,10 +77,14 @@ func worker() (err error) {
 		)
 	}
 
-	// Defer a function that will kill the scoutWebPipes process. We also define a WaitGroup that will wait for the
-	// client to finish processing its current job.
-	var websocketClientWg sync.WaitGroup
+	// The SteamAppWebsocketScraper will handle all the changelists pushed to the websocket by ScoutWebPipes, by
+	// scraping and saving each one as a SteamApp.
+	websocketScraper := NewSteamAppWebsocketScraper(1, globalConfig)
+
+	// Defer a function that will kill the scoutWebPipes process. We also stop the SteamAppWebsocketScraper and wait for
+	// it to gracefully exit.
 	defer func() {
+		log.INFO.Printf("Stopping ScoutWebPipes and waiting for SteamAppWebsocketScraper")
 		err = myErrors.MergeErrors(err, errors.Wrapf(
 			scoutWebPipes.Process.Kill(),
 			"cannot kill ScoutWebPipes (%s) process",
@@ -89,33 +92,11 @@ func worker() (err error) {
 		))
 		_, waitErr := scoutWebPipes.Process.Wait()
 		err = myErrors.MergeErrors(err, errors.Wrap(waitErr, "wait failed"))
-		websocketClientWg.Wait()
+		err = myErrors.MergeErrors(err, errors.Wrap(websocketScraper.Stop(), "could not stop SteamAppWebsocketScraper"))
 	}()
 
-	// Start a websocket client that will listen to all the changelogs being pushed
-	log.INFO.Printf("Websocket client is connecting to %s", globalConfig.SteamWebPipes.Location)
-
-	// Start the websocket and dial into the location that is stored in the SteamWebPipesConfig
-	var c *websocket.Conn
-	err = errors.New("")
-	// We keep trying to dial in until we've not got an error
-	for err != nil {
-		if c, _, err = websocket.DefaultDialer.Dial(globalConfig.SteamWebPipes.Location, nil); err != nil {
-			log.WARNING.Printf("Could not dial into %s: %s, waiting 2s", globalConfig.SteamWebPipes.Location, err.Error())
-		}
-		time.Sleep(time.Second * 2)
-	}
-
-	// Start the actual client that will read from the websocket
-	websocketClientWg.Add(1)
-	go SteamAppWebsocketScraper(c, &websocketClientWg, globalConfig.Scrape)
-
-	// Defer a close to the websocket connection
-	defer func(c *websocket.Conn) {
-		err = myErrors.MergeErrors(err, errors.Wrapf(
-			c.Close(), "could not close websocket connection to %s", globalConfig.SteamWebPipes.Location,
-		))
-	}(c)
+	// Start the SteamAppWebsocketScraper
+	websocketScraper.Start()
 
 	// The second argument is a consumer tag
 	// Ideally, each worker should have a unique tag (worker1, worker2 etc)

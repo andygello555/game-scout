@@ -98,7 +98,13 @@ namespace SteamWebPipes
 
             if (File.Exists("last-changenumber.txt"))
             {
-                steam.PreviousChangeNumber = uint.Parse(File.ReadAllText("last-changenumber.txt"));
+                var lastChangenumber = uint.Parse(File.ReadAllText("last-changenumber.txt"));
+                Log($"Found last-changenumber.txt. Last change number: {lastChangenumber}");
+                steam.PreviousChangeNumber = lastChangenumber;
+            }
+            else
+            {
+                Log("last-changenumber.txt does not exist. Skipping setting PreviousChangeNumber...");
             }
 
             var timer = new Timer();

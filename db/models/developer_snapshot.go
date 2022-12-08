@@ -207,7 +207,7 @@ func (wf developerSnapshotWeightedField) GetValueFromWeightedModel(model Weighte
 	case TimesHighlighted:
 		// TimesHighlighted is turned into a negative number that is in the thousands, we really don't want highlighted
 		// developers to come up again.
-		return []float64{float64(f.Int()) * -1000.0}
+		return []float64{float64(f.Int()) * -10000.0}
 	default:
 		panic(fmt.Errorf(
 			"developerSnapshotWeightedField has type %s, and cannot be converted to []float64",

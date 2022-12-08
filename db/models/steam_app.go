@@ -27,16 +27,22 @@ type SteamApp struct {
 	ID uint64
 	// Name is the current name of the SteamApp.
 	Name string
+	// Type is only used for our benefit to check what type of software this SteamApp is. We do not save it to the
+	// database at all, because we only save SteamApp's that are games.
+	Type string `gorm:"-:all"`
 	// CreatedAt is when this SteamApp was first created. SteamApp's that were CreatedAt closer to the current update
 	// time are desired more than SteamApp's that were CreatedAt further in the past.
 	CreatedAt time.Time `gorm:"<-:create"`
+	// Bare is set when the SteamApp is bare version of the app fetched from SteamGetAppList. When set, the SteamApp
+	// will only have ID and Name set to not be default.
+	Bare bool
 	// Updates is the number of times this SteamApp has been updated in the DB. This is not the number of changelist
 	// that have occurred for this title.
 	Updates uint64
 	// DeveloperID is the foreign key to a Developer on Twitter. This can be nil/null, in case there is no socials
 	// linked on the SteamApp's store page.
 	DeveloperID *string
-	Developer   *Developer `gorm:"constraint:OnDelete:CASCADE;"`
+	Developer   *Developer `gorm:"constraint:OnDelete:SET NULL;"`
 	// ReleaseDate is when this game was/is going to be released on SteamStorefront.
 	ReleaseDate time.Time
 	// Publisher is the publisher for this game. If this cannot be found it is set to nil. If this is set then it
@@ -65,10 +71,12 @@ type SteamApp struct {
 	AssetModifiedTime time.Time
 	// LastChangelistID is the ID of the last changelist that was read for this title.
 	LastChangelistID uint64
+	// TimesHighlighted is the number of times this SteamApp has been highlighted by the measure command.
+	TimesHighlighted int32
 	// WeightedScore is a weighted average comprised of the values taken from CreatedAt, Updates, ReleaseDate,
-	// Publisher, TotalReviews, ReviewScore, TotalUpvotes, TotalDownvotes, TotalComments, TagScore, and the
-	// AssetModifiedTime for the SteamApp. If SteamApp.CheckCalculateWeightedScore is false then this will be nil. This
-	// is a computed field, no need to set it before saving.
+	// Publisher, TotalReviews, ReviewScore, TotalUpvotes, TotalDownvotes, TotalComments, TagScore, AssetModifiedTime,
+	// and TimesHighlighted for the SteamApp. If SteamApp.CheckCalculateWeightedScore is false then this will be nil.
+	// This is a computed field, no need to set it before saving.
 	WeightedScore null.Float64
 }
 
@@ -88,6 +96,7 @@ const (
 	SteamAppAssetModifiedTimeWeight steamAppWeight = 0.2
 	SteamAppCreatedAtWeight         steamAppWeight = 0.8
 	SteamAppReleaseDateWeight       steamAppWeight = 0.6
+	SteamAppTimesHighlightedWeight  steamAppWeight = 0.9
 )
 
 // steamAppWeightedField represents a field that can have a weighting calculation applied to it in SteamApp.
@@ -105,6 +114,7 @@ const (
 	SteamAppAssetModifiedTime steamAppWeightedField = "AssetModifiedTime"
 	SteamAppCreatedAt         steamAppWeightedField = "CreatedAt"
 	SteamAppReleaseDate       steamAppWeightedField = "ReleaseDate"
+	SteamAppTimesHighlighted  steamAppWeightedField = "TimesHighlighted"
 )
 
 // String returns the string value of the gameWeightedField.
@@ -136,6 +146,8 @@ func (sf steamAppWeightedField) Weight() (w float64, inverse bool) {
 		w = float64(SteamAppCreatedAtWeight)
 	case SteamAppReleaseDate:
 		w = float64(SteamAppReleaseDateWeight)
+	case SteamAppTimesHighlighted:
+		w = float64(SteamAppTimesHighlightedWeight)
 	default:
 		panic(fmt.Errorf("\"%s\" is not a steamAppWeightedField", sf))
 	}
@@ -170,7 +182,12 @@ func (sf steamAppWeightedField) GetValueFromWeightedModel(model WeightedModel) [
 	case SteamAppTagScore:
 		return []float64{f.Float()}
 	case SteamAppUpdates:
-		return []float64{float64(f.Uint()+1) / 1500.0}
+		updates := f.Uint()
+		// Give a boost to the score when on the first update
+		if updates == 0 {
+			return []float64{float64(updates+1) / 150000.0}
+		}
+		return []float64{float64(updates+1) / 1500.0}
 	case SteamAppAssetModifiedTime, SteamAppCreatedAt:
 		// The value for a time is calculated by subtracting the time value from the time now, then clamping
 		// this duration to be +5 months, then finally scale the number of hours to be between the range 2000-0 (inverse
@@ -192,8 +209,12 @@ func (sf steamAppWeightedField) GetValueFromWeightedModel(model WeightedModel) [
 			timeDiff = map[bool]time.Duration{true: -1, false: 1}[timeDiff < 0] * time.Hour * 24 * 30 * 5
 		}
 		return []float64{timeDiff.Hours()}
+	case SteamAppTimesHighlighted:
+		// TimesHighlighted is turned into a negative number that is in the thousands, we really don't want highlighted
+		// developers to come up again.
+		return []float64{float64(f.Int()) * -10000.0}
 	default:
-		panic(fmt.Errorf("steamAppWeightedField %s is not recognized, and cannot be converted to []float64", sf))
+		panic(fmt.Errorf("steamAppWeightedField \"%s\" is not recognized, and cannot be converted to []float64", sf))
 	}
 }
 
@@ -210,6 +231,7 @@ func (sf steamAppWeightedField) Fields() []WeightedField {
 		SteamAppAssetModifiedTime,
 		SteamAppCreatedAt,
 		SteamAppReleaseDate,
+		SteamAppTimesHighlighted,
 	}
 }
 
@@ -235,10 +257,11 @@ func (app *SteamApp) UpdateComputedFields(tx *gorm.DB) (err error) {
 	return
 }
 
-// CheckCalculateWeightedScore will only return true when the number of Updates exceeds 0 and the game has no Publisher.
-// This is to stop the weights of games that have not yet been scraped from being calculated.
+// CheckCalculateWeightedScore will only return true when the SteamApp is not Bare, has no Publisher, and has a name.
+// This is to stop the calculation of weights for games that have not yet been scraped/aren't fully initialised by
+// Steam's backend. CreateInitialSteamApps will create SteamApp(s) with their Bare field set.
 func (app *SteamApp) CheckCalculateWeightedScore() bool {
-	return app.Updates > 0 && !app.Publisher.IsValid()
+	return app.Name != "" && !app.Bare && !app.Publisher.IsValid()
 }
 
 func (app *SteamApp) BeforeCreate(tx *gorm.DB) (err error) {
@@ -283,6 +306,7 @@ func (s *SteamAppWrapper) Default() {
 	if s.SteamApp == nil {
 		s.SteamApp = &SteamApp{}
 	}
+	s.SteamApp.Bare = false
 	s.SteamApp.Publisher = null.StringFromPtr(nil)
 }
 
@@ -319,6 +343,7 @@ func (s *SteamAppSteamStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, 
 			ok                bool
 			jsonBody          map[string]any
 			appDetails        map[string]any
+			appType           any
 			appName           any
 			appAssetMTime     string
 			appAssetMTimeInt  int64
@@ -331,15 +356,35 @@ func (s *SteamAppSteamStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, 
 			return fmt.Errorf("cannot assert parsed output of app_info_print for %v to map", appID)
 		}
 
+		// If the len of the JSONBody is zero then we will do a quick continue to the next try
+		if len(jsonBody) == 0 {
+			log.INFO.Printf(
+				"SteamCMD \"app_info_print %d\". Output has an empty body, presuming that game doesn't fully exist...",
+				appID,
+			)
+			return myErrors.Continue
+		}
+
 		if appDetails, ok = jsonBody["common"].(map[string]any); !ok {
 			return fmt.Errorf("cannot get \"common\" from parsed output for %v", appID)
+		}
+
+		if appType, ok = appDetails["type"]; !ok {
+			return fmt.Errorf("cannot find \"type\" key in common details for %d", appID)
+		}
+		s.SteamApp.Type = strings.ToLower(appType.(string))
+
+		// We exit out of the scrape if the SteamApp is not a Game. This is so we can not waste anymore time with app.
+		if s.SteamApp.Type != "game" {
+			log.WARNING.Printf("SteamApp %d is not a Game (it is a \"%s\"). Skipping ScrapeInfo...", appID, s.SteamApp.Type)
+			return myErrors.Done
 		}
 
 		if appName, ok = appDetails["name"]; !ok {
 			return fmt.Errorf("cannot find \"name\" key in common details for %v", appID)
 		}
 		s.SteamApp.Name = appName.(string)
-		log.INFO.Printf("Name of app %v is %s", appID, s.SteamApp.Name)
+		log.INFO.Printf("Name of app %v is \"%s\"", appID, s.SteamApp.Name)
 
 		// We then get the last time the assets were modified on the store page so that we can set AssetModifiedTime
 		if appAssetMTime, ok = appDetails["store_asset_mtime"].(string); !ok {
@@ -398,8 +443,8 @@ func (s *SteamAppSteamStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, 
 			}
 		}
 
-		log.INFO.Printf("Publisher for %v: %s", appID, publisherName.String())
-		log.INFO.Printf("Developer for %v: %s", appID, developerName.String())
+		log.INFO.Printf("Publisher for %v: \"%s\"", appID, publisherName.String())
+		log.INFO.Printf("Developer for %v: \"%s\"", appID, developerName.String())
 		if developerName.String() != publisherName.String() {
 			s.SteamApp.Publisher = null.StringFrom(strings.TrimRight(publisherName.String(), ","))
 		}
@@ -409,6 +454,10 @@ func (s *SteamAppSteamStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, 
 
 func (s *SteamAppSteamStorefront) ScrapeReviews(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
 	appID := args[0]
+	if s.SteamApp.Type != "game" {
+		return fmt.Errorf("%d is not a Game (it is a \"%s\"). Skipping ScrapeReviews", appID, s.SteamApp.Type)
+	}
+
 	// Fetch reviews to gather headline stats on the number of reviews
 	return browser.SteamAppReviews.RetryJSON(maxTries, minDelay, func(jsonBody map[string]any) error {
 		querySummary, ok := jsonBody["query_summary"].(map[string]any)
@@ -429,6 +478,10 @@ func (s *SteamAppSteamStorefront) ScrapeReviews(config ScrapeConfig, maxTries in
 
 func (s *SteamAppSteamStorefront) ScrapeCommunity(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) (err error) {
 	appID := args[0]
+	if s.SteamApp.Type != "game" {
+		return fmt.Errorf("%d is not a Game (it is a \"%s\"). Skipping ScrapeCommunity", appID, s.SteamApp.Type)
+	}
+
 	// Fetch all the community posts and aggregate the upvotes, downvotes, and comment totals
 	const batchSize = 50
 	gidEvent := "0"
@@ -465,6 +518,15 @@ func (s *SteamAppSteamStorefront) ScrapeCommunity(config ScrapeConfig, maxTries 
 					time.Sleep(minDelay * time.Duration(maxTries+1-tries))
 					return con
 				}
+				return brk
+			}
+
+			if _, ok := jsonBody["err_msg"]; jsonBody["success"].(float64) == 42 && ok {
+				log.INFO.Printf(
+					"SteamCommunityPosts response for %d has error code 42 and an error message. Assuming community "+
+						"hub doesn't exist for the game.",
+					appID,
+				)
 				return brk
 			}
 			eventsProcessed := 0
@@ -513,6 +575,10 @@ func (s *SteamAppSteamStorefront) ScrapeCommunity(config ScrapeConfig, maxTries 
 
 func (s *SteamAppSteamStorefront) ScrapeTags(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
 	appID := args[0]
+	if s.SteamApp.Type != "game" {
+		return fmt.Errorf("%d is not a Game (it is a \"%s\"). Skipping ScrapeTags", appID, s.SteamApp.Type)
+	}
+
 	// Use SteamSpy to find the accumulated TagScore for the game
 	storefrontConfig := config.ScrapeGetStorefront(SteamStorefront)
 	tagConfig := storefrontConfig.StorefrontTags()
@@ -615,11 +681,21 @@ func (s *SteamAppSteamStorefront) ScrapeTags(config ScrapeConfig, maxTries int, 
 
 func (s *SteamAppSteamStorefront) ScrapeExtra(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) (err error) {
 	appID := args[0]
+	if s.SteamApp.Type != "game" {
+		return fmt.Errorf("%d is not a Game (it is a \"%s\"). Skipping ScrapeExtra", appID, s.SteamApp.Type)
+	}
+
 	twitterUserURLPattern := regexp.MustCompile(`^https?://(?:www\.)?twitter\.com/(?:#!/)?@?([^/?#]*)(?:[?#].*)?$`)
 	// We only make a request to the SteamApp's SteamAppPage if we still need to find the ReleaseDate or the SteamApp has
 	// no publisher, and we need to find the Developer using the Twitter API.
 	if s.SteamApp.ReleaseDate.IsZero() || !s.SteamApp.Publisher.IsValid() {
 		return browser.SteamAppPage.RetrySoup(maxTries, minDelay, func(doc *soup.Root) (err error) {
+			if err = doc.Find("div", "id", "home_gutter_recommendedtags").Error; err == nil {
+				log.INFO.Printf("Redirected to Steam Store homepage. App %d probably doesn't exist...", appID)
+				return myErrors.Done
+			}
+			err = nil
+
 			if !s.SteamApp.Publisher.IsValid() {
 				links := doc.FindAll("a")
 				usernames := mapset.NewThreadUnsafeSet[string]()
@@ -639,7 +715,7 @@ func (s *SteamAppSteamStorefront) ScrapeExtra(config ScrapeConfig, maxTries int,
 				usernames.Remove("steam")
 				if usernames.Cardinality() > 0 {
 					username, _ := usernames.Pop()
-					log.INFO.Printf("Passing back Twitter username %s found for %d", username, appID)
+					log.INFO.Printf("Passing back Twitter username \"%s\" found for %d", username, appID)
 					s.SteamApp.Developer = &Developer{Username: username}
 				} else {
 					log.INFO.Printf(
@@ -683,7 +759,10 @@ func (s *SteamAppSteamStorefront) ScrapeExtra(config ScrapeConfig, maxTries int,
 	return
 }
 
-func (s *SteamAppSteamStorefront) AfterScrape(args ...any) {}
+func (s *SteamAppSteamStorefront) AfterScrape(args ...any) {
+	// AfterScrape just sets the ID to the first arg which should be the appID of the SteamApp.
+	s.SteamApp.ID = args[0].(uint64)
+}
 
 // CreateInitialSteamApps will use the browser.SteamGetAppList to create initial SteamApp for each app on Steam if the
 // number of SteamApp is 0. This should technically only ever run once on the creation of the SteamApp table.
@@ -711,7 +790,7 @@ func CreateInitialSteamApps(db *gorm.DB) (err error) {
 			}
 
 			for _, appObj := range appObjs {
-				app := &SteamApp{Publisher: null.StringFromPtr(nil), Updates: 0}
+				app := &SteamApp{Publisher: null.StringFromPtr(nil), Updates: 0, Bare: true}
 				var appID float64
 				if appID, ok = appObj.(map[string]any)["appid"].(float64); ok {
 					app.ID = uint64(appID)
@@ -736,7 +815,7 @@ func CreateInitialSteamApps(db *gorm.DB) (err error) {
 			steamApps[i] = steamApp
 			i++
 		}
-		if err = db.Create(&steamApps).Error; err != nil {
+		if err = db.CreateInBatches(&steamApps, 100).Error; err != nil {
 			err = errors.Wrapf(err, "could not create %d initial SteamApps", len(steamApps))
 		}
 	} else {

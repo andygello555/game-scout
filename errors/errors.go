@@ -93,14 +93,47 @@ type RetryFunction func(currentTry int, maxTries int, minDelay time.Duration, ar
 type RetryReturnType int
 
 const (
+	// Continue to the next try.
 	Continue RetryReturnType = iota
+	// Break out of try loop. This also applies to Break-ing out after all tries have been exhausted because there is a
+	// recurring error.
 	Break
+	// Done with the try loop. Exit the try loop gracefully without there being a recurring error.
 	Done
 )
 
+func (rrt RetryReturnType) String() string {
+	switch rrt {
+	case Continue:
+		return "continue"
+	case Break:
+		return "break"
+	case Done:
+		return "done"
+	default:
+		return "unknown"
+	}
+}
+
+// Error returns the error message for this RetryReturnType.
+func (rrt RetryReturnType) Error() string {
+	return fmt.Sprintf("retry function wants to \"%s\"", rrt.String())
+}
+
 // Retry will retry the given function the given number of times. The function will be retried only if it returns an
-// error or a panic occurs within it. If after the given number of maxTries, an error is still occurring in the tried
-// function, the error will be returned. If the RetryFunction is nil, then an appropriate error will be returned.
+// error (that is not a RetryReturnType error) or a panic occurs within it. If the error is a RetryReturnType then the
+// following actions will be carried out, depending on which RetryReturnType is returned:
+//
+//   - Continue: will proceed to the next try of the RetryFunction without waiting. The output error for Retry is also
+//     set to nil, faking the success scenario. Note: this will still use up a try. This is to avoid infinite loops.
+//
+//   - Break: will stop retrying and will set Break as the returned error for Retry. I.e. fakes the failure scenario.
+//
+//   - Done: will stop retrying and will set nil as the returned error. This is the same as returning nil from the
+//     RetryFunction. I.e. fakes the success scenario.
+//
+// If after the given number of maxTries, an error is still occurring in the tried function, the error will be returned.
+// If the RetryFunction is nil, then an appropriate error will be returned.
 func Retry(maxTries int, minDelay time.Duration, retry RetryFunction, args ...any) (err error) {
 	if retry == nil {
 		return errors.New("retry function cannot be nil")
@@ -123,13 +156,32 @@ func Retry(maxTries int, minDelay time.Duration, retry RetryFunction, args ...an
 			}()
 
 			if err = retry(maxTries-tries, maxTries, minDelay, args...); err != nil {
-				if tries > 0 {
-					tries--
-					time.Sleep(minDelay * time.Duration(maxTries+1-tries))
-					return Continue
+				// If the error returned is a RetryReturnType then we will perform the actions described above.
+				// Note: we use errors.As here because errors returned from the RetryFunction might be wrapped.
+				if errors.As(err, &rt) {
+					switch rt {
+					case Continue:
+						// If we are on the last try then we will set the RetryReturnType to Break.
+						if tries > 0 {
+							tries--
+						} else {
+							rt = Break
+						}
+						fallthrough
+					case Done:
+						// Only Continue and Done will activate the "success" scenario where err is nilled.
+						err = nil
+					}
+					return rt
+				} else {
+					if tries > 0 {
+						tries--
+						time.Sleep(minDelay * time.Duration(maxTries+1-tries))
+						return Continue
+					}
+					err = errors.Wrapf(err, "ran out of tries (%d total) whilst calling retrier", maxTries)
+					return Break
 				}
-				err = errors.Wrapf(err, "ran out of tries (%d total) whilst calling retrier", maxTries)
-				return Break
 			}
 			return Done
 		}()

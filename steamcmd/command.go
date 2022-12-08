@@ -260,7 +260,7 @@ var commands = map[CommandType]Command{
 			//fmt.Println("jsonBody 2", strings.Join(strings.Split(jsonBody, "\r\n")[:200], "\r\n"))
 			//fmt.Println("jsonBody 2", jsonBody)
 			// Replace key-value pairs with proper JSON syntax
-			jsonBody = regexp.MustCompile(`"([^"]+)"\t\t"(([^\\]\\"|[^"])*?)"`).ReplaceAllString(jsonBody, "\"$1\": '''$2'''")
+			jsonBody = regexp.MustCompile(`"([^"]+)"\t\t"(([^\\]\\"|[^"])*?)"`).ReplaceAllString(jsonBody, "\"$1\": '''$2\n'''")
 			//fmt.Println("jsonBody 3", strings.Join(strings.Split(jsonBody, "\r\n")[:200], "\r\n"))
 			//fmt.Println("jsonBody 3", jsonBody)
 

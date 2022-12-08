@@ -108,6 +108,27 @@ func TestRetry(t *testing.T) {
 			},
 			expectedErr: errors.New("ran out of tries (3 total) whilst calling retrier: oh no error occurred with args: [1 2 3], on try no. 3"),
 		},
+		{
+			maxTries: 3,
+			retryFunc: func(currentTry int, maxTries int, minDelay time.Duration, args ...any) error {
+				return Done
+			},
+			expectedErr: nil,
+		},
+		{
+			maxTries: 3,
+			retryFunc: func(currentTry int, maxTries int, minDelay time.Duration, args ...any) error {
+				return Continue
+			},
+			expectedErr: nil,
+		},
+		{
+			maxTries: 3,
+			retryFunc: func(currentTry int, maxTries int, minDelay time.Duration, args ...any) error {
+				return Break
+			},
+			expectedErr: Break,
+		},
 	} {
 		err := Retry(test.maxTries, time.Second*0, test.retryFunc, test.args...)
 		if test.expectedErr == nil {
