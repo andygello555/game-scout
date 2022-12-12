@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -580,9 +581,9 @@ func main() {
 		{
 			Name: "developer",
 			Flags: []cli.Flag{
-				cli.StringFlag{
+				cli.StringSliceFlag{
 					Name:     "id",
-					Usage:    "the ID of the developer/Twitter user in the DB",
+					Usage:    "the IDs of the developers/Twitter users in the DB",
 					Required: true,
 				},
 				cli.BoolFlag{
@@ -601,6 +602,11 @@ func main() {
 					Required: false,
 				},
 				cli.BoolFlag{
+					Name:     "trend",
+					Usage:    "find the trend of a Developer's snapshots",
+					Required: false,
+				},
+				cli.BoolFlag{
 					Name:     "printAfter",
 					Usage:    "print the developer after all the subcommands have been run",
 					Required: false,
@@ -612,56 +618,89 @@ func main() {
 			},
 			Usage: "subcommand for viewing resources related to a developer in the DB",
 			Action: func(c *cli.Context) (err error) {
-				var developer models.Developer
-				if err = db.DB.Find(&developer, c.String("id")).Error; err != nil {
-					return cli.NewExitError(err.Error(), 1)
-				}
-
-				if c.Bool("printBefore") {
-					fmt.Println(developer)
-				}
-
-				if c.Bool("games") {
-					var games []*models.Game
-					if games, err = developer.Games(db.DB); err != nil {
+				for _, id := range c.StringSlice("id") {
+					fmt.Printf("Performing commands on Developer: %s\n", id)
+					var developer models.Developer
+					if err = db.DB.Find(&developer, id).Error; err != nil {
 						return cli.NewExitError(err.Error(), 1)
 					}
 
-					fmt.Printf(
-						"Developer %s (%s), has %d games:\n",
-						developer.Username, developer.ID, len(games),
-					)
-					if len(games) > 0 {
-						for i, game := range games {
-							fmt.Printf("\t%d) %v\n", i+1, game)
+					if c.Bool("printBefore") {
+						fmt.Printf("\t%v\n", developer)
+					}
+
+					if c.Bool("games") {
+						var games []*models.Game
+						if games, err = developer.Games(db.DB); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+
+						fmt.Printf(
+							"\tDeveloper %s (%s), has %d games:\n",
+							developer.Username, developer.ID, len(games),
+						)
+						if len(games) > 0 {
+							for i, game := range games {
+								fmt.Printf("\t\t%d) %v\n", i+1, game)
+							}
 						}
 					}
-				}
 
-				if c.Bool("update") {
-					var state *ScoutState
-					if state, err = StateLoadOrCreate(c.Bool("stateForceCreate")); err != nil {
-						return cli.NewExitError(err.Error(), 1)
+					if c.Bool("update") {
+						var state *ScoutState
+						if state, err = StateLoadOrCreate(c.Bool("stateForceCreate")); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+
+						gameScrapers := models.NewStorefrontScrapers[string](
+							globalConfig.Scrape, db.DB, 1, 1, 12*maxGamesPerTweet,
+							minScrapeStorefrontsForGameWorkerWaitTime, maxScrapeStorefrontsForGameWorkerWaitTime,
+						)
+						gameScrapers.Start()
+
+						var gameIDs mapset.Set[uuid.UUID]
+						if gameIDs, err = UpdateDeveloper(1, &developer, 12, gameScrapers, state); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+						gameScrapers.Wait()
+						fmt.Println("\tuserTweetTimes:", state.GetIterableCachedField(UserTweetTimesType))
+						fmt.Println("\tdeveloperSnapshots:", state.GetIterableCachedField(DeveloperSnapshotsType))
+						fmt.Println("\tgameIDs:", gameIDs)
 					}
 
-					gameScrapers := models.NewStorefrontScrapers[string](
-						globalConfig.Scrape, db.DB, 1, 1, 12*maxGamesPerTweet,
-						minScrapeStorefrontsForGameWorkerWaitTime, maxScrapeStorefrontsForGameWorkerWaitTime,
-					)
-					gameScrapers.Start()
-
-					var gameIDs mapset.Set[uuid.UUID]
-					if gameIDs, err = UpdateDeveloper(1, &developer, 12, gameScrapers, state); err != nil {
-						return cli.NewExitError(err.Error(), 1)
+					if c.Bool("trend") {
+						trend := models.NewTrend(db.DB, &developer)
+						if err = trend.Train(); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+						var coefficients []float64
+						if coefficients, err = trend.Trend(); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+						var chartBuffer *bytes.Buffer
+						if chartBuffer, err = trend.Chart(1024, 400); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+						if err = os.WriteFile(
+							fmt.Sprintf(
+								"developer_trend_%s_%s.png",
+								developer.ID,
+								time.Now().UTC().Format("2006-01-02"),
+							),
+							chartBuffer.Bytes(),
+							filePerms,
+						); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+						fmt.Printf(
+							"\tCoefficients for the trend of Developer %s (%s): %v\n",
+							developer.Username, developer.ID, coefficients,
+						)
 					}
-					gameScrapers.Wait()
-					fmt.Println("userTweetTimes:", state.GetIterableCachedField(UserTweetTimesType))
-					fmt.Println("developerSnapshots:", state.GetIterableCachedField(DeveloperSnapshotsType))
-					fmt.Println("gameIDs:", gameIDs)
-				}
 
-				if c.Bool("printAfter") {
-					fmt.Println(developer)
+					if c.Bool("printAfter") {
+						fmt.Printf("\t%v\n", developer)
+					}
 				}
 				return
 			},

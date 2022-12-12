@@ -1,6 +1,7 @@
 package models
 
 import (
+	"fmt"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
@@ -29,6 +30,25 @@ type Developer struct {
 	TimesHighlighted int32
 	// Disabled represents whether this Developer should be included in the Update phase of the Scout procedure.
 	Disabled bool
+}
+
+func (d *Developer) GetObservedName() string { return "Snapshot Weighted Score" }
+
+func (d *Developer) GetVariableNames() []string { return []string{"Snapshot Date"} }
+
+func (d *Developer) Train(trend *Trend) (err error) {
+	var snapshots []*DeveloperSnapshot
+	if err = trend.db.Where("developer_id = ?", d.ID).Order("version").Find(&snapshots).Error; err != nil {
+		return
+	}
+	if len(snapshots) < 2 {
+		return fmt.Errorf("cannot Train on %d datapoints for Developer %s (%s)", len(snapshots), d.Username, d.ID)
+	}
+
+	for _, snapshot := range snapshots {
+		trend.AddDataPoint(snapshot.CreatedAt, snapshot.WeightedScore)
+	}
+	return
 }
 
 // LatestDeveloperSnapshot will get the latest DeveloperSnapshot for this Developer.
