@@ -25,6 +25,7 @@ require (
 require (
 	cloud.google.com/go v0.76.0 // indirect
 	cloud.google.com/go/pubsub v1.10.0 // indirect
+	github.com/SebastiaanKlippert/go-wkhtmltopdf v1.8.2 // indirect
 	github.com/aws/aws-sdk-go v1.37.16 // indirect
 	github.com/bradfitz/gomemcache v0.0.0-20190913173617-a41fca850d0b // indirect
 	github.com/cespare/xxhash/v2 v2.1.1 // indirect
@@ -60,6 +61,7 @@ require (
 	github.com/klauspost/compress v1.11.7 // indirect
 	github.com/mattn/go-runewidth v0.0.14 // indirect
 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
+	github.com/pkg/browser v0.0.0-20210911075715-681adbf594b8 // indirect
 	github.com/rivo/uniseg v0.4.2 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect

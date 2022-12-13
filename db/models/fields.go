@@ -36,6 +36,13 @@ func (nd *NullDuration) Ptr() *time.Duration {
 	return &duration
 }
 
+// NullDurationFrom constructs a new NullDuration from the given time.Duration. This will never be null.
+func NullDurationFrom(duration time.Duration) NullDuration {
+	nd := NullDuration{}
+	nd.FromDurationPtr(&duration)
+	return nd
+}
+
 // NullDurationFromPtr constructs a new NullDuration from the given pointer to a time.Duration.
 func NullDurationFromPtr(duration *time.Duration) NullDuration {
 	nd := NullDuration{}

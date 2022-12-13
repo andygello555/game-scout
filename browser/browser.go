@@ -5,6 +5,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/playwright-community/playwright-go"
 	"strings"
+	"time"
 )
 
 var UserAgent = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:90.0) Gecko/20100101 Firefox/90.0"
@@ -64,6 +65,9 @@ const (
 	InnerText
 	// Goto will browse to the URL given in Command.Value.
 	Goto
+	// Sleep will sleep for the given time.Duration in Command.WaitDuration. If Command.WaitDuration is nil, then Sleep
+	// will still be called but with a 0 time.Duration.
+	Sleep
 )
 
 // Execute will execute the CommandType when given a playwright.Page, a Command, and a CommandResult containing the
@@ -79,8 +83,15 @@ func (ct CommandType) Execute(page playwright.Page, command *Command, previousRe
 			if len(command.Options) > 0 {
 				for i, opt := range command.Options {
 					options[i] = opt.(playwright.PageWaitForSelectorOptions)
+					// If WaitDuration is not nil, then we will override the Timeout for every
+					// PageWaitForSelectorOptions
+					if command.WaitDuration != nil {
+						waitDuration := float64(command.WaitDuration.Milliseconds())
+						options[i].Timeout = &waitDuration
+					}
 				}
 			}
+
 			result.Elements[0], err = page.WaitForSelector(command.Value, options...)
 		} else {
 			result.Elements[0], err = page.QuerySelector(command.Value)
@@ -147,6 +158,14 @@ func (ct CommandType) Execute(page playwright.Page, command *Command, previousRe
 		if _, err = page.Goto(command.Value); err != nil {
 			err = errors.Wrapf(err, "could not goto \"%s\"", command.Value)
 		}
+	case Sleep:
+		var waitDuration time.Duration
+		if command.WaitDuration != nil {
+			waitDuration = *command.WaitDuration
+		} else {
+			waitDuration = time.Duration(0)
+		}
+		time.Sleep(waitDuration)
 	default:
 		return result, fmt.Errorf("cannot execute command type %d", ct)
 	}
@@ -170,6 +189,8 @@ func (ct CommandType) String() string {
 		return "InnerText"
 	case Goto:
 		return "Goto"
+	case Sleep:
+		return "Sleep"
 	default:
 		return "<nil>"
 	}
@@ -187,6 +208,10 @@ type Command struct {
 	// Wait indicates whether the command should wait for the query selector to become visible. Thus, it is only
 	// applicable when Type is Select or SelectAll.
 	Wait bool
+	// WaitDuration is how long to sleep when using a Sleep command, or wait when using any command with the Wait flag
+	// set. Note: this will override the Timeout field of any playwright.PageWaitForSelectorOptions in Options if it is
+	// not nil. Sleep will treat a nil WaitDuration as a time.Duration initialised to 0.
+	WaitDuration *time.Duration
 	// Optional indicates that this command can fail, and it will be skipped.
 	Optional bool
 	// FindFunc is the function to execute on each element in the input elements when the Type is Find or FindInnerText.
@@ -299,14 +324,29 @@ func (b *Browser) Quit() (err error) {
 }
 
 // Flow executes a series of Command, and returns a list of string outputs from the CommandResult.InnerTexts field.
-func (b *Browser) Flow(pageNumber int, commands ...Command) ([]string, error) {
-	var err error
+func (b *Browser) Flow(pageNumber int, commands ...Command) (innerTexts []string, err error) {
+	var (
+		i       int
+		command Command
+	)
+
+	// This will catch any panics that occur from executing any commands in the flow and turn them into an error that
+	// will be returned.
+	defer func() {
+		if p := recover(); p != nil {
+			err = fmt.Errorf("panic occurred on command %d, %s: %v", i, command.String(), p)
+		}
+	}()
+
 	result := NewCommandResult()
 	page := b.Pages[pageNumber]
-	for i, command := range commands {
+	for i, command = range commands {
 		if result, err = command.Execute(page, result); err != nil {
-			return result.InnerTexts, errors.Wrapf(err, "flow failed on command %d", i)
+			err = errors.Wrapf(err, "flow failed on command %d", i)
+			return
 		}
 	}
-	return result.InnerTexts, nil
+
+	innerTexts = result.InnerTexts
+	return
 }

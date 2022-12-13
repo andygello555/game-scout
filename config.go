@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/andygello555/game-scout/db/models"
+	"github.com/andygello555/game-scout/email"
 	task "github.com/andygello555/game-scout/tasks"
 	"github.com/pkg/errors"
 	"os"
@@ -38,6 +39,34 @@ func (c *DBConfig) DBSSLMode() string {
 	return sslMode
 }
 func (c *DBConfig) DBTimezone() string { return c.Timezone }
+
+// TemplateConfig contains the constants used for a specific email.TemplatePath.
+type TemplateConfig struct {
+	MaxImageWidth  int `json:"max_image_width"`
+	MaxImageHeight int `json:"max_image_height"`
+}
+
+func (c *TemplateConfig) TemplateMaxImageWidth() int  { return c.MaxImageWidth }
+func (c *TemplateConfig) TemplateMaxImageHeight() int { return c.MaxImageHeight }
+
+// EmailConfig contains the variables we need to create our SMTP email client.
+type EmailConfig struct {
+	Host            string                                 `json:"host"`
+	Port            int                                    `json:"port"`
+	From            string                                 `json:"from"`
+	To              []string                               `json:"to"`
+	Password        string                                 `json:"password"`
+	TemplateConfigs map[email.TemplatePath]*TemplateConfig `json:"template_configs"`
+}
+
+func (c *EmailConfig) EmailHost() string     { return c.Host }
+func (c *EmailConfig) EmailPort() int        { return c.Port }
+func (c *EmailConfig) EmailFrom() string     { return c.From }
+func (c *EmailConfig) EmailTo() []string     { return c.To }
+func (c *EmailConfig) EmailPassword() string { return c.Password }
+func (c *EmailConfig) EmailTemplateConfigFor(path email.TemplatePath) email.TemplateConfig {
+	return c.TemplateConfigs[path]
+}
 
 type RedisConfig struct {
 	MaxIdle                int `json:"max_idle"`
@@ -79,6 +108,7 @@ type TwitterConfig struct {
 	Password            string   `json:"password"`
 	Hashtags            []string `json:"hashtags"`
 	BlacklistedHashtags []string `json:"blacklisted_hashtags"`
+	Headless            bool     `json:"headless"`
 }
 
 func (c *TwitterConfig) TwitterAPIKey() string       { return c.APIKey }
@@ -87,6 +117,7 @@ func (c *TwitterConfig) TwitterBearerToken() string  { return c.BearerToken }
 func (c *TwitterConfig) TwitterUsername() string     { return c.Username }
 func (c *TwitterConfig) TwitterPassword() string     { return c.Password }
 func (c *TwitterConfig) TwitterHashtags() []string   { return c.Hashtags }
+func (c *TwitterConfig) TwitterHeadless() bool       { return c.Headless }
 
 // TwitterQuery constructs a query from the Hashtags array and the BlacklistedHashtags array by first prefixing each
 // hashtag with a hash ("#") and each blacklisted hashtag with "-#", then joining them with the " OR " separator.
@@ -169,6 +200,7 @@ type SteamWebPipesConfig struct {
 // Config contains the sub-configs for the various parts of the game-scout system. Such as the DBConfig.
 type Config struct {
 	DB            *DBConfig            `json:"db"`
+	Email         *EmailConfig         `json:"email"`
 	Tasks         *TaskConfig          `json:"tasks"`
 	Twitter       *TwitterConfig       `json:"twitter"`
 	Scrape        *ScrapeConfig        `json:"scrape"`

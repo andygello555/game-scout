@@ -11,6 +11,7 @@ import (
 	"github.com/andygello555/game-scout/browser"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
+	"github.com/andygello555/game-scout/email"
 	"github.com/andygello555/game-scout/steamcmd"
 	task "github.com/andygello555/game-scout/tasks"
 	myTwitter "github.com/andygello555/game-scout/twitter"
@@ -545,7 +546,7 @@ func main() {
 			Flags: []cli.Flag{
 				cli.BoolFlag{
 					Name:  "view",
-					Usage: "view the entire config",
+					Usage: "view the entire config as JSON",
 				},
 			},
 			Usage: "subcommand for viewing/manipulating the currently loaded config.json",
@@ -604,6 +605,11 @@ func main() {
 				cli.BoolFlag{
 					Name:     "trend",
 					Usage:    "find the trend of a Developer's snapshots",
+					Required: false,
+				},
+				cli.BoolFlag{
+					Name:     "measure",
+					Usage:    "execute the Measure template for this Developer",
 					Required: false,
 				},
 				cli.BoolFlag{
@@ -669,18 +675,19 @@ func main() {
 					}
 
 					if c.Bool("trend") {
-						trend := models.NewTrend(db.DB, &developer)
-						if err = trend.Train(); err != nil {
+						var trend *models.Trend
+						if trend, err = developer.Trend(db.DB); err != nil {
 							return cli.NewExitError(err.Error(), 1)
 						}
-						var coefficients []float64
-						if coefficients, err = trend.Trend(); err != nil {
-							return cli.NewExitError(err.Error(), 1)
-						}
+
 						var chartBuffer *bytes.Buffer
-						if chartBuffer, err = trend.Chart(1024, 400); err != nil {
+						if chartBuffer, err = trend.Chart(
+							globalConfig.Email.EmailTemplateConfigFor(email.Measure).TemplateMaxImageWidth(),
+							globalConfig.Email.EmailTemplateConfigFor(email.Measure).TemplateMaxImageHeight(),
+						); err != nil {
 							return cli.NewExitError(err.Error(), 1)
 						}
+
 						if err = os.WriteFile(
 							fmt.Sprintf(
 								"developer_trend_%s_%s.png",
@@ -694,9 +701,21 @@ func main() {
 						}
 						fmt.Printf(
 							"\tCoefficients for the trend of Developer %s (%s): %v\n",
-							developer.Username, developer.ID, coefficients,
+							developer.Username, developer.ID, trend.GetCoeffs(),
 						)
 					}
+
+					//if c.Bool("measure") {
+					//	var games []*models.Game
+					//	if games, err = developer.Games(db.DB); err != nil {
+					//		return cli.NewExitError(err.Error(), 1)
+					//	}
+					//
+					//	var snapshots []*models.DeveloperSnapshot
+					//	if snapshots, err = developer.DeveloperSnapshots(db.DB); err != nil {
+					//		return cli.NewExitError(err.Error(), 1)
+					//	}
+					//}
 
 					if c.Bool("printAfter") {
 						fmt.Printf("\t%v\n", developer)

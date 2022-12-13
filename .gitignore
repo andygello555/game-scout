@@ -39,3 +39,4 @@ tweetCap.json
 *.csv
 !samples/**
 *.mov
+*.png

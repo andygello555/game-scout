@@ -15,9 +15,14 @@ import (
 // trendModel is implemented by Model instances that need to have their trends measured by one or more metrics that
 // exist as a field in the model.
 type trendModel interface {
+	// GetObservedName will return the name of the observed variable for the model.
 	GetObservedName() string
+	// GetVariableNames will return the name of the variables for the model.
 	GetVariableNames() []string
+	// Train will add the data points to the Trend using the Trend.AddDataPoint method.
 	Train(trend *Trend) error
+	// Trend will return the fully trained Trend for the model instance.
+	Trend(db *gorm.DB) (*Trend, error)
 }
 
 // Trend references the structure used to calculate the regression of the observed variable for a trendModel. This will
@@ -81,6 +86,9 @@ func (trend *Trend) Trend() (coefficients []float64, err error) {
 	coefficients = trend.r.GetCoeffs()
 	return
 }
+
+// GetCoeffs returns the coefficients for the regression.Regression within this Trend.
+func (trend *Trend) GetCoeffs() (coefficients []float64) { return trend.r.GetCoeffs() }
 
 // Chart generates a chart for the Trend with the given size. The returned bytes.Buffer can be saved as a PNG.
 func (trend *Trend) Chart(width, height int) (buffer *bytes.Buffer, err error) {

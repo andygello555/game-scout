@@ -410,7 +410,7 @@ func ScrapeStorefrontForGameModel[ID comparable](id ID, gameModelScraper GameMod
 
 		if err != nil {
 			log.WARNING.Printf(
-				"Could not scrape %s for %s for game on ID %d: %s",
+				"Could not scrape %s for %s for game on ID %v: %s",
 				source.String(), gameModelScraper.GetStorefront().String(), id, err.Error(),
 			)
 		}

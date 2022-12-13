@@ -42,6 +42,7 @@ type Config interface {
 	TwitterPassword() string
 	TwitterHashtags() []string
 	TwitterQuery() string
+	TwitterHeadless() bool
 }
 
 func ClientCreate(config Config) error {
@@ -118,7 +119,7 @@ func (w *ClientWrapper) GetTweetCap() (err error) {
 		}
 		log.INFO.Printf("\tTweetCap is %s, fetching TweetCap from web", message)
 		var b *browser.Browser
-		if b, err = browser.NewBrowser(true); err != nil {
+		if b, err = browser.NewBrowser(w.Config.TwitterHeadless()); err != nil {
 			return errors.Wrap(err, "could not create browser to get TweetCap")
 		}
 		var outputs []string
@@ -148,7 +149,7 @@ func (w *ClientWrapper) GetTweetCap() (err error) {
 			browser.Command{
 				Type: browser.FindInnerText,
 				FindFunc: func(element any) bool {
-					return strings.Contains(element.(string), "Continue")
+					return strings.Contains(element.(string), "Next")
 				},
 			},
 			// Click the Continue button
@@ -238,8 +239,17 @@ func (w *ClientWrapper) GetTweetCap() (err error) {
 		tweetCap.Total = int(totalInt)
 		tweetCap.Remaining = tweetCap.Total - tweetCap.Used
 		tweetCap.Resets, _ = time.Parse("January 2 15:04 UTC", fmt.Sprintf("%s %d %s %s", month, day, t, tz))
+
+		// We have to check if the date referenced by the Twitter dashboard is for next year. This is because they don't
+		// give us a year on the dashboard.
+		todayYear, todayMonth, _ := time.Now().UTC().Date()
+		if todayMonth == time.December && tweetCap.Resets.Month() < time.December {
+			todayYear += 1
+		}
+
+		// Then we can construct the proper time.Time with the correct year
 		tweetCap.Resets = time.Date(
-			time.Now().UTC().Year(),
+			todayYear,
 			tweetCap.Resets.Month(),
 			tweetCap.Resets.Day(),
 			tweetCap.Resets.Hour(),

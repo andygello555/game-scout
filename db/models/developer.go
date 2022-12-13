@@ -38,7 +38,7 @@ func (d *Developer) GetVariableNames() []string { return []string{"Snapshot Date
 
 func (d *Developer) Train(trend *Trend) (err error) {
 	var snapshots []*DeveloperSnapshot
-	if err = trend.db.Where("developer_id = ?", d.ID).Order("version").Find(&snapshots).Error; err != nil {
+	if snapshots, err = d.DeveloperSnapshots(trend.db); err != nil {
 		return
 	}
 	if len(snapshots) < 2 {
@@ -48,6 +48,13 @@ func (d *Developer) Train(trend *Trend) (err error) {
 	for _, snapshot := range snapshots {
 		trend.AddDataPoint(snapshot.CreatedAt, snapshot.WeightedScore)
 	}
+	return
+}
+
+// DeveloperSnapshots will find all the DeveloperSnapshot for this Developer. The resulting array is ordered by the
+// DeveloperSnapshot.Version ascending.
+func (d *Developer) DeveloperSnapshots(db *gorm.DB) (developerSnapshots []*DeveloperSnapshot, err error) {
+	err = db.Model(&DeveloperSnapshot{}).Where("developer_id = ?", d.ID).Order("version").Find(&developerSnapshots).Error
 	return
 }
 
@@ -77,4 +84,18 @@ func (d *Developer) OnConflict() clause.OnConflict {
 // OnCreateOmit returns the fields that should be omitted when creating a Developer.
 func (d *Developer) OnCreateOmit() []string {
 	return []string{}
+}
+
+func (d *Developer) Trend(db *gorm.DB) (trend *Trend, err error) {
+	trend = NewTrend(db, d)
+	if err = trend.Train(); err != nil {
+		err = errors.Wrapf(err, "Trend could not be trained for Developer %s (%s)", d.Username, d.ID)
+		return
+	}
+
+	if _, err = trend.Trend(); err != nil {
+		err = errors.Wrapf(err, "Trend could not be run for Developer %s (%s)", d.Username, d.ID)
+		return
+	}
+	return
 }
