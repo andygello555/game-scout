@@ -8,6 +8,41 @@ import (
 	"time"
 )
 
+type templateConfig struct {
+	MaxImageWidth  int `json:"max_image_width"`
+	MaxImageHeight int `json:"max_image_height"`
+}
+
+func (c *templateConfig) TemplateMaxImageWidth() int  { return c.MaxImageWidth }
+func (c *templateConfig) TemplateMaxImageHeight() int { return c.MaxImageHeight }
+
+type emailConfig struct {
+	Host            string                           `json:"host"`
+	Port            int                              `json:"port"`
+	From            string                           `json:"from"`
+	To              []string                         `json:"to"`
+	Password        string                           `json:"password"`
+	TemplateConfigs map[TemplatePath]*templateConfig `json:"template_configs"`
+}
+
+func (c *emailConfig) EmailHost() string     { return c.Host }
+func (c *emailConfig) EmailPort() int        { return c.Port }
+func (c *emailConfig) EmailFrom() string     { return c.From }
+func (c *emailConfig) EmailTo() []string     { return c.To }
+func (c *emailConfig) EmailPassword() string { return c.Password }
+func (c *emailConfig) EmailTemplateConfigFor(path TemplatePath) TemplateConfig {
+	return c.TemplateConfigs[path]
+}
+
+var config = &emailConfig{
+	TemplateConfigs: map[TemplatePath]*templateConfig{
+		Measure: {
+			MaxImageWidth:  1024,
+			MaxImageHeight: 400,
+		},
+	},
+}
+
 func TestMeasureContext_Template(t *testing.T) {
 	var err error
 	for testNo, test := range []struct {
@@ -67,6 +102,7 @@ func TestMeasureContext_Template(t *testing.T) {
 					},
 				},
 				TopSteamApps: nil,
+				Config:       config,
 			},
 		},
 	} {

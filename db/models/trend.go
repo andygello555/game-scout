@@ -2,12 +2,14 @@ package models
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"github.com/pkg/errors"
 	"github.com/sajari/regression"
 	"github.com/wcharczuk/go-chart"
 	"github.com/wcharczuk/go-chart/drawing"
 	"gorm.io/gorm"
+	"html/template"
 	"reflect"
 	"time"
 )
@@ -90,8 +92,25 @@ func (trend *Trend) Trend() (coefficients []float64, err error) {
 // GetCoeffs returns the coefficients for the regression.Regression within this Trend.
 func (trend *Trend) GetCoeffs() (coefficients []float64) { return trend.r.GetCoeffs() }
 
+type ChartImage struct {
+	width  int
+	height int
+	bytes  bytes.Buffer
+}
+
+func (ci *ChartImage) Base64() string {
+	encoded := base64.StdEncoding.EncodeToString(ci.bytes.Bytes())
+	return fmt.Sprintf("data:image/png;base64,%s", encoded)
+}
+
+func (ci *ChartImage) Img(alt string, style string) template.HTML {
+	return template.HTML(fmt.Sprintf("<img src=\"%s\" alt=\"%s\" style=\"%s\">", ci.Base64(), alt, style))
+}
+
+func (ci *ChartImage) Bytes() []byte { return ci.bytes.Bytes() }
+
 // Chart generates a chart for the Trend with the given size. The returned bytes.Buffer can be saved as a PNG.
-func (trend *Trend) Chart(width, height int) (buffer *bytes.Buffer, err error) {
+func (trend *Trend) Chart(width, height int) (image *ChartImage, err error) {
 	times := make([]time.Time, len(trend.dataPoints))
 
 	// Time series for the observed variable
@@ -193,8 +212,8 @@ func (trend *Trend) Chart(width, height int) (buffer *bytes.Buffer, err error) {
 		},
 	}
 
-	buffer = bytes.NewBuffer([]byte{})
-	if err = graph.Render(chart.PNG, buffer); err != nil {
+	image = &ChartImage{width: width, height: height, bytes: bytes.Buffer{}}
+	if err = graph.Render(chart.PNG, &image.bytes); err != nil {
 		err = errors.Wrapf(err, "could not generate Trend chart for %s", reflect.TypeOf(trend.model).Elem().String())
 	}
 	return

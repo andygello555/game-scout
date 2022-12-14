@@ -2,6 +2,7 @@ package email
 
 import (
 	"bytes"
+	"embed"
 	"fmt"
 	"github.com/SebastiaanKlippert/go-wkhtmltopdf"
 	"github.com/andygello555/game-scout/db/models"
@@ -26,16 +27,17 @@ type Context interface {
 }
 
 type TrendingDev struct {
-	Developer  *models.Developer
-	Snapshots  []*models.DeveloperSnapshot
-	Games      []*models.Game
-	TrendGraph *bytes.Buffer
+	Developer *models.Developer
+	Snapshots []*models.DeveloperSnapshot
+	Games     []*models.Game
+	Trend     *models.Trend
 }
 
 // MeasureContext is a Context that contains the data required to fill out the Measure HTML template.
 type MeasureContext struct {
 	TrendingDevs []*TrendingDev
 	TopSteamApps []*models.SteamApp
+	Config       Config
 }
 
 func (m *MeasureContext) Path() TemplatePath  { return Measure }
@@ -59,7 +61,10 @@ func (m *MeasureContext) Funcs() template.FuncMap {
 	}
 }
 
-const templateDir = "../templates/"
+//go:embed templates/*
+var templates embed.FS
+
+const templateDir = "templates/"
 
 // TemplatePath represents the path of an HTML template in the repo.
 type TemplatePath string
@@ -97,7 +102,7 @@ func (tt TemplatePath) Template() *Template {
 				filepath.Base(tt.Path()),
 			).Funcs(
 				tt.Context().Funcs(),
-			).ParseFiles(tt.Path())),
+			).ParseFS(templates, tt.Path())),
 		ContentType: NotExecuted,
 	}
 }
@@ -247,6 +252,7 @@ func (t *Template) PDF() (output *Template) {
 
 	// enable this if the HTML file contains local references such as images, CSS, etc.
 	page.EnableLocalFileAccess.Set(true)
+	page.Zoom.Set(1.6)
 
 	// add the page to your generator
 	pdf.AddPage(page)
@@ -254,9 +260,11 @@ func (t *Template) PDF() (output *Template) {
 	// manipulate page attributes as needed
 	pdf.MarginLeft.Set(0)
 	pdf.MarginRight.Set(0)
+	pdf.MarginBottom.Set(0)
+	pdf.MarginTop.Set(0)
 	pdf.Dpi.Set(300)
 	pdf.PageSize.Set(wkhtmltopdf.PageSizeA4)
-	pdf.Orientation.Set(wkhtmltopdf.OrientationLandscape)
+	pdf.Orientation.Set(wkhtmltopdf.OrientationPortrait)
 
 	// Create the PDF using the PDF generator
 	err = pdf.Create()

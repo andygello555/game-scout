@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -624,7 +623,12 @@ func main() {
 			},
 			Usage: "subcommand for viewing resources related to a developer in the DB",
 			Action: func(c *cli.Context) (err error) {
-				for _, id := range c.StringSlice("id") {
+				measureContext := email.MeasureContext{
+					TrendingDevs: make([]*email.TrendingDev, len(c.StringSlice("id"))),
+					Config:       globalConfig.Email,
+				}
+
+				for developerNo, id := range c.StringSlice("id") {
 					fmt.Printf("Performing commands on Developer: %s\n", id)
 					var developer models.Developer
 					if err = db.DB.Find(&developer, id).Error; err != nil {
@@ -680,7 +684,7 @@ func main() {
 							return cli.NewExitError(err.Error(), 1)
 						}
 
-						var chartBuffer *bytes.Buffer
+						var chartBuffer *models.ChartImage
 						if chartBuffer, err = trend.Chart(
 							globalConfig.Email.EmailTemplateConfigFor(email.Measure).TemplateMaxImageWidth(),
 							globalConfig.Email.EmailTemplateConfigFor(email.Measure).TemplateMaxImageHeight(),
@@ -705,20 +709,67 @@ func main() {
 						)
 					}
 
-					//if c.Bool("measure") {
-					//	var games []*models.Game
-					//	if games, err = developer.Games(db.DB); err != nil {
-					//		return cli.NewExitError(err.Error(), 1)
-					//	}
-					//
-					//	var snapshots []*models.DeveloperSnapshot
-					//	if snapshots, err = developer.DeveloperSnapshots(db.DB); err != nil {
-					//		return cli.NewExitError(err.Error(), 1)
-					//	}
-					//}
+					if c.Bool("measure") {
+						var games []*models.Game
+						if games, err = developer.Games(db.DB); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+
+						var snapshots []*models.DeveloperSnapshot
+						if snapshots, err = developer.DeveloperSnapshots(db.DB); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+
+						var trend *models.Trend
+						if trend, err = developer.Trend(db.DB); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+
+						measureContext.TrendingDevs[developerNo] = &email.TrendingDev{
+							Developer: &developer,
+							Snapshots: snapshots,
+							Games:     games,
+							Trend:     trend,
+						}
+					}
 
 					if c.Bool("printAfter") {
 						fmt.Printf("\t%v\n", developer)
+					}
+				}
+
+				if c.Bool("measure") {
+					var template *email.Template
+					if template = measureContext.HTML(); template.Error != nil {
+						return cli.NewExitError(template.Error.Error(), 1)
+					}
+
+					if err = os.WriteFile(
+						fmt.Sprintf(
+							"measure_email_for_%s_%s.html",
+							strings.Join(c.StringSlice("id"), "_"),
+							time.Now().UTC().Format("2006-01-02"),
+						),
+						template.Buffer.Bytes(),
+						filePerms,
+					); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+
+					if template = template.PDF(); template.Error != nil {
+						return cli.NewExitError(template.Error.Error(), 1)
+					}
+
+					if err = os.WriteFile(
+						fmt.Sprintf(
+							"measure_email_for_%s_%s.pdf",
+							strings.Join(c.StringSlice("id"), "_"),
+							time.Now().UTC().Format("2006-01-02"),
+						),
+						template.Buffer.Bytes(),
+						filePerms,
+					); err != nil {
+						return cli.NewExitError(err.Error(), 1)
 					}
 				}
 				return
