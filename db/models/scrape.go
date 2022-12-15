@@ -318,19 +318,45 @@ func (ss *StorefrontScrapers[ID]) Jobs() int {
 	return len(ss.jobs)
 }
 
-// Add adds a job to be executed by the started workers. This returns a channel that can be read from to block until the
-// game has been scraped.
-func (ss *StorefrontScrapers[ID]) Add(update bool, gameModel GameModel[ID], storefrontIDs map[Storefront]mapset.Set[ID]) <-chan GameModel[ID] {
-	scrapeGameDone := make(chan GameModel[ID])
+// Drop will try and dequeue the given number of jobs from the StorefrontScrapers. These jobs will just be dropped
+// (i.e. not scraped). The actual number of jobs dropped will be returned.
+func (ss *StorefrontScrapers[ID]) Drop(no int) int {
+	dropped := 0
 	if ss.started && !ss.finished {
-		ss.jobs <- &storefrontScraperJob[ID]{
+		for i := 0; i < no; i++ {
+			select {
+			case <-ss.jobs:
+				dropped++
+			default:
+				break
+			}
+		}
+	}
+	return dropped
+}
+
+// Add adds a job to be executed by the started workers. This returns a channel that can be read from to block until the
+// game has been scraped, and will also return a boolean value indicating whether the job was queued.
+func (ss *StorefrontScrapers[ID]) Add(update bool, gameModel GameModel[ID], storefrontIDs map[Storefront]mapset.Set[ID]) (<-chan GameModel[ID], bool) {
+	scrapeGameDone := make(chan GameModel[ID])
+	ok := false
+	if ss.started && !ss.finished {
+		select {
+		case ss.jobs <- &storefrontScraperJob[ID]{
 			update:        update,
 			game:          gameModel,
 			storefrontIDs: storefrontIDs,
 			result:        scrapeGameDone,
+		}:
+			ok = true
+		default:
+			log.ERROR.Printf(
+				"StorefrontScrapers: could not queue scrape for %v as it will exceed the job capacity of %d",
+				gameModel.GetID(), cap(ss.jobs),
+			)
 		}
 	}
-	return scrapeGameDone
+	return scrapeGameDone, ok
 }
 
 // Wait waits for the workers to finish. It should only be called after all jobs have been added using the Add method.
@@ -341,6 +367,15 @@ func (ss *StorefrontScrapers[ID]) Wait() {
 		ss.wg.Wait()
 		close(ss.guard)
 		ss.finished = true
+	}
+}
+
+// Stop tries to stop the StorefrontScrapers as fast as possible by first dropping all the remaining jobs in the queue,
+// and then calling Wait to wait for all the currently running workers to finish the jobs they are currently processing.
+func (ss *StorefrontScrapers[ID]) Stop() {
+	if ss.started && !ss.finished {
+		ss.Drop(ss.Jobs())
+		ss.Wait()
 	}
 }
 

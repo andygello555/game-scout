@@ -111,10 +111,11 @@ out:
 	// otherwise we'll end up waiting for nothing
 	game = nil
 	if len(storefrontMap) > 0 {
-		gameModel := <-gameScrapers.Add(false, &models.Game{Developer: developer}, storefrontMap)
-		game = gameModel.(*models.Game)
-		if game != nil {
-			game.DeveloperID = developer.ID
+		if gameChannel, ok := gameScrapers.Add(false, &models.Game{Developer: developer}, storefrontMap); ok {
+			game = (<-gameChannel).(*models.Game)
+			if game != nil {
+				game.DeveloperID = developer.ID
+			}
 		}
 	}
 	return

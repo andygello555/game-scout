@@ -412,21 +412,23 @@ func main() {
 				case "game":
 					gameScrapers := models.NewStorefrontScrapers[string](globalConfig.Scrape, db.DB, 1, 1, 1, 0, 0)
 					gameScrapers.Start()
-					game := <-gameScrapers.Add(false, &models.Game{}, map[models.Storefront]mapset.Set[string]{
+					if gameChannel, ok := gameScrapers.Add(false, &models.Game{}, map[models.Storefront]mapset.Set[string]{
 						models.SteamStorefront: mapset.NewThreadUnsafeSet[string](
 							browser.SteamAppPage.Fill(c.Uint("appid")),
 						),
-					})
-					gameUpsertable = game.(*models.Game)
-					gameScrapers.Wait()
+					}); ok {
+						gameUpsertable = (<-gameChannel).(*models.Game)
+					}
+					gameScrapers.Stop()
 				case "steamapp":
 					gameScrapers := models.NewStorefrontScrapers[uint64](globalConfig.Scrape, db.DB, 1, 1, 1, 0, 0)
 					gameScrapers.Start()
-					game := <-gameScrapers.Add(false, &models.SteamApp{}, map[models.Storefront]mapset.Set[uint64]{
+					if gameChannel, ok := gameScrapers.Add(false, &models.SteamApp{}, map[models.Storefront]mapset.Set[uint64]{
 						models.SteamStorefront: mapset.NewThreadUnsafeSet[uint64](uint64(c.Uint("appid"))),
-					})
-					gameUpsertable = game.(*models.SteamApp)
-					gameScrapers.Wait()
+					}); ok {
+						gameUpsertable = (<-gameChannel).(*models.SteamApp)
+					}
+					gameScrapers.Stop()
 				default:
 					return cli.NewExitError(
 						fmt.Sprintf(

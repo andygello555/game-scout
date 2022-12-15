@@ -69,11 +69,13 @@ func UpdateDeveloper(
 				game.Name.String, game.ID.String(), developer.Username, developer.ID,
 			)
 			game.Developer = developer
-			<-gameScrapers.Add(true, game, nil)
-			log.INFO.Printf(
-				"Updated Game \"%s\" (%s) for Developer %s (%s)",
-				game.Name.String, game.ID.String(), developer.Username, developer.ID,
-			)
+			if gameChannel, ok := gameScrapers.Add(true, game, nil); ok {
+				<-gameChannel
+				log.INFO.Printf(
+					"Updated Game \"%s\" (%s) for Developer %s (%s)",
+					game.Name.String, game.ID.String(), developer.Username, developer.ID,
+				)
+			}
 		}(game)
 	}
 
