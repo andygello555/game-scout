@@ -417,7 +417,10 @@ func main() {
 							browser.SteamAppPage.Fill(c.Uint("appid")),
 						),
 					}); ok {
-						gameUpsertable = (<-gameChannel).(*models.Game)
+						gameModel := <-gameChannel
+						if gameModel != nil {
+							gameUpsertable = gameModel.(*models.Game)
+						}
 					}
 					gameScrapers.Stop()
 				case "steamapp":
@@ -426,7 +429,10 @@ func main() {
 					if gameChannel, ok := gameScrapers.Add(false, &models.SteamApp{}, map[models.Storefront]mapset.Set[uint64]{
 						models.SteamStorefront: mapset.NewThreadUnsafeSet[uint64](uint64(c.Uint("appid"))),
 					}); ok {
-						gameUpsertable = (<-gameChannel).(*models.SteamApp)
+						gameModel := <-gameChannel
+						if gameModel != nil {
+							gameUpsertable = gameModel.(*models.SteamApp)
+						}
 					}
 					gameScrapers.Stop()
 				default:

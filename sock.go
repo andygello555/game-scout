@@ -23,7 +23,7 @@ const (
 	minStorefrontScraperWaitTime           = time.Millisecond * 100
 	maxStorefrontScraperWaitTime           = time.Millisecond * 500
 	gameScrapeConsumers                    = 10
-	gameScrapeConsumerTimeout              = time.Minute
+	dropperWaitTime                        = time.Minute
 )
 
 type WebsocketMessageType string
@@ -56,67 +56,69 @@ Type: %s`, wsm.Users, wsm.ChangeNumber, wsm.Apps, wsm.Packages, wsm.Type.String(
 // steamAppWebsocketConsumer is the worker procedure that is used within the SteamAppWebsocketScraper client to consume
 // the scraped models.SteamApp. Once it has received a SteamApp, it will try and find whether the models.Developer for
 // the models.SteamApp exists in the DB to be linked to it. Finally, the models.SteamApp will be upserted into the DB.
-func steamAppWebsocketConsumer(no int, wg *sync.WaitGroup, jobs chan (<-chan models.GameModel[uint64])) {
+func steamAppWebsocketConsumer(no int, wg *sync.WaitGroup, timeout time.Duration, jobs chan (<-chan models.GameModel[uint64])) {
 	defer wg.Done()
 	for job := range jobs {
-		// Wait for the scrape to have finished, but timeout after gameScrapeConsumerTimeout
-		select {
-		case gameModel := <-job:
-			app := gameModel.(*models.SteamApp)
+		// Wait for the scrape to have finished
+		gameModel := <-job
+		if gameModel == nil {
 			log.WARNING.Printf(
-				"SteamAppWebsocketConsumer %d: is processing job for SteamApp \"%s\" (%d). "+
-					"There are %d jobs left, %.2f%% capacity",
-				no+1, app.Name, app.ID, len(jobs), float64(len(jobs))/float64(maxStorefrontScraperJobs)*100.0,
-			)
-
-			if app.Type == "game" {
-				if app.Developer != nil {
-					// If the developer is set in the SteamApp, then we will search for the Developer in the DB to see if we can
-					// link it to a developer that we are tracking
-					if err := db.DB.Find(
-						app.Developer,
-						"username = ?",
-						app.Developer.Username,
-					).Error; err == nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-						log.INFO.Printf(
-							"Found Twitter user \"%s\" (%s) for SteamApp \"%s\" (%d)",
-							app.Developer.Username, app.Developer.ID, app.Name, app.ID,
-						)
-						if app.Developer.ID != "" {
-							app.DeveloperID = &app.Developer.ID
-						}
-					} else if err != nil && errors.Is(err, gorm.ErrRecordNotFound) {
-						log.INFO.Printf(
-							"Could not find Twitter user \"%s\" in DB for SteamApp \"%s\" (%d), so we are skipping linking "+
-								"this developer",
-							app.Developer.Username, app.Name, app.ID,
-						)
-						app.DeveloperID = nil
-						app.Developer = nil
-					} else {
-						log.ERROR.Printf(
-							"Error occurred whilst trying to find Twitter user \"%s\" in DB for SteamApp \"%s\" (%d): %v",
-							app.Developer.Username, app.Name, app.ID, err,
-						)
-						app.DeveloperID = nil
-						app.Developer = nil
-					}
-				}
-
-				// Finally, upsert the SteamApp
-				if created, err := db.Upsert(app); err != nil {
-					log.ERROR.Printf("Could not upsert SteamApp %d: %v", app.ID, err)
-				} else {
-					log.INFO.Printf("Scraped and upserted SteamApp %d: created = %t", app.ID, created)
-				}
-			} else {
-				log.WARNING.Printf("SteamApp %d is not a Game, it is a \"%s\". Skipping creation...", app.ID, app.Type)
-			}
-		case <-time.After(gameScrapeConsumerTimeout):
-			log.ERROR.Printf("SteamAppWebsocketConsumer %d: timed out before reading the scraped SteamApp. "+
-				"There are %d jobs left, %.2f%% capacity",
+				"SteamAppWebsocketConsumer %d: has a nil SteamApp, most likely because it has been dropped or because "+
+					"of a timeout. There are %d jobs left, %.2f%% capacity",
 				no+1, len(jobs), float64(len(jobs))/float64(maxStorefrontScraperJobs)*100.0,
 			)
+			continue
+		}
+
+		app := gameModel.(*models.SteamApp)
+		log.WARNING.Printf(
+			"SteamAppWebsocketConsumer %d: is processing job for SteamApp \"%s\" (%d). "+
+				"There are %d jobs left, %.2f%% capacity",
+			no+1, app.Name, app.ID, len(jobs), float64(len(jobs))/float64(maxStorefrontScraperJobs)*100.0,
+		)
+
+		if app.Type == "game" {
+			if app.Developer != nil {
+				// If the developer is set in the SteamApp, then we will search for the Developer in the DB to see if we can
+				// link it to a developer that we are tracking
+				if err := db.DB.Find(
+					app.Developer,
+					"username = ?",
+					app.Developer.Username,
+				).Error; err == nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+					log.INFO.Printf(
+						"Found Twitter user \"%s\" (%s) for SteamApp \"%s\" (%d)",
+						app.Developer.Username, app.Developer.ID, app.Name, app.ID,
+					)
+					if app.Developer.ID != "" {
+						app.DeveloperID = &app.Developer.ID
+					}
+				} else if err != nil && errors.Is(err, gorm.ErrRecordNotFound) {
+					log.INFO.Printf(
+						"Could not find Twitter user \"%s\" in DB for SteamApp \"%s\" (%d), so we are skipping linking "+
+							"this developer",
+						app.Developer.Username, app.Name, app.ID,
+					)
+					app.DeveloperID = nil
+					app.Developer = nil
+				} else {
+					log.ERROR.Printf(
+						"Error occurred whilst trying to find Twitter user \"%s\" in DB for SteamApp \"%s\" (%d): %v",
+						app.Developer.Username, app.Name, app.ID, err,
+					)
+					app.DeveloperID = nil
+					app.Developer = nil
+				}
+			}
+
+			// Finally, upsert the SteamApp
+			if created, err := db.Upsert(app); err != nil {
+				log.ERROR.Printf("Could not upsert SteamApp %d: %v", app.ID, err)
+			} else {
+				log.INFO.Printf("Scraped and upserted SteamApp %d: created = %t", app.ID, created)
+			}
+		} else {
+			log.WARNING.Printf("SteamApp %d is not a Game, it is a \"%s\". Skipping creation...", app.ID, app.Type)
 		}
 	}
 }
@@ -195,7 +197,7 @@ func (sws *SteamAppWebsocketScraper) worker(no int) {
 	var consumerWg sync.WaitGroup
 	for w := 0; w < gameScrapeConsumers; w++ {
 		consumerWg.Add(1)
-		go steamAppWebsocketConsumer(w, &consumerWg, consumerJobs)
+		go steamAppWebsocketConsumer(w, &consumerWg, gameScrapers.Timeout, consumerJobs)
 	}
 
 	dropperClose := make(chan struct{})
@@ -273,8 +275,11 @@ func (sws *SteamAppWebsocketScraper) worker(no int) {
 					}
 				}
 				previousJobLen = jobs
-				log.INFO.Printf("Dropper: previous jobs = %d, rate = %d, sleeping for 1 min", previousJobLen, rate)
-				time.Sleep(time.Minute)
+				log.INFO.Printf(
+					"Dropper: previous jobs = %d, rate = %d, sleeping for %s",
+					previousJobLen, rate, dropperWaitTime.String(),
+				)
+				time.Sleep(dropperWaitTime)
 			}
 		}
 	}()

@@ -112,8 +112,9 @@ out:
 	game = nil
 	if len(storefrontMap) > 0 {
 		if gameChannel, ok := gameScrapers.Add(false, &models.Game{Developer: developer}, storefrontMap); ok {
-			game = (<-gameChannel).(*models.Game)
-			if game != nil {
+			gameModel := <-gameChannel
+			if gameModel != nil {
+				game = gameModel.(*models.Game)
 				game.DeveloperID = developer.ID
 			}
 		}

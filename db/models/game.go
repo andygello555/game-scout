@@ -149,7 +149,7 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 	switch gf {
 	case GamePublisher:
 		nullString := f.Interface().(null.String)
-		val := -7000.0
+		val := -50000.0
 		if !nullString.IsValid() {
 			val = 4000.0
 		}
@@ -193,7 +193,7 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 	case GameUpdates:
 		return []float64{float64(f.Uint()+1) / 1500.0}
 	case GameDeveloperVerified:
-		val := -7000.0
+		val := -50000.0
 		if f.Bool() {
 			val = 4000.0
 		}

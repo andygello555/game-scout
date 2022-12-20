@@ -40,6 +40,18 @@ func (sf Storefront) String() string {
 	}
 }
 
+// LogoSrc returns the URL at which the logo for this storefront resides.
+func (sf Storefront) LogoSrc() string {
+	switch sf {
+	case SteamStorefront:
+		return "https://store.cloudflare.steamstatic.com/public/shared/images/header/logo_steam.svg"
+	case ItchIOStorefront:
+		return "https://static.itch.io/images/logo-black-new.svg"
+	default:
+		return ""
+	}
+}
+
 func (sf *Storefront) Scan(value interface{}) error {
 	switch value.(type) {
 	case []byte:
@@ -268,6 +280,7 @@ type StorefrontScrapers[ID comparable] struct {
 	db                *gorm.DB
 	minWorkerWaitTime time.Duration
 	maxWorkerWaitTime time.Duration
+	Timeout           time.Duration
 	started           bool
 	finished          bool
 }
@@ -286,6 +299,8 @@ type StorefrontScrapers[ID comparable] struct {
 // • minWorkerWaitTime: the minimum time a worker should wait after completing a job
 //
 // • maxWorkerWaitTime: the maximum time a worker should wait after completing a job.
+//
+// • timeout: the duration after which a worker should time out.
 func NewStorefrontScrapers[ID comparable](
 	config ScrapeConfig,
 	db *gorm.DB,
@@ -301,6 +316,7 @@ func NewStorefrontScrapers[ID comparable](
 		db:                db,
 		minWorkerWaitTime: minWorkerWaitTime,
 		maxWorkerWaitTime: maxWorkerWaitTime,
+		Timeout:           time.Minute + (time.Second * 30),
 	}
 }
 
@@ -318,18 +334,75 @@ func (ss *StorefrontScrapers[ID]) Jobs() int {
 	return len(ss.jobs)
 }
 
+// cleanupResultChannels takes a slice of result channels that can be written to, and writes nil to all of them in a
+// pool of 20 workers. This is to be called on the result channels of the jobs dropped by StorefrontScrapers.Drop and
+// StorefrontScrapers.DropAll to stop any consumers of these result channels from going into a deadlock.
+func cleanupResultChannels[ID comparable](resultChannels []chan<- GameModel[ID]) {
+	cleanupJobs := make(chan (chan<- GameModel[ID]), len(resultChannels))
+	var cleanupWorkerWg sync.WaitGroup
+	for w := 0; w < 20; w++ {
+		cleanupWorkerWg.Add(1)
+		go func() {
+			defer cleanupWorkerWg.Done()
+			for job := range cleanupJobs {
+				job <- nil
+			}
+		}()
+	}
+
+	for _, result := range resultChannels {
+		cleanupJobs <- result
+	}
+	close(cleanupJobs)
+	cleanupWorkerWg.Wait()
+}
+
 // Drop will try and dequeue the given number of jobs from the StorefrontScrapers. These jobs will just be dropped
-// (i.e. not scraped). The actual number of jobs dropped will be returned.
+// (i.e. not scraped) and each of their result channels will be filled with a nil value so that any consumers blocking
+// for these channels won't cause a deadlock. Because of this, this method will block until the resulting channels for
+// each dropped job have been filled with nils. The actual number of jobs dropped will be returned.
 func (ss *StorefrontScrapers[ID]) Drop(no int) int {
 	dropped := 0
 	if ss.started && !ss.finished {
+		resultChannels := make([]chan<- GameModel[ID], 0)
+	done:
 		for i := 0; i < no; i++ {
 			select {
-			case <-ss.jobs:
-				dropped++
+			case job := <-ss.jobs:
+				resultChannels = append(resultChannels, job.result)
 			default:
-				break
+				break done
 			}
+		}
+
+		dropped = len(resultChannels)
+		if dropped > 0 {
+			cleanupResultChannels[ID](resultChannels)
+		}
+	}
+	return dropped
+}
+
+// DropAll works similarly to Drop, but it will instead keep de-queueing jobs from the job channel until there are no
+// more left. Because of this, this method will block until the resulting channels for each dropped job have been filled
+// with nils. It will return the actual number of jobs that have been dropped.
+func (ss *StorefrontScrapers[ID]) DropAll() int {
+	dropped := 0
+	if ss.started && !ss.finished {
+		resultChannels := make([]chan<- GameModel[ID], 0)
+	done:
+		for {
+			select {
+			case job := <-ss.jobs:
+				resultChannels = append(resultChannels, job.result)
+			default:
+				break done
+			}
+		}
+
+		dropped = len(resultChannels)
+		if dropped > 0 {
+			cleanupResultChannels[ID](resultChannels)
 		}
 	}
 	return dropped
@@ -374,8 +447,34 @@ func (ss *StorefrontScrapers[ID]) Wait() {
 // and then calling Wait to wait for all the currently running workers to finish the jobs they are currently processing.
 func (ss *StorefrontScrapers[ID]) Stop() {
 	if ss.started && !ss.finished {
-		ss.Drop(ss.Jobs())
+		ss.DropAll()
 		ss.Wait()
+	}
+}
+
+// workerExecuteJob will execute a storefrontScraperJob for a StorefrontScrapers.worker with the Timeout provided in the
+// StorefrontScrapers.
+func (ss *StorefrontScrapers[ID]) workerExecuteJob(workerNo int, job *storefrontScraperJob[ID]) bool {
+	done := make(chan struct{}, 1)
+	go func() {
+		if job.update {
+			if err := job.game.Update(ss.db, ss.config); err != nil {
+				log.WARNING.Printf(
+					"StorefrontScraper worker no. %d could not save game model instance %s: %s",
+					workerNo, job.game.GetID(), err.Error(),
+				)
+			}
+		} else {
+			job.game = ScrapeStorefrontsForGameModel[ID](job.game, job.storefrontIDs, ss.config)
+		}
+		done <- struct{}{}
+	}()
+
+	select {
+	case <-time.After(ss.Timeout):
+		return false
+	case <-done:
+		return true
 	}
 }
 
@@ -393,28 +492,29 @@ func (ss *StorefrontScrapers[ID]) worker(no int) {
 			no, job.update,
 		)
 
-		if job.update {
-			if err := job.game.Update(ss.db, ss.config); err != nil {
-				log.WARNING.Printf(
-					"StorefrontScraper no. %d could not save game model instance %s: %s",
-					no, job.game.GetID(), err.Error(),
-				)
-			}
-		} else {
-			job.game = ScrapeStorefrontsForGameModel[ID](job.game, job.storefrontIDs, ss.config)
-		}
-		job.result <- job.game
-		jobTotal++
-
 		// Find out how long to sleep for...
 		min := int64(ss.minWorkerWaitTime)
 		max := int64(ss.maxWorkerWaitTime)
 		random := rand.Int63n(max-min+1) + min
 		sleepDuration := time.Duration(random)
-		log.INFO.Printf(
-			"StorefrontScraper no. %d has completed a job and is now sleeping for %s",
-			no, sleepDuration.String(),
-		)
+
+		// Execute the job, sometimes this can time out...
+		if ok := ss.workerExecuteJob(no, job); ok {
+			log.INFO.Printf(
+				"StorefrontScraper no. %d has completed a job and is now sleeping for %s",
+				no, sleepDuration.String(),
+			)
+			job.result <- job.game
+			jobTotal++
+		} else {
+			log.WARNING.Printf(
+				"StorefrontScraper worker no. %d timed out (after %s) when executing job. We are still going to "+
+					"sleep for %s",
+				no, ss.Timeout.String(), sleepDuration.String(),
+			)
+			job.result <- nil
+		}
+
 		time.Sleep(sleepDuration)
 		<-ss.guard
 	}

@@ -5,9 +5,15 @@ import (
 	"embed"
 	"fmt"
 	"github.com/SebastiaanKlippert/go-wkhtmltopdf"
+	"github.com/andygello555/game-scout/browser"
 	"github.com/andygello555/game-scout/db/models"
+	myErrors "github.com/andygello555/game-scout/errors"
+	"github.com/aws/aws-sdk-go/private/util"
 	"github.com/pkg/errors"
+	"github.com/volatiletech/null/v9"
 	"html/template"
+	"math"
+	"os"
 	"path/filepath"
 	"reflect"
 	"time"
@@ -35,9 +41,10 @@ type TrendingDev struct {
 
 // MeasureContext is a Context that contains the data required to fill out the Measure HTML template.
 type MeasureContext struct {
-	TrendingDevs []*TrendingDev
-	TopSteamApps []*models.SteamApp
-	Config       Config
+	TrendingDevs      []*TrendingDev
+	TopSteamApps      []*models.SteamApp
+	EnabledDevelopers int
+	Config            Config
 }
 
 func (m *MeasureContext) Path() TemplatePath  { return Measure }
@@ -45,9 +52,55 @@ func (m *MeasureContext) Template() *Template { return m.Path().Template() }
 func (m *MeasureContext) HTML() *Template     { return m.Template().HTML(m) }
 func (m *MeasureContext) Funcs() template.FuncMap {
 	return map[string]any{
+		"percentage": func(f null.Float64) string {
+			perc := f.Float64
+			if !f.IsValid() {
+				perc = 1.0
+			}
+			return fmt.Sprintf("%.2f%%", perc*100.0)
+		},
+		"cap": func(s string) string {
+			return util.Capitalize(s)
+		},
+		"yesno": func(b bool) string {
+			return map[bool]string{
+				true:  "yes",
+				false: "no",
+			}[b]
+		},
+		"inc": func(i int) int {
+			return i + 1
+		},
+		"ord": func(num int) string {
+			var ordinalDictionary = map[int]string{
+				0: "th",
+				1: "st",
+				2: "nd",
+				3: "rd",
+				4: "th",
+				5: "th",
+				6: "th",
+				7: "th",
+				8: "th",
+				9: "th",
+			}
+
+			// math.Abs() is to convert negative number to positive
+			floatNum := math.Abs(float64(num))
+			positiveNum := int(floatNum)
+
+			if ((positiveNum % 100) >= 11) && ((positiveNum % 100) <= 13) {
+				return "th"
+			}
+
+			return ordinalDictionary[positiveNum]
+		},
 		"date": func(date time.Time) time.Time {
 			year, month, day := date.Date()
 			return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+		},
+		"duration": func(duration models.NullDuration) time.Duration {
+			return time.Duration(duration.Int64)
 		},
 		"timeSub": func(t1 time.Time, t2 time.Time) time.Duration {
 			return t1.Sub(t2)
@@ -217,6 +270,13 @@ func (t *Template) HTML(context Context) (output *Template) {
 	return
 }
 
+const (
+	// PixelsToMM is the conversion constant for converting pixels to MM at a 96 DPI.
+	PixelsToMM  = 0.264583333
+	PDFPageZoom = 1.6
+	PDFDPI      = 96
+)
+
 // PDF will convert a Template with the ContentType HTML to a PDF. Template.Error is set if:
 //
 // • The Template already contains an error.
@@ -252,7 +312,7 @@ func (t *Template) PDF() (output *Template) {
 
 	// enable this if the HTML file contains local references such as images, CSS, etc.
 	page.EnableLocalFileAccess.Set(true)
-	page.Zoom.Set(1.6)
+	page.Zoom.Set(PDFPageZoom)
 
 	// add the page to your generator
 	pdf.AddPage(page)
@@ -262,11 +322,57 @@ func (t *Template) PDF() (output *Template) {
 	pdf.MarginRight.Set(0)
 	pdf.MarginBottom.Set(0)
 	pdf.MarginTop.Set(0)
-	pdf.Dpi.Set(300)
-	pdf.PageSize.Set(wkhtmltopdf.PageSizeA4)
-	pdf.Orientation.Set(wkhtmltopdf.OrientationPortrait)
+	pdf.Dpi.Set(PDFDPI)
+
+	var file *os.File
+	if file, err = os.CreateTemp("", "*.html"); err != nil {
+		output.Error = errors.Wrapf(err, "could not create temporary file for HTML buffer")
+		return
+	}
+	defer func(name string) {
+		output.Error = myErrors.MergeErrors(
+			output.Error,
+			errors.Wrap(os.Remove(name), "could not remove temporary HTML file"),
+		)
+	}(file.Name())
+
+	if _, err = file.Write(output.Buffer.Bytes()); err != nil {
+		output.Error = errors.Wrap(err, "could not write HTML buffer to temporary file")
+		return
+	}
+
+	var b *browser.Browser
+	if b, err = browser.NewBrowser(true); err != nil {
+		output.Error = errors.Wrap(err, "could not open HTML file in playwright to work out page height")
+		return
+	}
+	defer func(b *browser.Browser) {
+		output.Error = myErrors.MergeErrors(
+			output.Error,
+			errors.Wrap(b.Quit(), "could not close browser viewing temp HTML file"),
+		)
+	}(b)
+
+	if _, err = b.Pages[0].Goto(fmt.Sprintf("file://%s", file.Name())); err != nil {
+		output.Error = errors.Wrapf(err, "playwright could not goto temp HTML file at file://%s", file.Name())
+		return
+	}
+
+	var pageHeight any
+	if pageHeight, err = b.Pages[0].Evaluate(`Math.max(
+	document.body.scrollHeight, document.body.offsetHeight, document.documentElement.clientHeight,
+	document.documentElement.scrollHeight, document.documentElement.offsetHeight
+);`); err != nil {
+		output.Error = errors.Wrap(err, "playwright could not find temp HTML file's page height")
+		return
+	}
+
+	fmt.Printf("%v (%s)\n", pageHeight, reflect.TypeOf(pageHeight).String())
+	pdf.PageWidth.Set(210)
+	pdf.PageHeight.Set(uint(PixelsToMM * float64(pageHeight.(int)) * PDFPageZoom))
 
 	// Create the PDF using the PDF generator
+	fmt.Println(pdf.ArgString())
 	err = pdf.Create()
 	if err != nil {
 		output.Error = errors.Wrapf(err, "could not create PDF for %s", output.Path.Name())

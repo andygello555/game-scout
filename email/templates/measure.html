@@ -1,6 +1,7 @@
 <!doctype html>
 <html>
 <head>
+    <meta http-equiv="Content-Type" content="text/html charset=UTF-8"/>
     <title>Simple Transactional Email</title>
     <style>
         table.body h1 {
@@ -87,6 +88,72 @@
                 border-color: #34495e !important;
             }
         }
+
+        .left-right {
+            display: -webkit-flex;
+            display: -webkit-box;
+            display: flex;
+            -webkit-box-pack: justify;
+            -webkit-justify-content: space-between;
+            justify-content: space-between;
+            -webkit-align-items: center;
+            align-items: center;
+            width: 100%;
+        }
+
+        .left-right div:last-child {
+            margin-left: auto;
+        }
+
+        .link-button:link, .link-button:visited {
+            background-color: #EBF78C;
+            color: black;
+            padding: 14px 25px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            border-radius: 10px;
+        }
+
+        .link-button:hover, .link-button:active {
+            background-color: #E2F45B;
+        }
+
+        /* Float four columns side by side */
+        .column {
+            float: left;
+            width: 100%;
+        }
+
+        /* Remove extra left and right margins, due to padding in columns */
+        .row {
+            margin: 0 -5px 10px;
+            width: 95%;
+        }
+
+        /* Clear floats after the columns */
+        .row:after {
+            content: "";
+            display: table;
+            clear: both;
+        }
+
+        /* Style the counter cards */
+        .card {
+            box-shadow: 0 4px 8px 0 rgba(0, 0, 0, 0.2); /* this adds the "card" effect */
+            padding: 16px;
+            text-align: center;
+            background-color: #f1f1f1;
+        }
+
+        /* Responsive columns - one column layout (vertical) on small screens */
+        @media screen and (max-width: 600px) {
+            .column {
+                width: 100%;
+                display: block;
+                margin-bottom: 20px;
+            }
+        }
     </style>
 </head>
 <body style="background-color: #E2F45B; font-family: sans-serif; -webkit-font-smoothing: antialiased; font-size: 14px; margin: 0; padding: 0; -ms-text-size-adjust: 100%; -webkit-text-size-adjust: 100%;">
@@ -114,37 +181,350 @@
                                         <div style="text-align: center; align-content: center; word-wrap: break-word; width: 75%; background-color: #EBF78C; color: black; margin: auto; border-radius: 32px; padding: 10px">Trending developers on Twitter</div>
 
                                         {{ $config := .Config }}
-                                        {{range .TrendingDevs}}
+                                        {{ $enabledDevelopers := .EnabledDevelopers }}
+                                        {{ range $place, $trendingDev := .TrendingDevs }}
                                         <table style="border-collapse: collapse; table-layout: fixed; width: 100%; margin: 25px 0; font-family: sans-serif; min-width: 400px; box-shadow: 0 0 20px rgba(0,0,0,0.37); border-radius: 12px" align="center" width="100%" border="0" cellspacing="0" cellpadding="0">
                                             <thead>
                                             <tr style="background-color: black; color: white; border-radius: 10px; text-align: center">
-                                                <th style="padding: 12px 15px; border-radius: 10px"><strong>@{{.Developer.Username}}</strong></th>
+                                                <th style="padding: 12px 15px; border-radius: 10px"><strong>@{{ $trendingDev.Developer.Username }}</strong></th>
                                             </tr>
                                             </thead>
                                             <tbody>
                                             <tr style="text-align: center">
                                                 <td style="word-wrap: anywhere; overflow-wrap: anywhere; padding: 12px 15px; border-bottom-left-radius: 5px; border-bottom-right-radius: 5px">
-                                                    {{ $firstSnapshot := index .Snapshots 0 }}
-                                                    {{ $lastSnapshot := index .Snapshots (lastIndex .Snapshots) }}
-                                                    <p style="font-size: 16px">I have created {{ len .Snapshots }} snapshots for @{{ .Developer.Username }} over a period of {{ days (timeSub $lastSnapshot.CreatedAt $firstSnapshot.CreatedAt) }} days</p>
+                                                    {{ $firstSnapshot := index $trendingDev.Snapshots 0 }}
+                                                    {{ $lastSnapshot := index $trendingDev.Snapshots (lastIndex $trendingDev.Snapshots) }}
+                                                    <p style="font-size: 16px">
+                                                        I have created {{ len $trendingDev.Snapshots }} snapshots for 
+                                                        @{{ $trendingDev.Developer.Username }} over a period of 
+                                                        {{ days (timeSub $lastSnapshot.CreatedAt $firstSnapshot.CreatedAt) }} 
+                                                        days.
+                                                    </p>
+                                                    <table style="border-collapse: collapse; table-layout: fixed; width: 100%; margin: 25px 0; font-family: sans-serif; min-width: 400px; box-shadow: 0 0 20px rgba(0,0,0,0.37); border-radius: 12px; background-color: #EBF78C" align="center" width="100%" border="0" cellspacing="0" cellpadding="0">
+                                                        <thead>
+                                                        <tr style="background-color: black; color: white; border-radius: 10px; text-align: center">
+                                                            <th style="padding: 12px 15px; border-radius: 10px">
+                                                                <strong>First snapshot was created on {{ (date $firstSnapshot.CreatedAt).Format "2006-01-02" }}</strong>
+                                                            </th>
+                                                        </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                        <tr style="text-align: center">
+                                                            <td style="word-wrap: anywhere; overflow-wrap: anywhere; padding: 12px 15px; border-bottom-left-radius: 5px; border-bottom-right-radius: 5px">
+                                                                <div class="row">
+                                                                    <div class="column">
+                                                                        <div class="card left-right">
+                                                                            <div>Number of tweets captured</div>
+                                                                            <div><strong>{{ $firstSnapshot.Tweets }}</strong></div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                                <div class="row">
+                                                                    <div class="column">
+                                                                        <div class="card left-right">
+                                                                            <div>Range between first and last tweet</div>
+                                                                            <div><strong>{{ (duration $firstSnapshot.TweetTimeRange).String }}</strong></div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                                <div class="row">
+                                                                    <div class="column">
+                                                                        <div class="card left-right">
+                                                                            <div>Average duration between each tweet</div>
+                                                                            <div><strong>{{ (duration $firstSnapshot.AverageDurationBetweenTweets).String }}</strong></div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                                <div class="row">
+                                                                    <div class="column">
+                                                                        <div class="card left-right">
+                                                                            <div>Number of games captured by snapshot</div>
+                                                                            <div><strong>{{ $firstSnapshot.Games }}</strong></div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                                <div class="row">
+                                                                    <div class="column">
+                                                                        <div class="card left-right">
+                                                                            <div>Total weighted score for each game</div>
+                                                                            <div><strong>{{ $firstSnapshot.GameWeightedScoresSum }}</strong></div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                                <div class="row">
+                                                                    <div class="column">
+                                                                        <div class="card left-right">
+                                                                            <div>Weighted score for this snapshot</div>
+                                                                            <div><strong>{{ $firstSnapshot.WeightedScore }}</strong></div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                        </tbody>
+                                                    </table>
+                                                    <hr style="text-align: center; align-content: center; margin: 20px auto 20px; background-color: #EBF78C; color: #EBF78C; border-width: 0; border-radius: 5px; height: 5px; width: 90%"/>
+                                                    <table style="border-collapse: collapse; table-layout: fixed; width: 100%; margin: 25px 0; font-family: sans-serif; min-width: 400px; box-shadow: 0 0 20px rgba(0,0,0,0.37); border-radius: 12px; background-color: #EBF78C" align="center" width="100%" border="0" cellspacing="0" cellpadding="0">
+                                                        <thead>
+                                                        <tr style="background-color: black; color: white; border-radius: 10px; text-align: center">
+                                                            <th style="padding: 12px 15px; border-radius: 10px">
+                                                                <strong>Latest snapshot was created on {{ (date $lastSnapshot.CreatedAt).Format "2006-01-02" }}</strong>
+                                                            </th>
+                                                        </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                        <tr style="text-align: center">
+                                                            <td style="word-wrap: anywhere; overflow-wrap: anywhere; padding: 12px 15px; border-bottom-left-radius: 5px; border-bottom-right-radius: 5px">
+                                                                <div class="row">
+                                                                    <div class="column">
+                                                                        <div class="card left-right">
+                                                                            <div>Number of tweets captured</div>
+                                                                            <div><strong>{{ $lastSnapshot.Tweets }}</strong></div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                                <div class="row">
+                                                                    <div class="column">
+                                                                        <div class="card left-right">
+                                                                            <div>Range between first and last tweet</div>
+                                                                            <div><strong>{{ (duration $lastSnapshot.TweetTimeRange).String }}</strong></div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                                <div class="row">
+                                                                    <div class="column">
+                                                                        <div class="card left-right">
+                                                                            <div>Average duration between each tweet</div>
+                                                                            <div><strong>{{ (duration $lastSnapshot.AverageDurationBetweenTweets).String }}</strong></div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                                <div class="row">
+                                                                    <div class="column">
+                                                                        <div class="card left-right">
+                                                                            <div>Number of games captured by snapshot</div>
+                                                                            <div><strong>{{ $lastSnapshot.Games }}</strong></div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                                <div class="row">
+                                                                    <div class="column">
+                                                                        <div class="card left-right">
+                                                                            <div>Total weighted score for each game</div>
+                                                                            <div><strong>{{ $lastSnapshot.GameWeightedScoresSum }}</strong></div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                                <div class="row">
+                                                                    <div class="column">
+                                                                        <div class="card left-right">
+                                                                            <div>Weighted score for this snapshot</div>
+                                                                            <div><strong>{{ $lastSnapshot.WeightedScore }}</strong></div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                        </tbody>
+                                                    </table>
                                                     <div style="display: inline-block; align-items: center; width: 500px">
+                                                        <p>
+                                                            The current trend gradient for @{{ $trendingDev.Developer.Username }}'s snapshot
+                                                            weighted scores is {{ index $trendingDev.Trend.GetCoeffs 1 }}
+                                                            (shown in the graph below), which places it {{ inc $place }}
+                                                            <sup>{{ ord (inc $place) }}</sup> out of all
+                                                            {{ $enabledDevelopers }} enabled developers we are currently
+                                                            tracking.
+                                                        </p>
                                                         {{ $chart := .Trend.Chart ($config.EmailTemplateConfigFor "templates/measure.html").TemplateMaxImageWidth ($config.EmailTemplateConfigFor "templates/measure.html").TemplateMaxImageHeight }}
                                                         {{ $chart.Img "" "max-width: 100%; max-height: 100%; height: auto; border-radius: 5px" }}
                                                     </div>
+
+                                                    {{ if gt (len $trendingDev.Games) 0 }}
+                                                    <hr style="text-align: center; align-content: center; margin: 30px auto 20px; background-color: #EBF78C; color: #EBF78C; border-width: 0; border-radius: 5px; height: 5px; width: 90%"/>
+                                                    <div>
+                                                        {{ $games := $trendingDev.Games }}
+                                                        {{ if gt (len $games) 5 }}
+                                                        {{ $games = slice $games 0 5 }}
+                                                        {{ end }}
+                                                        <div style="text-align: center; align-content: center; word-wrap: break-word; width: 75%; background-color: #EBF78C; color: black; margin: auto; border-radius: 32px; padding: 10px">Top {{ len $games }} games that <strong>@{{ $trendingDev.Developer.Username }}</strong> has tweeted about</div>
+                                                        {{ range $games }}
+                                                        <table style="border-collapse: collapse; table-layout: fixed; width: 100%; margin: 25px 0; font-family: sans-serif; min-width: 400px; box-shadow: 0 0 20px rgba(0,0,0,0.37); border-radius: 12px" align="center" width="100%" border="0" cellspacing="0" cellpadding="0">
+                                                            <thead>
+                                                            <tr style="background-color: black; color: white; border-radius: 10px; text-align: center">
+                                                                <th style="padding: 12px 15px; border-radius: 10px">
+                                                                    <div class="left-right">
+                                                                        <div style="align-content: center">
+                                                                            <img src="{{ .Storefront.LogoSrc }}" alt="{{ .Storefront.String }} logo" style="width: 140px; height: 70px"/>
+                                                                        </div>
+                                                                        <div style="align-content: center">
+                                                                            <a class="link-button" href="{{ .Website.String }}" target="_blank">
+                                                                            {{ if .Name.IsValid }}
+                                                                            <strong>{{ .Name.String }}</strong>
+                                                                            {{ else }}
+                                                                            <strong>{{ .Website.String }} (could not find name)</strong>
+                                                                            {{ end }}
+                                                                            </a>
+                                                                        </div>
+                                                                    </div>
+                                                                </th>
+                                                            </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                            <tr style="text-align: center">
+                                                                <td style="word-wrap: anywhere; overflow-wrap: anywhere; padding: 12px 15px; border-bottom-left-radius: 5px; border-bottom-right-radius: 5px">
+                                                                    {{ if eq .Storefront "S" }}
+                                                                    <div class="row">
+                                                                        <div class="column">
+                                                                            <div class="card">
+                                                                                {{ $appid := index (.Storefront.ScrapeURL.ExtractArgs .Website.String) 0 }}
+                                                                                <img src="https://cdn.cloudflare.steamstatic.com/steam/apps/{{ $appid }}/header.jpg" alt="Store page banner for {{ .Name.String }}"/>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                    {{ end }}
+                                                                    <div class="row">
+                                                                        <div class="column">
+                                                                            <div class="card left-right">
+                                                                                <div><strong>@{{ $trendingDev.Developer.Username }}</strong> linked on storepage?</div>
+                                                                                <div><strong>{{ cap (yesno .DeveloperVerified) }}</strong></div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div class="row">
+                                                                        <div class="column">
+                                                                            <div class="card left-right">
+                                                                                <div>The number of times this game has been scraped</div>
+                                                                                <div><strong>{{ .Updates }}</strong></div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div class="row">
+                                                                        <div class="column">
+                                                                            <div class="card left-right">
+                                                                                <div>Release date</div>
+                                                                                <div>
+                                                                                    <strong>
+                                                                                    {{ if .ReleaseDate.IsValid }}
+                                                                                    {{ .ReleaseDate.Time.Format "2006-01-02" }}
+                                                                                    {{ else }}
+                                                                                    Don't know
+                                                                                    {{ end }}
+                                                                                    </strong>
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div class="row">
+                                                                        <div class="column">
+                                                                            <div class="card left-right">
+                                                                                <div>Publisher</div>
+                                                                                <div>
+                                                                                    <strong>
+                                                                                        {{ cap (yesno .Publisher.IsValid) }}
+                                                                                        {{ if .Publisher.IsValid }}
+                                                                                        ({{ .Publisher.String }})
+                                                                                        {{ end }}
+                                                                                    </strong>
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                    {{ if eq .Storefront "S" }}
+                                                                    <div class="row">
+                                                                        <div class="column">
+                                                                            <div class="card left-right">
+                                                                                <div>Total reviews</div>
+                                                                                <div><strong>{{ .TotalReviews.Int32 }}</strong></div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div class="row">
+                                                                        <div class="column">
+                                                                            <div class="card left-right">
+                                                                                <div>Positive reviews</div>
+                                                                                <div><strong>{{ .PositiveReviews.Int32 }}</strong></div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div class="row">
+                                                                        <div class="column">
+                                                                            <div class="card left-right">
+                                                                                <div>Negative reviews</div>
+                                                                                <div><strong>{{ .NegativeReviews.Int32 }}</strong></div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div class="row">
+                                                                        <div class="column">
+                                                                            <div class="card left-right">
+                                                                                <div>Review score</div>
+                                                                                <div><strong>{{ percentage .ReviewScore }}</strong></div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div class="row">
+                                                                        <div class="column">
+                                                                            <div class="card left-right">
+                                                                                <div>Total community upvotes</div>
+                                                                                <div><strong>{{ .TotalUpvotes.Int32 }}</strong></div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div class="row">
+                                                                        <div class="column">
+                                                                            <div class="card left-right">
+                                                                                <div>Total community downvotes</div>
+                                                                                <div><strong>{{ .TotalDownvotes.Int32 }}</strong></div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                    {{ end }}
+                                                                    <div class="row">
+                                                                        <div class="column">
+                                                                            <div class="card left-right">
+                                                                                <div>Total community comments</div>
+                                                                                <div><strong>{{ .TotalComments.Int32 }}</strong></div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div class="row">
+                                                                        <div class="column">
+                                                                            <div class="card left-right">
+                                                                                <div>User tag score</div>
+                                                                                <div><strong>{{ .TagScore.Float64 }}</strong></div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div class="row">
+                                                                        <div class="column">
+                                                                            <div class="card left-right">
+                                                                                <div>Weighted score</div>
+                                                                                <div><strong>{{ .WeightedScore.Float64 }}</strong></div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                </td>
+                                                            </tr>
+                                                            </tbody>
+                                                        </table>
+                                                        {{ end }}
+                                                    </div>
+                                                    {{ end }}
                                                 </td>
                                             </tr>
                                             </tbody>
                                         </table>
-                                        {{end}}
+                                        {{ end }}
 
                                         <hr style="text-align: center; align-content: center; margin: 30px auto 20px; background-color: #EBF78C; color: #EBF78C; border-width: 0; border-radius: 5px; height: 5px; width: 90%"/>
                                         <div style="text-align: center; align-content: center; word-wrap: break-word; width: 75%; background-color: #EBF78C; color: black; margin: auto; border-radius: 32px; padding: 10px">Top recently updated Steam store pages</div>
 
-                                        {{range .TopSteamApps}}
+                                        {{ range .TopSteamApps }}
                                         <table style="border-collapse: collapse; table-layout: fixed; width: 100%; margin: 25px 0; font-family: sans-serif; min-width: 400px; box-shadow: 0 0 20px #00000026; border-radius: 12px" align="center" width="100%" border="0" cellspacing="0" cellpadding="0">
                                             <thead>
                                             <tr style="background-color: black; color: white; border-radius: 10px; text-align: center">
-                                                <th style="padding: 12px 15px; border-radius: 10px"><strong>{{.Name}} ({{.ID}})</strong></th>
+                                                <th style="padding: 12px 15px; border-radius: 10px"><strong>{{ .Name }} ({{ .ID }})</strong></th>
                                             </tr>
                                             </thead>
                                             <tbody>
@@ -157,7 +537,8 @@
                                             </tr>
                                             </tbody>
                                         </table>
-                                        {{end}}
+                                        {{ else }}
+                                        {{ end }}
                                     </td>
                                 </tr>
                             </table>
