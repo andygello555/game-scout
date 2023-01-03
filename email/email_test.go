@@ -3,7 +3,6 @@ package email
 import (
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/g8rswimmer/go-twitter/v2"
-	"github.com/pkg/browser"
 	"testing"
 	"time"
 )
@@ -116,8 +115,6 @@ func TestMeasureContext_Template(t *testing.T) {
 			} else {
 				t.Errorf("Expected no error for test no. %d, but got: %v", testNo, err)
 			}
-		} else {
-			_ = browser.OpenReader(&template.Buffer)
 		}
 	}
 }

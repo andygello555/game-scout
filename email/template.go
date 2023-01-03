@@ -4,19 +4,23 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/SebastiaanKlippert/go-wkhtmltopdf"
 	"github.com/andygello555/game-scout/browser"
 	"github.com/andygello555/game-scout/db/models"
 	myErrors "github.com/andygello555/game-scout/errors"
-	"github.com/aws/aws-sdk-go/private/util"
+	"github.com/andygello555/gotils/v2/ints"
 	"github.com/pkg/errors"
+	"github.com/playwright-community/playwright-go"
 	"github.com/volatiletech/null/v9"
 	"html/template"
-	"math"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
+	"strings"
 	"time"
+	"unicode"
 )
 
 // Context will be implemented by structures that are used to fill out a Template in Template.HTML.
@@ -52,6 +56,11 @@ func (m *MeasureContext) Template() *Template { return m.Path().Template() }
 func (m *MeasureContext) HTML() *Template     { return m.Template().HTML(m) }
 func (m *MeasureContext) Funcs() template.FuncMap {
 	return map[string]any{
+		"timePretty": func(t time.Time) string {
+			loc, _ := time.LoadLocation("Europe/London")
+			t = t.In(loc)
+			return ints.Ordinal(t.Day()) + t.Format(" January 2006 at 3pm")
+		},
 		"percentage": func(f null.Float64) string {
 			perc := f.Float64
 			if !f.IsValid() {
@@ -59,8 +68,12 @@ func (m *MeasureContext) Funcs() template.FuncMap {
 			}
 			return fmt.Sprintf("%.2f%%", perc*100.0)
 		},
+		"percentageF64": func(f float64) string {
+			return fmt.Sprintf("%.2f%%", f*100.0)
+		},
 		"cap": func(s string) string {
-			return util.Capitalize(s)
+			r := []rune(s)
+			return string(append([]rune{unicode.ToUpper(r[0])}, r[1:]...))
 		},
 		"yesno": func(b bool) string {
 			return map[bool]string{
@@ -72,28 +85,7 @@ func (m *MeasureContext) Funcs() template.FuncMap {
 			return i + 1
 		},
 		"ord": func(num int) string {
-			var ordinalDictionary = map[int]string{
-				0: "th",
-				1: "st",
-				2: "nd",
-				3: "rd",
-				4: "th",
-				5: "th",
-				6: "th",
-				7: "th",
-				8: "th",
-				9: "th",
-			}
-
-			// math.Abs() is to convert negative number to positive
-			floatNum := math.Abs(float64(num))
-			positiveNum := int(floatNum)
-
-			if ((positiveNum % 100) >= 11) && ((positiveNum % 100) <= 13) {
-				return "th"
-			}
-
-			return ordinalDictionary[positiveNum]
+			return strings.TrimPrefix(ints.Ordinal(num), strconv.Itoa(num))
 		},
 		"date": func(date time.Time) time.Time {
 			year, month, day := date.Date()
@@ -119,7 +111,9 @@ var templates embed.FS
 
 const templateDir = "templates/"
 
-// TemplatePath represents the path of an HTML template in the repo.
+// TemplatePath represents the path of an HTML template in the repo. Each template that is going to be converted to PDF,
+// must contain an element that implements a .container class. This is used to calculate the width of the final generated
+// PDF.
 type TemplatePath string
 
 const (
@@ -272,9 +266,8 @@ func (t *Template) HTML(context Context) (output *Template) {
 
 const (
 	// PixelsToMM is the conversion constant for converting pixels to MM at a 96 DPI.
-	PixelsToMM  = 0.264583333
-	PDFPageZoom = 1.6
-	PDFDPI      = 96
+	PixelsToMM = 0.264583333
+	PDFDPI     = 96
 )
 
 // PDF will convert a Template with the ContentType HTML to a PDF. Template.Error is set if:
@@ -285,7 +278,10 @@ const (
 //
 // • An error occurred in any of the functions used to generate the PDF.
 //
-// If Template.PDF can run without setting the Template.Error then Template.ContentType is set to PDF.
+// If Template.PDF can run without setting the Template.Error then Template.ContentType is set to PDF. PDF will
+// calculate the size of the generated PDF by opening the HTML in a headless playwright browser, then fetch the height
+// and width (in pixels) of the first element to use the .container class on the page. These values are then converted to
+// MM by using the PixelsToMM conversion constant, which assumes that the PDF DPI is 96.
 func (t *Template) PDF() (output *Template) {
 	if output = copyTemplate(t); output.Error != nil {
 		output.Error = errors.Wrapf(output.Error, "%s template cannot be converted to PDF", output.Path.Name())
@@ -309,10 +305,6 @@ func (t *Template) PDF() (output *Template) {
 
 	// read the HTML page as a PDF page
 	page := wkhtmltopdf.NewPageReader(bytes.NewReader(output.Buffer.Bytes()))
-
-	// enable this if the HTML file contains local references such as images, CSS, etc.
-	page.EnableLocalFileAccess.Set(true)
-	page.Zoom.Set(PDFPageZoom)
 
 	// add the page to your generator
 	pdf.AddPage(page)
@@ -358,21 +350,47 @@ func (t *Template) PDF() (output *Template) {
 		return
 	}
 
-	var pageHeight any
-	if pageHeight, err = b.Pages[0].Evaluate(`Math.max(
-	document.body.scrollHeight, document.body.offsetHeight, document.documentElement.clientHeight,
-	document.documentElement.scrollHeight, document.documentElement.offsetHeight
-);`); err != nil {
-		output.Error = errors.Wrap(err, "playwright could not find temp HTML file's page height")
+	b.Pages[0].WaitForLoadState("domcontentloaded")
+
+	var container playwright.ElementHandle
+	if container, err = b.Pages[0].QuerySelector(".container"); err != nil {
+		output.Error = errors.Wrapf(err, ".container could not be found in the temp HTML file at %s", file.Name())
 		return
 	}
 
-	fmt.Printf("%v (%s)\n", pageHeight, reflect.TypeOf(pageHeight).String())
-	pdf.PageWidth.Set(210)
-	pdf.PageHeight.Set(uint(PixelsToMM * float64(pageHeight.(int)) * PDFPageZoom))
+	var (
+		pageWidth  any
+		pageHeight any
+	)
+	if pageWidth, err = container.GetProperty("offsetWidth"); err != nil {
+		output.Error = errors.Wrapf(err, ".container's offsetWidth could not be found in the temp HTML file at %s", file.Name())
+		return
+	}
+	if pageHeight, err = container.GetProperty("offsetHeight"); err != nil {
+		output.Error = errors.Wrapf(err, ".container's offsetHeight could not be found in the temp HTML file at %s", file.Name())
+		return
+	}
+
+	if pageWidth, err = pageWidth.(playwright.JSHandle).JSONValue(); err != nil {
+		output.Error = errors.Wrap(err, ".container's width in the temp HTML file could not be JSON-ified")
+		return
+	}
+	if pageHeight, err = pageHeight.(playwright.JSHandle).JSONValue(); err != nil {
+		output.Error = errors.Wrap(err, ".container's height in the temp HTML file could not be JSON-ified")
+		return
+	}
+
+	// Calculate the page width in MM
+	pdf.PageWidth.Set(uint(PixelsToMM * float64(pageWidth.(int))))
+	// Calculate the page height in MM
+	pdf.PageHeight.Set(uint(PixelsToMM * float64(pageHeight.(int))))
 
 	// Create the PDF using the PDF generator
-	fmt.Println(pdf.ArgString())
+	log.INFO.Printf(
+		"Generating PDF from %s HTML template: pageWidth = %v (%s px), pageHeight = %v (%s px), wkhtmltopdf = %s",
+		output.Path.Name(), pageWidth, reflect.TypeOf(pageWidth).String(),
+		pageHeight, reflect.TypeOf(pageHeight).String(), pdf.ArgString(),
+	)
 	err = pdf.Create()
 	if err != nil {
 		output.Error = errors.Wrapf(err, "could not create PDF for %s", output.Path.Name())

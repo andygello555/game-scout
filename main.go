@@ -14,6 +14,7 @@ import (
 	"github.com/andygello555/game-scout/steamcmd"
 	task "github.com/andygello555/game-scout/tasks"
 	myTwitter "github.com/andygello555/game-scout/twitter"
+	"github.com/andygello555/gotils/v2/slices"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/google/uuid"
@@ -777,6 +778,102 @@ func main() {
 						template.Buffer.Bytes(),
 						filePerms,
 					); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+				}
+				return
+			},
+		},
+		{
+			Name:  "steamapp",
+			Usage: "subcommand for viewing resources related to a SteamApp in the DB",
+			Flags: []cli.Flag{
+				cli.IntSliceFlag{
+					Name:     "id",
+					Usage:    "the App ID of a SteamApp in the DB",
+					Required: true,
+				},
+				cli.BoolFlag{
+					Name:     "printBefore",
+					Usage:    "print the SteamApp before any of the flags have been run",
+					Required: false,
+				},
+				cli.BoolFlag{
+					Name:     "update",
+					Usage:    "update the SteamApp using the Update method",
+					Required: false,
+				},
+				cli.BoolFlag{
+					Name:     "measure",
+					Usage:    "execute the Measure template for this SteamApp",
+					Required: false,
+				},
+				cli.BoolFlag{
+					Name:     "printAfter",
+					Usage:    "print the SteamApp after all the flags have been run",
+					Required: false,
+				},
+			},
+			Action: func(c *cli.Context) (err error) {
+				measureContext := email.MeasureContext{
+					TopSteamApps: make([]*models.SteamApp, len(c.IntSlice("id"))),
+					Config:       globalConfig.Email,
+				}
+
+				for steamAppNo, id := range c.IntSlice("id") {
+					fmt.Printf("Performing commands on SteamApp: %d\n", id)
+					var steamApp models.SteamApp
+					if err = db.DB.Find(&steamApp, id).Error; err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+
+					if c.Bool("printBefore") {
+						fmt.Printf("\t%v\n", steamApp)
+					}
+
+					if c.Bool("update") {
+						if err = steamApp.Update(db.DB, globalConfig.Scrape); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+					}
+
+					if c.Bool("measure") {
+						measureContext.TopSteamApps[steamAppNo] = &steamApp
+					}
+
+					if c.Bool("printAfter") {
+						fmt.Printf("\t%v\n", steamApp)
+					}
+				}
+
+				if c.Bool("measure") {
+					var template *email.Template
+					if template = measureContext.HTML(); template.Error != nil {
+						return cli.NewExitError(template.Error.Error(), 1)
+					}
+
+					filename := fmt.Sprintf(
+						"measure_email_for_steamapps_%s_%s",
+						strings.Join(
+							slices.Comprehension[int, string](
+								c.IntSlice("id"),
+								func(idx int, value int, arr []int) string {
+									return strconv.Itoa(value)
+								},
+							),
+							"_",
+						),
+						time.Now().UTC().Format("2006-01-02"),
+					)
+					if err = os.WriteFile(filename+".html", template.Buffer.Bytes(), filePerms); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+
+					if template = template.PDF(); template.Error != nil {
+						return cli.NewExitError(template.Error.Error(), 1)
+					}
+
+					if err = os.WriteFile(filename+".pdf", template.Buffer.Bytes(), filePerms); err != nil {
 						return cli.NewExitError(err.Error(), 1)
 					}
 				}
