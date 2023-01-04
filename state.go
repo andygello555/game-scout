@@ -7,6 +7,10 @@ import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/db/models"
+	"github.com/andygello555/game-scout/email"
+	myErrors "github.com/andygello555/game-scout/errors"
+	myTwitter "github.com/andygello555/game-scout/twitter"
+	"github.com/andygello555/gotils/v2/slices"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
@@ -336,6 +340,7 @@ func (ds *DeveloperSnapshots) Deserialise(pathsToBytes *PathsToBytes) (err error
 			var snapshots []*models.DeveloperSnapshot
 			if err = dec.Decode(&snapshots); err != nil {
 				err = errors.Wrapf(err, "cannot deserialise snapshots for developer \"%s\"", developerID)
+				return
 			}
 
 			if _, ok := (*ds)[developerID]; !ok {
@@ -462,6 +467,164 @@ func (ids *GameIDs) Merge(field CachedField) {
 	ids.Set = ids.Union(field.(*GameIDs).Set)
 }
 
+type DeletedDevelopers []*email.TrendingDev
+
+func (d *DeletedDevelopers) BaseDir() string { return "deletedDevelopers" }
+
+func (d *DeletedDevelopers) Path(paths ...string) string {
+	return filepath.Join(d.BaseDir(), strings.Join(paths, "_")+binExtension)
+}
+
+func (d *DeletedDevelopers) Serialise(pathsToBytes *PathsToBytes) (err error) {
+	// We create an info file so that BaseDir is always created
+	pathsToBytes.AddFilenameBytes(
+		filepath.Join(d.BaseDir(), "meta.json"),
+		[]byte(fmt.Sprintf(
+			"{\"count\": %d, \"ids\": [%s]}",
+			d.Len(),
+			strings.Join(strings.Split(strings.Trim(fmt.Sprintf(
+				"%v",
+				slices.Comprehension[*email.TrendingDev, string](*d, func(idx int, value *email.TrendingDev, arr []*email.TrendingDev) string {
+					return value.Developer.ID
+				})), "[]"), " "), ", ",
+			),
+		)),
+	)
+
+	for _, deletedDeveloper := range *d {
+		developer := deletedDeveloper.Developer
+		for _, field := range []struct {
+			value any
+			name  string
+		}{
+			{
+				deletedDeveloper.Developer,
+				"developer",
+			},
+			{
+				deletedDeveloper.Snapshots,
+				"snapshots",
+			},
+			{
+				deletedDeveloper.Games,
+				"games",
+			},
+			{
+				deletedDeveloper.Trend,
+				"trend",
+			},
+		} {
+			var data bytes.Buffer
+			enc := gob.NewEncoder(&data)
+			if err = enc.Encode(field.value); err != nil {
+				err = errors.Wrapf(err, "could not encode %s for deleted developer %s (%s)", field.name, developer.Username, developer.ID)
+				return
+			}
+			pathsToBytes.AddFilenameBytes(d.Path(developer.ID, field.name), data.Bytes())
+		}
+	}
+	return
+}
+
+func deletedDevelopersDecodeValue[T interface {
+	models.Developer | []*models.DeveloperSnapshot | []*models.Game | models.Trend
+}](data []byte, fieldName, developerID string) (decodedValue *T, err error) {
+	decodedValue = new(T)
+	dec := gob.NewDecoder(bytes.NewReader(data))
+	if err = dec.Decode(decodedValue); err != nil {
+		err = errors.Wrapf(err, "cannot deserialise %s for deleted developer \"%s\"", fieldName, developerID)
+	}
+	return
+}
+
+func (d *DeletedDevelopers) Deserialise(pathsToBytes *PathsToBytes) (err error) {
+	dFtb := pathsToBytes.BytesForDirectory(d.BaseDir())
+	deletedDeveloperMap := make(map[string]*email.TrendingDev)
+	for filename, data := range dFtb.inner {
+		base := filepath.Base(filename)
+		if base != "meta.json" {
+			// Trim the PathToBytes BaseDir, the DeletedDevelopers BaseDir, and the file extension
+			fileComponents := strings.Split(strings.TrimSuffix(base, binExtension), "_")
+			developerID, fieldName := fileComponents[0], fileComponents[1]
+
+			if _, ok := deletedDeveloperMap[developerID]; !ok {
+				deletedDeveloperMap[developerID] = &email.TrendingDev{}
+			}
+			deletedDeveloper := deletedDeveloperMap[developerID]
+
+			// Decode the value using the appropriate type parameter for the field name found in the filename
+			switch fieldName {
+			case "developer":
+				if deletedDeveloper.Developer, err = deletedDevelopersDecodeValue[models.Developer](data, fieldName, developerID); err != nil {
+					return
+				}
+			case "snapshots":
+				var snapshots *[]*models.DeveloperSnapshot
+				if snapshots, err = deletedDevelopersDecodeValue[[]*models.DeveloperSnapshot](data, fieldName, developerID); err != nil {
+					return
+				}
+				deletedDeveloper.Snapshots = *snapshots
+			case "games":
+				var games *[]*models.Game
+				if games, err = deletedDevelopersDecodeValue[[]*models.Game](data, fieldName, developerID); err != nil {
+					return
+				}
+				deletedDeveloper.Games = *games
+			case "trend":
+				if deletedDeveloper.Trend, err = deletedDevelopersDecodeValue[models.Trend](data, fieldName, developerID); err != nil {
+					return
+				}
+			default:
+				return
+			}
+		}
+	}
+
+	// Go through all the DeletedDevelopers in the map and insert them into the referred to DeletedDevelopers instance
+	for _, deletedDeveloper := range deletedDeveloperMap {
+		*d = append(*d, deletedDeveloper)
+	}
+	dFtb = nil
+	return
+}
+
+func (d *DeletedDevelopers) SetOrAdd(args ...any) {
+	for _, arg := range args {
+		*d = append(*d, arg.(*email.TrendingDev))
+	}
+}
+
+func (d *DeletedDevelopers) Get(key any) (any, bool) {
+	i := key.(int)
+	if i < 0 || i > d.Len() {
+		return nil, false
+	}
+	return (*d)[key.(int)], true
+}
+
+func (d *DeletedDevelopers) Len() int {
+	return len(*d)
+}
+
+func (d *DeletedDevelopers) Iter() *CachedFieldIterator {
+	cfi := &CachedFieldIterator{
+		cachedField: d,
+		queue:       make([]any, d.Len()),
+	}
+
+	for i, deletedDeveloper := range *d {
+		cfi.queue[i] = deletedDeveloper
+	}
+	return cfi
+}
+
+func (d *DeletedDevelopers) Merge(field CachedField) {
+	dNew := make(DeletedDevelopers, d.Len()+field.(*DeletedDevelopers).Len())
+	copy(dNew, *d)
+	copy(dNew[d.Len():], *field.(*DeletedDevelopers))
+	*d = dNew
+}
+
 // Phase represents a phase in the Scout procedure.
 type Phase int
 
@@ -471,6 +634,7 @@ const (
 	Snapshot
 	Disable
 	Measure
+	Done
 )
 
 // String returns the name of the Phase.
@@ -486,15 +650,149 @@ func (p Phase) String() string {
 		return "Disable"
 	case Measure:
 		return "Measure"
+	case Done:
+		return "Done"
 	default:
 		return "<nil>"
 	}
 }
 
-// Next returns the Phase after this one. If the referred to Phase is the last phase then the last Phase will be
+func (p Phase) Run(state *ScoutState) (err error) {
+	var phaseStart time.Time
+	phaseBefore := func() {
+		phaseStart = time.Now().UTC()
+		state.GetCachedField(StateType).SetOrAdd("PhaseStart", phaseStart)
+		phase, _ := state.GetCachedField(StateType).Get("Phase")
+		log.INFO.Printf("Starting %s phase", phase.(Phase).String())
+	}
+
+	phaseAfter := func() {
+		phase, _ := state.GetCachedField(StateType).Get("Phase")
+		log.INFO.Printf("Finished %s phase in %s", phase.(Phase).String(), time.Now().UTC().Sub(phaseStart).String())
+		nextPhase := phase.(Phase).Next()
+		state.GetCachedField(StateType).SetOrAdd("Phase", nextPhase)
+		if err = state.Save(); err != nil {
+			log.ERROR.Printf("Could not save ScoutState: %v", err)
+		}
+	}
+
+	state.GetCachedField(StateType).SetOrAdd("Start", time.Now().UTC())
+	switch phase, _ := state.GetCachedField(StateType).Get("Phase"); phase.(Phase) {
+	case Discovery:
+		discoveryTweetsAny, _ := state.GetCachedField(StateType).Get("DiscoveryTweets")
+		discoveryTweets := discoveryTweetsAny.(int)
+
+		// If the number of discovery tweets we requested is more than maxDiscoveryTweetsDailyPercent of the total tweets
+		// available for a day then we will error out.
+		if float64(discoveryTweets) > maxTotalDiscoveryTweets {
+			return myErrors.TemporaryErrorf(
+				false,
+				"cannot request more than %d tweets per day for discovery purposes",
+				int(myTwitter.TweetsPerDay),
+			)
+		}
+
+		phaseBefore()
+
+		// 1st phase: Discovery. Search the recent tweets on Twitter belonging to the hashtags given in config.json.
+		var subGameIDs mapset.Set[uuid.UUID]
+		if subGameIDs, err = DiscoveryPhase(state); err != nil {
+			return err
+		}
+		state.GetIterableCachedField(GameIDsType).Merge(&GameIDs{subGameIDs})
+
+		phaseAfter()
+	case Update:
+		// 2nd phase: Update. For any developers, and games that exist in the DB but haven't been scraped we will fetch the
+		// details from the DB and initiate scrapes for them
+		log.INFO.Printf("We have scraped:")
+		log.INFO.Printf("\t%d developers", state.GetIterableCachedField(DeveloperSnapshotsType).Len())
+		log.INFO.Printf("\t%d games", state.GetIterableCachedField(DeveloperSnapshotsType).Len())
+
+		phaseBefore()
+
+		// Extract the IDs of the developers that were just scraped in the discovery phase.
+		scrapedDevelopers := make([]string, state.GetIterableCachedField(DeveloperSnapshotsType).Len())
+		iter := state.GetIterableCachedField(DeveloperSnapshotsType).Iter()
+		for iter.Continue() {
+			scrapedDevelopers[iter.I()] = iter.Key().(string)
+			iter.Next()
+		}
+
+		// If there are already developers that have been updated in a previously run UpdatePhase, then we will add
+		// these to the scrapedDevelopers also
+		stateState := state.GetCachedField(StateType).(*State)
+		if len(stateState.UpdatedDevelopers) > 0 {
+			scrapedDevelopers = append(scrapedDevelopers, stateState.UpdatedDevelopers...)
+		}
+
+		// Run the UpdatePhase.
+		if err = UpdatePhase(scrapedDevelopers, state); err != nil {
+			return err
+		}
+
+		phaseAfter()
+	case Snapshot:
+		// 3rd phase: Snapshot. For all the partial DeveloperSnapshots that exist in the developerSnapshots map we will
+		// aggregate the information for them.
+		phaseBefore()
+
+		if err = SnapshotPhase(state); err != nil {
+			return errors.Wrap(err, "snapshot phase has failed")
+		}
+
+		phaseAfter()
+	case Disable:
+		// 4th phase: Disable. Disable the developers who aren't doing so well. The number of developers to disable depends
+		// on the number of tweets we get to use in the update phase the next time around.
+		phaseBefore()
+
+		if err = DisablePhase(); err != nil {
+			return errors.Wrap(err, "disable phase has failed")
+		}
+
+		phaseAfter()
+	case Measure:
+		// 5th phase: Measure. For all the users that have a good number of snapshots we'll see if any are shining above the
+		// rest
+		phaseBefore()
+
+		if err = MeasurePhase(state); err != nil {
+			return errors.Wrap(err, "measure phase has failed")
+		}
+
+		phaseAfter()
+	default:
+		// This will be Done which we don't need to do anything for.
+	}
+	return
+}
+
+// PhaseFromString returns the Phase that has the given name. If there is no Phase of that name, then Discovery will be
+// returned instead. Case-insensitive.
+func PhaseFromString(s string) Phase {
+	switch strings.ToLower(s) {
+	case "discovery":
+		return Discovery
+	case "update":
+		return Update
+	case "snapshot":
+		return Snapshot
+	case "disable":
+		return Disable
+	case "measure":
+		return Measure
+	case "done":
+		return Done
+	default:
+		return Discovery
+	}
+}
+
+// Next returns the Phase after this one. If the referred to Phase is the last phase (Done) then the last Phase will be
 // returned.
 func (p Phase) Next() Phase {
-	if p == Measure {
+	if p == Done {
 		return p
 	}
 	return p + 1
@@ -516,8 +814,8 @@ type State struct {
 	// CurrentDiscoveryToken is the token for the Twitter RecentSearch API that the DiscoveryPhase is on. Of course,
 	// this won't apply to any other Phase other than the Discovery phase.
 	CurrentDiscoveryToken string
-	// UpdatedDevelopers are the developer IDs that have been updated in a previous UpdatePhase. Of course, this won't
-	// apply to any other Phase other than the Discovery phase.
+	// UpdatedDevelopers are the developer IDs that have been updated in a previous UpdatePhase. This applies to both
+	// the Discovery and Update Phase.
 	UpdatedDevelopers []string
 	// PhaseStart is the time that the most recent Phase was started.
 	PhaseStart time.Time
@@ -526,6 +824,9 @@ type State struct {
 	// Finished is when the Scout procedure finished. This should technically never be set for long as the ScoutState
 	// should be deleted straight after the Scout procedure has completed.
 	Finished time.Time
+	// Debug indicates whether the process is in debug mode. This has various effects throughout the scout process, such
+	// as not incrementing the TimesHighlighted field of Developers and SteamApps in the Measure Phase.
+	Debug bool
 }
 
 func (s *State) BaseDir() string { return "" }
@@ -575,8 +876,10 @@ func (s *State) SetOrAdd(args ...any) {
 		s.PhaseStart = args[1].(time.Time)
 	case "Start":
 		s.Start = args[1].(time.Time)
-	case "Continue":
+	case "Finished":
 		s.Finished = args[1].(time.Time)
+	case "Debug":
+		s.Debug = args[1].(bool)
 	default:
 		panic(fmt.Errorf("cannot set %s field of State to %v", key, args[1]))
 	}
@@ -600,8 +903,10 @@ func (s *State) Get(key any) (any, bool) {
 		return s.PhaseStart, true
 	case "Start":
 		return s.Start, true
-	case "Continue":
+	case "Finished":
 		return s.Finished, true
+	case "Debug":
+		return s.Debug, true
 	default:
 		return nil, false
 	}
@@ -614,6 +919,7 @@ const (
 	UserTweetTimesType CachedFieldType = iota
 	DeveloperSnapshotsType
 	GameIDsType
+	DeletedDevelopersType
 	StateType
 )
 
@@ -628,6 +934,9 @@ func (cft CachedFieldType) Make() CachedField {
 		return &ds
 	case GameIDsType:
 		return &GameIDs{mapset.NewThreadUnsafeSet[uuid.UUID]()}
+	case DeletedDevelopersType:
+		dd := make(DeletedDevelopers, 0)
+		return &dd
 	case StateType:
 		return &State{UpdatedDevelopers: make([]string, 0)}
 	default:
@@ -644,6 +953,8 @@ func (cft CachedFieldType) String() string {
 		return "DeveloperSnapshots"
 	case GameIDsType:
 		return "GameIDs"
+	case DeletedDevelopersType:
+		return "DeletedDevelopers"
 	case StateType:
 		return "State"
 	default:
@@ -657,6 +968,7 @@ func (cft CachedFieldType) Types() []CachedFieldType {
 		UserTweetTimesType,
 		DeveloperSnapshotsType,
 		GameIDsType,
+		DeletedDevelopersType,
 		StateType,
 	}
 }

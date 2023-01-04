@@ -493,8 +493,13 @@ func main() {
 			},
 		},
 		{
-			Name: "discovery",
+			Name: "phase",
 			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:     "phase",
+					Usage:    "the name of the phase to run",
+					Required: true,
+				},
 				cli.IntFlag{
 					Name:  "batchSize",
 					Usage: "the number of tweets that each batch will process",
@@ -509,8 +514,12 @@ func main() {
 					Name:  "stateForceCreate",
 					Usage: "whether to forceCreate the ScoutState",
 				},
+				cli.BoolFlag{
+					Name:  "debug",
+					Usage: "whether to set the Debug flag in the ScoutState",
+				},
 			},
-			Usage: "run the discovery phase",
+			Usage: "run a single phase",
 			Action: func(c *cli.Context) (err error) {
 				var state *ScoutState
 				if state, err = StateLoadOrCreate(c.Bool("stateForceCreate")); err != nil {
@@ -518,34 +527,25 @@ func main() {
 				}
 
 				if state.Loaded {
-					log.WARNING.Printf("Previous ScoutState \"%s\" was loaded from disk:")
+					log.WARNING.Printf("Previous ScoutState \"%s\" was loaded from disk so we are ignoring batchSize and discoveryTweets parameters:")
 					log.WARNING.Println(state.String())
 				} else {
-					// If no state has been loaded, then we'll assume that the previous run of Scout was successful and set up
-					// ScoutState as usual
-					state.GetCachedField(StateType).SetOrAdd("Phase", Discovery)
+					// If no state has been loaded, then we'll assume that the previous run of Scout was successful and
+					// set up ScoutState as usual
+					state.GetCachedField(StateType).SetOrAdd("Phase", PhaseFromString(c.String("phase")))
 					state.GetCachedField(StateType).SetOrAdd("BatchSize", c.Int("batchSize"))
 					state.GetCachedField(StateType).SetOrAdd("DiscoveryTweets", c.Int("discoveryTweets"))
 				}
+				state.GetCachedField(StateType).SetOrAdd("Debug", c.Bool("debug"))
 
-				var gameIDs mapset.Set[uuid.UUID]
-				if gameIDs, err = DiscoveryPhase(state); err != nil {
+				if err = PhaseFromString(c.String("phase")).Run(state); err != nil {
 					return cli.NewExitError(err.Error(), 1)
 				}
 
 				fmt.Println("userTweetTimes:", state.GetIterableCachedField(UserTweetTimesType))
 				fmt.Println("developerSnapshots:", state.GetIterableCachedField(DeveloperSnapshotsType))
-				fmt.Println("gameIDs:", gameIDs)
-				return
-			},
-		},
-		{
-			Name:  "disable",
-			Usage: "run the disable phase",
-			Action: func(c *cli.Context) (err error) {
-				if err = DisablePhase(); err != nil {
-					return cli.NewExitError(err.Error(), 1)
-				}
+				fmt.Println("gameIDs:", state.GetIterableCachedField(GameIDsType))
+				fmt.Println("deletedDevelopers:", state.GetIterableCachedField(DeletedDevelopersType))
 				return
 			},
 		},

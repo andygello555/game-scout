@@ -45,10 +45,11 @@ type TrendingDev struct {
 
 // MeasureContext is a Context that contains the data required to fill out the Measure HTML template.
 type MeasureContext struct {
-	TrendingDevs      []*TrendingDev
-	TopSteamApps      []*models.SteamApp
-	EnabledDevelopers int
-	Config            Config
+	TrendingDevs           []*TrendingDev
+	TopSteamApps           []*models.SteamApp
+	DevelopersBeingDeleted []*TrendingDev
+	EnabledDevelopers      int
+	Config                 Config
 }
 
 func (m *MeasureContext) Path() TemplatePath  { return Measure }

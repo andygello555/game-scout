@@ -250,7 +250,7 @@ func (sws *SteamAppWebsocketScraper) worker(no int) {
 			case <-dropperClose:
 				log.WARNING.Printf("Stopped dropper for SteamAppWebsocketScraper worker no. %d", no+1)
 				return
-			default:
+			case <-time.After(dropperWaitTime):
 				jobs := gameScrapers.Jobs()
 				rate := previousJobLen - jobs
 				if jobs > storefrontScraperDropJobsThreshold {
@@ -279,7 +279,6 @@ func (sws *SteamAppWebsocketScraper) worker(no int) {
 					"Dropper: previous jobs = %d, rate = %d, sleeping for %s",
 					previousJobLen, rate, dropperWaitTime.String(),
 				)
-				time.Sleep(dropperWaitTime)
 			}
 		}
 	}()

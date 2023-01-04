@@ -4,8 +4,6 @@ import (
 	"github.com/RichardKnop/machinery/v1/log"
 	myErrors "github.com/andygello555/game-scout/errors"
 	myTwitter "github.com/andygello555/game-scout/twitter"
-	mapset "github.com/deckarep/golang-set/v2"
-	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"github.com/schollz/progressbar/v3"
 	"math"
@@ -84,12 +82,8 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 	}()
 
 	if state.Loaded {
-		log.WARNING.Printf("Previous ScoutState \"%s\" was loaded from disk:", state.BaseDir())
+		log.WARNING.Printf("Previous ScoutState \"%s\" was loaded from disk so we are ignoring batchSize and discoveryTweets parameters:", state.BaseDir())
 		log.WARNING.Println(state.String())
-		batchSizeAny, _ := state.GetCachedField(StateType).Get("BatchSize")
-		discoveryTweetsAny, _ := state.GetCachedField(StateType).Get("DiscoveryTweets")
-		batchSize = batchSizeAny.(int)
-		discoveryTweets = discoveryTweetsAny.(int)
 	} else {
 		// If no state has been loaded, then we'll assume that the previous run of Scout was successful and set up
 		// ScoutState as usual
@@ -98,114 +92,22 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 		state.GetCachedField(StateType).SetOrAdd("DiscoveryTweets", discoveryTweets)
 	}
 
-	var phaseStart time.Time
-	phaseBefore := func() {
-		phaseStart = time.Now().UTC()
-		state.GetCachedField(StateType).SetOrAdd("PhaseStart", phaseStart)
+	getPhase := func() Phase {
 		phase, _ := state.GetCachedField(StateType).Get("Phase")
-		log.INFO.Printf("Starting %s phase", phase.(Phase).String())
-	}
-
-	phaseAfter := func() {
-		phase, _ := state.GetCachedField(StateType).Get("Phase")
-		log.INFO.Printf("Finished %s phase in %s", phase.(Phase).String(), time.Now().UTC().Sub(phaseStart).String())
-		nextPhase := phase.(Phase).Next()
-		state.GetCachedField(StateType).SetOrAdd("Phase", nextPhase)
-		if err = state.Save(); err != nil {
-			log.ERROR.Printf("Could not save ScoutState: %v", err)
-		}
+		return phase.(Phase)
 	}
 
 	state.GetCachedField(StateType).SetOrAdd("Start", time.Now().UTC())
-	if phase, _ := state.GetCachedField(StateType).Get("Phase"); phase.(Phase) == Discovery {
-		// If the number of discovery tweets we requested is more than maxDiscoveryTweetsDailyPercent of the total tweets
-		// available for a day then we will error out.
-		if float64(discoveryTweets) > maxTotalDiscoveryTweets {
-			return myErrors.TemporaryErrorf(
-				false,
-				"cannot request more than %d tweets per day for discovery purposes",
-				int(myTwitter.TweetsPerDay),
-			)
-		}
-
-		phaseBefore()
-
-		// 1st phase: Discovery. Search the recent tweets on Twitter belonging to the hashtags given in config.json.
-		var subGameIDs mapset.Set[uuid.UUID]
-		if subGameIDs, err = DiscoveryPhase(state); err != nil {
+	// Loop over all the Phases and Run each one until the done phase
+	for phase := getPhase(); phase != Done; phase = getPhase() {
+		if err = phase.Run(state); err != nil {
 			return err
 		}
-		state.GetIterableCachedField(GameIDsType).Merge(&GameIDs{subGameIDs})
-
-		phaseAfter()
 	}
 
-	if phase, _ := state.GetCachedField(StateType).Get("Phase"); phase.(Phase) == Update {
-		// 2nd phase: Update. For any developers, and games that exist in the DB but haven't been scraped we will fetch the
-		// details from the DB and initiate scrapes for them
-		log.INFO.Printf("We have scraped:")
-		log.INFO.Printf("\t%d developers", state.GetIterableCachedField(DeveloperSnapshotsType).Len())
-		log.INFO.Printf("\t%d games", state.GetIterableCachedField(DeveloperSnapshotsType).Len())
-
-		phaseBefore()
-
-		// Extract the IDs of the developers that were just scraped in the discovery phase.
-		scrapedDevelopers := make([]string, state.GetIterableCachedField(DeveloperSnapshotsType).Len())
-		iter := state.GetIterableCachedField(DeveloperSnapshotsType).Iter()
-		for iter.Continue() {
-			scrapedDevelopers[iter.I()] = iter.Key().(string)
-			iter.Next()
-		}
-
-		// If there are already developers that have been updated in a previously run UpdatePhase, then we will add
-		// these to the scrapedDevelopers also
-		stateState := state.GetCachedField(StateType).(*State)
-		if len(stateState.UpdatedDevelopers) > 0 {
-			scrapedDevelopers = append(scrapedDevelopers, stateState.UpdatedDevelopers...)
-		}
-
-		// Run the UpdatePhase.
-		if err = UpdatePhase(scrapedDevelopers, state); err != nil {
-			return err
-		}
-
-		phaseAfter()
-	}
-
-	if phase, _ := state.GetCachedField(StateType).Get("Phase"); phase.(Phase) == Snapshot {
-		// 3rd phase: Snapshot. For all the partial DeveloperSnapshots that exist in the developerSnapshots map we will
-		// aggregate the information for them.
-		phaseBefore()
-
-		if err = SnapshotPhase(state); err != nil {
-			return errors.Wrap(err, "error occurred in SnapshotPhase")
-		}
-
-		phaseAfter()
-	}
-
-	if phase, _ := state.GetCachedField(StateType).Get("Phase"); phase.(Phase) == Disable {
-		// 4th phase: Disable. Disable the developers who aren't doing so well. The number of developers to disable depends
-		// on the number of tweets we get to use in the update phase the next time around.
-		phaseBefore()
-
-		if err = DisablePhase(); err != nil {
-			return errors.Wrap(err, "disable phase has failed")
-		}
-
-		phaseAfter()
-	}
-
-	if phase, _ := state.GetCachedField(StateType).Get("Phase"); phase.(Phase) == Measure {
-		// 5th phase: Measure. For all the users that have a good number of snapshots we'll see if any are shining above the
-		// rest
-		phaseBefore()
-		phaseAfter()
-	}
-
-	state.GetCachedField(StateType).SetOrAdd("Continue", time.Now().UTC())
+	state.GetCachedField(StateType).SetOrAdd("Finished", time.Now().UTC())
 	start, _ := state.GetCachedField(StateType).Get("Start")
-	finished, _ := state.GetCachedField(StateType).Get("Continue")
+	finished, _ := state.GetCachedField(StateType).Get("Finished")
 	log.INFO.Printf("Finished Scout in %s", finished.(time.Time).Sub(start.(time.Time)).String())
 
 	state.Delete()

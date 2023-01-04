@@ -31,9 +31,9 @@ type trendModel interface {
 // only work for a regression that has the timestamp of when each trendModel instance was created as a variable that
 // affects the regression's predictions.
 type Trend struct {
-	model      trendModel
-	r          *regression.Regression
-	dataPoints regression.DataPoints
+	Model      trendModel
+	Regression *regression.Regression
+	DataPoints regression.DataPoints
 	db         *gorm.DB
 }
 
@@ -46,17 +46,17 @@ func NewTrend(db *gorm.DB, model trendModel) *Trend {
 	}
 
 	return &Trend{
-		model: model,
-		r:     &r,
-		db:    db,
+		Model:      model,
+		Regression: &r,
+		db:         db,
 	}
 }
 
 // AddDataPoint will add a data point for the given date (variable) and score (observed value). It can also be given
 // extra variables in case you wanted to do polynomial regression.
 func (trend *Trend) AddDataPoint(date time.Time, score float64, extraVars ...float64) {
-	if trend.dataPoints == nil {
-		trend.dataPoints = make(regression.DataPoints, 0)
+	if trend.DataPoints == nil {
+		trend.DataPoints = make(regression.DataPoints, 0)
 	}
 
 	year, month, day := date.Date()
@@ -66,15 +66,15 @@ func (trend *Trend) AddDataPoint(date time.Time, score float64, extraVars ...flo
 	}
 
 	dp := regression.DataPoint(score, vars)
-	trend.dataPoints = append(trend.dataPoints, dp)
-	trend.r.Train(dp)
+	trend.DataPoints = append(trend.DataPoints, dp)
+	trend.Regression.Train(dp)
 }
 
 // Train will add the training data of the model instance to the regression model. This will not run the training
 // itself.
 func (trend *Trend) Train() (err error) {
-	if err = trend.model.Train(trend); err != nil {
-		err = errors.Wrapf(err, "could not Train instance of %s", reflect.TypeOf(trend.model).Elem().String())
+	if err = trend.Model.Train(trend); err != nil {
+		err = errors.Wrapf(err, "could not Train instance of %s", reflect.TypeOf(trend.Model).Elem().String())
 	}
 	return
 }
@@ -82,15 +82,15 @@ func (trend *Trend) Train() (err error) {
 // Trend will run the training for the regression model and return the coefficients for the resulting regression line's
 // formula.
 func (trend *Trend) Trend() (coefficients []float64, err error) {
-	if err = trend.r.Run(); err != nil {
-		err = errors.Wrapf(err, "could not find Trend of %s", reflect.TypeOf(trend.model).Elem().String())
+	if err = trend.Regression.Run(); err != nil {
+		err = errors.Wrapf(err, "could not find Trend of %s", reflect.TypeOf(trend.Model).Elem().String())
 	}
-	coefficients = trend.r.GetCoeffs()
+	coefficients = trend.Regression.GetCoeffs()
 	return
 }
 
 // GetCoeffs returns the coefficients for the regression.Regression within this Trend.
-func (trend *Trend) GetCoeffs() (coefficients []float64) { return trend.r.GetCoeffs() }
+func (trend *Trend) GetCoeffs() (coefficients []float64) { return trend.Regression.GetCoeffs() }
 
 type ChartImage struct {
 	width  int
@@ -111,29 +111,29 @@ func (ci *ChartImage) Bytes() []byte { return ci.bytes.Bytes() }
 
 // Chart generates a chart for the Trend with the given size. The returned bytes.Buffer can be saved as a PNG.
 func (trend *Trend) Chart(width, height int) (image *ChartImage, err error) {
-	times := make([]time.Time, len(trend.dataPoints))
+	times := make([]time.Time, len(trend.DataPoints))
 
 	// Time series for the observed variable
 	observedTimeSeries := chart.TimeSeries{
-		Name: fmt.Sprintf("%s over time", trend.model.GetObservedName()),
+		Name: fmt.Sprintf("%s over time", trend.Model.GetObservedName()),
 		Style: chart.Style{
 			Show:        true,
 			StrokeColor: chart.GetDefaultColor(0).WithAlpha(64),
 			StrokeWidth: 3,
 		},
-		YValues: make([]float64, len(trend.dataPoints)),
+		YValues: make([]float64, len(trend.DataPoints)),
 	}
 
 	// Regression time series. Uses the predicted values at each time to construct the regression line.
 	predictedTimeSeries := chart.TimeSeries{
-		Name: fmt.Sprintf("Regression for %s over time", trend.model.GetObservedName()),
+		Name: fmt.Sprintf("Regression for %s over time", trend.Model.GetObservedName()),
 		Style: chart.Style{
 			Show:            true,
 			StrokeColor:     drawing.ColorRed,
 			StrokeDashArray: []float64{5.0, 5.0},
 			StrokeWidth:     3,
 		},
-		YValues: make([]float64, len(trend.dataPoints)),
+		YValues: make([]float64, len(trend.DataPoints)),
 	}
 
 	annotationSeries := chart.AnnotationSeries{
@@ -146,32 +146,32 @@ func (trend *Trend) Chart(width, height int) (image *ChartImage, err error) {
 	}
 
 	// Insert all the data into the chart
-	for i, dp := range trend.dataPoints {
+	for i, dp := range trend.DataPoints {
 		times[i] = time.Unix(0, int64(dp.Variables[0]))
 		observedTimeSeries.YValues[i] = dp.Observed
 
 		var trendY float64
-		if trendY, err = trend.r.Predict(dp.Variables); err != nil {
+		if trendY, err = trend.Regression.Predict(dp.Variables); err != nil {
 			err = errors.Wrapf(
 				err,
 				"could not predict %ss %s for %s",
-				reflect.TypeOf(trend.model).Elem().String(),
-				trend.model.GetVariableNames()[0],
+				reflect.TypeOf(trend.Model).Elem().String(),
+				trend.Model.GetVariableNames()[0],
 				times[i].String(),
 			)
 		}
 		predictedTimeSeries.YValues[i] = trendY
 
-		if i == len(trend.dataPoints)/2 {
+		if i == len(trend.DataPoints)/2 {
 			annotation := chart.Value2{
 				XValue: float64(times[i].UnixNano()),
 				YValue: predictedTimeSeries.YValues[i],
 			}
-			for j, val := range trend.r.GetCoeffs() {
+			for j, val := range trend.Regression.GetCoeffs() {
 				if j == 0 {
-					annotation.Label = fmt.Sprintf("Predicted %s = %e", trend.model.GetObservedName(), val)
+					annotation.Label = fmt.Sprintf("Predicted %s = %e", trend.Model.GetObservedName(), val)
 				} else {
-					annotation.Label += fmt.Sprintf(" + %s*%e", trend.r.GetVar(j-1), val)
+					annotation.Label += fmt.Sprintf(" + %s*%e", trend.Regression.GetVar(j-1), val)
 				}
 			}
 			annotationSeries.Annotations = []chart.Value2{annotation}
@@ -187,7 +187,7 @@ func (trend *Trend) Chart(width, height int) (image *ChartImage, err error) {
 		Width:  width,
 		Height: height,
 		YAxis: chart.YAxis{
-			Name:           trend.model.GetObservedName(),
+			Name:           trend.Model.GetObservedName(),
 			NameStyle:      chart.Style{Show: true},
 			Style:          chart.Style{Show: true},
 			Ascending:      true,
@@ -198,7 +198,7 @@ func (trend *Trend) Chart(width, height int) (image *ChartImage, err error) {
 			GridMinorStyle: chart.Style{Show: true},
 		},
 		XAxis: chart.XAxis{
-			Name:           trend.model.GetVariableNames()[0],
+			Name:           trend.Model.GetVariableNames()[0],
 			NameStyle:      chart.Style{Show: true},
 			Style:          chart.Style{Show: true},
 			TickStyle:      chart.Style{Show: true},
@@ -214,7 +214,7 @@ func (trend *Trend) Chart(width, height int) (image *ChartImage, err error) {
 
 	image = &ChartImage{width: width, height: height, bytes: bytes.Buffer{}}
 	if err = graph.Render(chart.PNG, &image.bytes); err != nil {
-		err = errors.Wrapf(err, "could not generate Trend chart for %s", reflect.TypeOf(trend.model).Elem().String())
+		err = errors.Wrapf(err, "could not generate Trend chart for %s", reflect.TypeOf(trend.Model).Elem().String())
 	}
 	return
 }

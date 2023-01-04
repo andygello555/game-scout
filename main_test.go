@@ -8,6 +8,7 @@ import (
 	"github.com/andygello555/game-scout/browser"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
+	"github.com/andygello555/game-scout/email"
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
@@ -440,6 +441,22 @@ func ExampleStateLoadOrCreate() {
 	state.GetCachedField(UserTweetTimesType).SetOrAdd("1234", time.Now().UTC(), "12345", time.Now().UTC())
 	state.GetCachedField(DeveloperSnapshotsType).SetOrAdd("1234", &models.DeveloperSnapshot{DeveloperID: "1234"})
 	state.GetCachedField(GameIDsType).SetOrAdd(uuid.New(), uuid.New(), uuid.New())
+	state.GetCachedField(DeletedDevelopersType).SetOrAdd(&email.TrendingDev{
+		Developer: &models.Developer{
+			ID:       "1234",
+			Name:     "Deleted developer 1",
+			Username: "dd1",
+		},
+		Snapshots: []*models.DeveloperSnapshot{
+			{ID: uuid.New()},
+			{ID: uuid.New()},
+		},
+		Games: []*models.Game{
+			{ID: uuid.New()},
+			{ID: uuid.New()},
+		},
+		Trend: &models.Trend{},
+	})
 	state.GetCachedField(StateType).SetOrAdd("Phase", Disable)
 	// Save the ScoutState to disk
 	if err = state.Save(); err != nil {
@@ -456,6 +473,11 @@ func ExampleStateLoadOrCreate() {
 	fmt.Println("userTweetTimes:", state.GetIterableCachedField(UserTweetTimesType).Len())
 	fmt.Println("developerSnapshots:", state.GetIterableCachedField(DeveloperSnapshotsType).Len())
 	fmt.Println("gameIDs:", state.GetIterableCachedField(GameIDsType).Len())
+	fmt.Println("deletedDevelopers:", state.GetIterableCachedField(DeletedDevelopersType).Len())
+	deletedDeveloperOne, _ := state.GetIterableCachedField(DeletedDevelopersType).Get(0)
+	fmt.Println("deletedDevelopers[0].Developer.ID:", deletedDeveloperOne.(*email.TrendingDev).Developer.ID)
+	fmt.Println("deletedDevelopers[0].Snapshots:", len(deletedDeveloperOne.(*email.TrendingDev).Snapshots))
+	fmt.Println("deletedDevelopers[0].Games:", len(deletedDeveloperOne.(*email.TrendingDev).Games))
 	phase, _ := state.GetCachedField(StateType).Get("Phase")
 	fmt.Println("phase:", phase)
 	state.Delete()
@@ -463,6 +485,10 @@ func ExampleStateLoadOrCreate() {
 	// userTweetTimes: 2
 	// developerSnapshots: 1
 	// gameIDs: 3
+	// deletedDevelopers: 1
+	// deletedDevelopers[0].Developer.ID: 1234
+	// deletedDevelopers[0].Snapshots: 2
+	// deletedDevelopers[0].Games: 2
 	// phase: Disable
 }
 
