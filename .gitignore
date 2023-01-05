@@ -40,3 +40,7 @@ tweetCap.json
 !samples/**
 *.mov
 *.png
+*.sql
+*.html
+!**/templates/**
+*.pdf
