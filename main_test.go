@@ -215,7 +215,7 @@ func TestUpdatePhase(t *testing.T) {
 	sixDaysAgo := time.Now().UTC().Add(time.Hour * time.Duration(-24*6))
 	scanner = bufio.NewScanner(developerIDsFile)
 	for scanner.Scan() && developerNo != *developers {
-		developer := models.Developer{ID: scanner.Text()}
+		developer := models.Developer{ID: scanner.Text(), Username: strconv.Itoa(developerNo)}
 		if err = db.DB.Create(&developer).Error; err != nil {
 			t.Errorf("Cannot create Developer %s: %s", developer.ID, err.Error())
 		}
@@ -224,10 +224,10 @@ func TestUpdatePhase(t *testing.T) {
 		}
 
 		if err = db.DB.Create(&models.Game{
-			Name:        null.StringFrom(fmt.Sprintf("Game for Developer: %d", developerNo)),
-			Storefront:  models.SteamStorefront,
-			Website:     gameWebsites[developerNo],
-			DeveloperID: developer.ID,
+			Name:       null.StringFrom(fmt.Sprintf("Game for Developer: %d", developerNo)),
+			Storefront: models.SteamStorefront,
+			Website:    gameWebsites[developerNo],
+			Developers: []string{developer.Username},
 		}).Error; err != nil {
 			t.Errorf(
 				"Cannot create game %s for Developer %s: %s",

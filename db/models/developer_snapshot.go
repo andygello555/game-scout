@@ -3,10 +3,10 @@ package models
 import (
 	"fmt"
 	myTwitter "github.com/andygello555/game-scout/twitter"
+	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
-	"github.com/volatiletech/null/v9"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"math"
@@ -66,12 +66,12 @@ type developerSnapshotWeight float64
 
 const (
 	TweetsWeight                       developerSnapshotWeight = 0.65
-	TweetTimeRangeWeight               developerSnapshotWeight = -0.35
-	AverageDurationBetweenTweetsWeight developerSnapshotWeight = -0.45
+	TweetTimeRangeWeight               developerSnapshotWeight = 0.35
+	AverageDurationBetweenTweetsWeight developerSnapshotWeight = 0.45
 	TweetsPublicMetricsWeight          developerSnapshotWeight = 0.75
 	UserPublicMetricsWeight            developerSnapshotWeight = 0.45
 	ContextAnnotationSetWeight         developerSnapshotWeight = 0.55
-	GamesWeight                        developerSnapshotWeight = -0.2
+	GamesWeight                        developerSnapshotWeight = 0.7
 	GameWeightedScoresSumWeight        developerSnapshotWeight = 0.8
 	TimesHighlightedWeight             developerSnapshotWeight = 0.9
 )
@@ -132,63 +132,58 @@ func (wf developerSnapshotWeightedField) GetValueFromWeightedModel(model Weighte
 	f := reflect.Indirect(r).FieldByName(wf.String())
 	switch wf {
 	case GameWeightedScoresSum:
-		return []float64{f.Float()}
+		// We will actually take the average here by finding the number of Games as well.
+		games := reflect.Indirect(r).FieldByName("Games").Int()
+		if games > 0 {
+			return []float64{f.Float() / float64(games)}
+		}
+		return []float64{0.0}
 	case Tweets:
 		// Tweets are clamped to 100, anymore is kinda sus within a 7-day period (this is usually against bots and AI)
-		tweets := f.Int()
-		if tweets > 100 {
-			tweets = 100
-		}
-		return []float64{float64(int32(tweets))}
+		return []float64{ScaleRange(float64(Clamp(f.Int(), 100)), 0.0, 100.0, 100_000.0, -500_000.0)}
 	case Games:
-		// We multiply the number of games by 1000
-		return []float64{float64(int32(f.Int())) * 1000.0}
+		// Return a penalty if the number of games is 0...
+		val := float64(f.Int())
+		if val == 0.0 {
+			return []float64{-15_000_000.0}
+		}
+
+		// Clamp the number of games to 100 and scale to a range of 100_000 -> -1_000_000
+		// Note: reflects badly against bots; which is what we want.
+		return []float64{ScaleRange(Clamp(val, 100.0), 1.0, 100.0, 100_000.0, -5_000_000.0)}
 	case TweetTimeRange, AverageDurationBetweenTweets:
-		val := 0.0
+		var val float64
 		duration := f.Interface().(NullDuration)
 		if duration.IsValid() {
 			val = duration.Ptr().Minutes()
+		} else {
+			return []float64{-10_000.0}
 		}
-		return []float64{val / 10000.0}
+		return []float64{ScaleRange(ClampMinMax(val, 1.0, 10_000.0), 1.0, 10_000.0, -10_000.0, 10_000.0)}
 	case TweetsPublicMetrics:
 		tweetMetricsObj := f.Interface().(*twitter.TweetMetricsObj)
 		if tweetMetricsObj != nil {
 			// Clamp all tweet public metrics to 5000
-			metrics := make([]float64, 7)
-			for i, metric := range []int{
-				tweetMetricsObj.Impressions,
-				tweetMetricsObj.URLLinkClicks,
-				tweetMetricsObj.UserProfileClicks,
-				tweetMetricsObj.Likes,
-				tweetMetricsObj.Replies,
-				tweetMetricsObj.Retweets,
-				tweetMetricsObj.Quotes,
-			} {
-				if metric > 5000 {
-					metric = 5000
-				}
-				metrics[i] = float64(metric)
+			return []float64{
+				float64(Clamp(tweetMetricsObj.Impressions, 1000)),
+				float64(Clamp(tweetMetricsObj.URLLinkClicks, 1000)),
+				float64(Clamp(tweetMetricsObj.UserProfileClicks, 1000)),
+				float64(Clamp(tweetMetricsObj.Likes, 1000)),
+				float64(Clamp(tweetMetricsObj.Replies, 1000)),
+				float64(Clamp(tweetMetricsObj.Retweets, 1000)),
+				float64(Clamp(tweetMetricsObj.Quotes, 1000)),
 			}
-			return metrics
 		}
 		return []float64{0.0}
 	case UserPublicMetrics:
 		userMetricsObj := f.Interface().(*twitter.UserMetricsObj)
 		if userMetricsObj != nil {
-			// Clamp all user public metrics to 2000
-			metrics := make([]float64, 4)
-			for i, metric := range []int{
-				userMetricsObj.Followers,
-				userMetricsObj.Following,
-				userMetricsObj.Tweets,
-				userMetricsObj.Listed,
-			} {
-				if metric > 2000 {
-					metric = 2000
-				}
-				metrics[i] = float64(metric)
+			return []float64{
+				float64(Clamp(userMetricsObj.Followers, 1000)),
+				float64(Clamp(userMetricsObj.Following, 1000)),
+				ScaleRange(float64(Clamp(userMetricsObj.Tweets, 10_000)), 0.0, 10_000.0, 100_000.0, -1_000_000.0),
+				float64(Clamp(userMetricsObj.Listed, 1000)),
 			}
-			return metrics
 		}
 		return []float64{0.0}
 	case ContextAnnotationSet:
@@ -232,37 +227,57 @@ func (wf developerSnapshotWeightedField) Fields() []WeightedField {
 
 // calculateGameField calculates the Games and GameWeightedScoresSum fields for DeveloperSnapshot using the Game table.
 func (ds *DeveloperSnapshot) calculateGameField(tx *gorm.DB) (err error) {
-	var count int64
-	games := tx.Model(&Game{}).Where("developer_id = ?", ds.DeveloperID)
-	if games.Error != nil {
+	var developer Developer
+	if err = tx.Find(&developer, ds.DeveloperID).Error; err != nil {
 		return errors.Wrapf(
-			games.Error,
-			"could not get Games for developer_id = %s in DeveloperSnapshot.BeforeCreate",
+			err,
+			"could not find Developer with ID %s",
 			ds.DeveloperID,
 		)
 	}
+
+	// Find all the games containing the developer's username within their developers column
+	games := tx.Model(&Game{}).Where("? = ANY(developers)", developer.Username)
+	if games.Error != nil {
+		return errors.Wrapf(
+			games.Error,
+			"could not get Games for developer %s (%s) in DeveloperSnapshot.BeforeCreate",
+			developer.Username, developer.ID,
+		)
+	}
+
 	// Get the number of Games
+	var count int64
 	if queryCount := games.Count(&count); queryCount.Error == nil {
 		ds.Games = int32(count)
 	} else if queryCount.Error != nil {
 		return errors.Wrapf(
 			queryCount.Error,
-			"could not count the number of Games for developer_id = %s in DeveloperSnapshot.BeforeCreate",
-			ds.DeveloperID,
+			"could not count the number of Games for developer %s (%s) in DeveloperSnapshot.BeforeCreate",
+			developer.Username, developer.ID,
 		)
 	}
 
-	// Because Game.WeightedScore can be null, we will filter out any Games with a null weighted_score and also scan the
-	// sum of the weighted_scores into a null.Float64 in case there are no games to sum-up.
-	gameWeightedScores := null.Float64From(0)
-	if err = games.Where("weighted_score IS NOT NULL").Select("sum(weighted_score)").Row().Scan(&gameWeightedScores); err != nil {
+	// Because Game.WeightedScore can be null, we will filter out any Games with a null weighted_score
+	var weightedGames []*Game
+	if err = games.Where("weighted_score IS NOT NULL").Find(&weightedGames).Error; err != nil {
 		return errors.Wrapf(
 			err,
-			"could not sum the weighted_scores of Games for developer_id = %s in DeveloperSnapshot.BeforeCreate",
-			ds.DeveloperID,
+			"could not find the Games with weighted_scores for developer %s (%s) in DeveloperSnapshot.BeforeCreate",
+			developer.Username, developer.ID,
 		)
 	}
-	ds.GameWeightedScoresSum = gameWeightedScores.Float64
+
+	// For each game we will add its weighted score to the GameWeightedScoresSum field. For games that don't include the
+	// Developer's username within the fields that exist on their page, we will treat their weighted score as a negative
+	// number, but only if their weighted score is positive. Otherwise, we will leave it as it is.
+	for _, weightedGame := range weightedGames {
+		weightedGameScore := weightedGame.WeightedScore.Float64
+		if !mapset.NewThreadUnsafeSet[string](weightedGame.VerifiedDeveloperUsernames...).Contains(developer.Username) && weightedGameScore > 0 {
+			weightedGameScore *= -1
+		}
+		ds.GameWeightedScoresSum += weightedGameScore
+	}
 	return
 }
 
@@ -273,6 +288,10 @@ func (ds *DeveloperSnapshot) UpdateComputedFields(tx *gorm.DB) (err error) {
 
 func (ds *DeveloperSnapshot) Empty() any {
 	return &DeveloperSnapshot{}
+}
+
+func (ds *DeveloperSnapshot) Order() string {
+	return "id"
 }
 
 func (ds *DeveloperSnapshot) BeforeCreate(tx *gorm.DB) (err error) {

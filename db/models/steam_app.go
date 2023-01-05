@@ -248,6 +248,10 @@ func (app *SteamApp) Empty() any {
 	return &SteamApp{}
 }
 
+func (app *SteamApp) Order() string {
+	return "id"
+}
+
 // UpdateComputedFields will update the fields in a SteamApp that are computed.
 func (app *SteamApp) UpdateComputedFields(tx *gorm.DB) (err error) {
 	// Calculate the ReviewScore

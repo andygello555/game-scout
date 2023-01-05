@@ -68,7 +68,6 @@ func UpdateDeveloper(
 				"Queued update for Game \"%s\" (%s) for Developer %s (%s)",
 				game.Name.String, game.ID.String(), developer.Username, developer.ID,
 			)
-			game.Developer = developer
 			if gameChannel, ok := gameScrapers.Add(true, game, nil); ok {
 				<-gameChannel
 				log.INFO.Printf(

@@ -162,7 +162,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 	// Finally, we construct the email and send it
 	var pdf *email.Template
 	if pdf = measureContext.HTML().PDF(); pdf.Error != nil {
-		return errors.Wrap(err, "could not construct Measure PDF")
+		return errors.Wrap(pdf.Error, "could not construct Measure PDF")
 	}
 
 	// TODO: Remove this and replace it with email sending

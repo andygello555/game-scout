@@ -17,6 +17,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 )
 
 var DB *gorm.DB
@@ -91,6 +92,9 @@ type ComputedFieldsModel interface {
 	// Empty returns a pointer to an empty instance of the ComputedFieldsModel that can be used as the output for
 	// gorm.DB.ScanRows for instance.
 	Empty() any
+	// Order returns the SQL expression that will be used for ordering the entire result set. This is used in
+	// UpdateComputedFieldsForModels.
+	Order() string
 }
 
 type Upsertable interface {
@@ -196,10 +200,20 @@ func UpdateComputedFieldsForModels(modelNames ...string) (err error) {
 							var rows *sql.Rows
 
 							// We find the rows with the limit and the offset for the page
-							if rows, workerErr = DB.Model(model.Model).Limit(pageSize).Offset(job * pageSize).Rows(); workerErr != nil {
+							if rows, workerErr = DB.Model(
+								model.Model,
+							).Order(
+								model.Model.(ComputedFieldsModel).Order(),
+							).Limit(
+								pageSize,
+							).Offset(
+								job * pageSize,
+							).Rows(); workerErr != nil {
 								panic(workerErr)
 							}
 
+							rowsProcessed := 0
+							start := time.Now()
 							for rows.Next() {
 								// For each row we will scan the row into an empty instance of the ComputedFieldsModel.
 								instance := model.Model.(ComputedFieldsModel).Empty()
@@ -207,17 +221,30 @@ func UpdateComputedFieldsForModels(modelNames ...string) (err error) {
 									panic(workerErr)
 								}
 
+								//beforeScore := instance.(*myModels.DeveloperSnapshot).WeightedScore
 								// We then assert the instance to a ComputedFieldsModel and call the UpdateComputedFields
 								// method.
 								if workerErr = instance.(ComputedFieldsModel).UpdateComputedFields(DB); workerErr != nil {
 									panic(workerErr)
 								}
 
+								//afterScore := instance.(*myModels.DeveloperSnapshot).WeightedScore
+								//if afterScore != beforeScore {
+								//	log.WARNING.Printf("%f != %f", beforeScore, afterScore)
+								//}
 								// Finally, save the instance
-								DB.Save(instance)
+								if workerErr = DB.Save(instance).Error; workerErr != nil {
+									panic(workerErr)
+								}
+								rowsProcessed++
 							}
-							if err := rows.Close(); err != nil {
-								panic(err)
+
+							log.INFO.Printf(
+								"Processed %d rows from %d to %d in %s",
+								rowsProcessed, job*pageSize, job*pageSize+pageSize, time.Now().Sub(start).String(),
+							)
+							if workerErr = rows.Close(); workerErr != nil {
+								panic(workerErr)
 							}
 						}
 					}()

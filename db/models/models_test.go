@@ -2,7 +2,7 @@ package models
 
 import (
 	mapset "github.com/deckarep/golang-set/v2"
-	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -65,25 +65,27 @@ var fakeConfig = &scrapeConfig{storefronts: []*storefrontConfig{
 
 func TestScrapeStorefrontsForGameWrapper(t *testing.T) {
 	for i, test := range []struct {
-		expectedName              string
-		expectedStorefront        Storefront
-		expectedWebsite           string
-		expectedPublisher         string
-		expectedDeveloperVerified bool
-		expectedReleaseDate       time.Time
-		gameModel                 GameModel[string]
-		storefrontMapping         map[Storefront]mapset.Set[string]
-		fail                      bool
-		isNil                     bool
+		expectedName                       string
+		expectedStorefront                 Storefront
+		expectedWebsite                    string
+		expectedPublisher                  string
+		expectedVerifiedDeveloperUsernames mapset.Set[string]
+		expectedDevelopers                 mapset.Set[string]
+		expectedReleaseDate                time.Time
+		gameModel                          GameModel[string]
+		storefrontMapping                  map[Storefront]mapset.Set[string]
+		fail                               bool
+		isNil                              bool
 	}{
 		{
-			expectedName:              "Human: Fall Flat",
-			expectedStorefront:        SteamStorefront,
-			expectedWebsite:           "https://store.steampowered.com/app/477160",
-			expectedPublisher:         "Curve Games",
-			expectedDeveloperVerified: true,
-			expectedReleaseDate:       time.Unix(1469206680, 0),
-			gameModel:                 &Game{Developer: &Developer{Username: "curvegames"}},
+			expectedName:                       "Human: Fall Flat",
+			expectedStorefront:                 SteamStorefront,
+			expectedWebsite:                    "https://store.steampowered.com/app/477160",
+			expectedPublisher:                  "Curve Games",
+			expectedVerifiedDeveloperUsernames: mapset.NewThreadUnsafeSet[string]("curvegames"),
+			expectedDevelopers:                 mapset.NewThreadUnsafeSet[string]("curvegames"),
+			expectedReleaseDate:                time.Unix(1469206680, 0),
+			gameModel:                          &Game{Developers: []string{"curvegames"}},
 			storefrontMapping: map[Storefront]mapset.Set[string]{
 				SteamStorefront: mapset.NewThreadUnsafeSet[string](
 					"https://store.steampowered.com/app/477160",
@@ -92,13 +94,14 @@ func TestScrapeStorefrontsForGameWrapper(t *testing.T) {
 			},
 		},
 		{
-			expectedName:              "Human: Fall Flat",
-			expectedStorefront:        SteamStorefront,
-			expectedWebsite:           "https://store.steampowered.com/app/477160",
-			expectedPublisher:         "Curve Games",
-			expectedDeveloperVerified: false,
-			expectedReleaseDate:       time.Unix(1469206680, 0),
-			gameModel:                 &Game{},
+			expectedName:                       "Human: Fall Flat",
+			expectedStorefront:                 SteamStorefront,
+			expectedWebsite:                    "https://store.steampowered.com/app/477160",
+			expectedPublisher:                  "Curve Games",
+			expectedVerifiedDeveloperUsernames: mapset.NewThreadUnsafeSet[string](),
+			expectedDevelopers:                 mapset.NewThreadUnsafeSet[string]("curvegames"),
+			expectedReleaseDate:                time.Unix(1469206680, 0),
+			gameModel:                          &Game{},
 			storefrontMapping: map[Storefront]mapset.Set[string]{
 				SteamStorefront: mapset.NewThreadUnsafeSet[string](
 					"https://store.steampowered.com/app/477160",
@@ -132,7 +135,8 @@ func TestScrapeStorefrontsForGameWrapper(t *testing.T) {
 				{"storefront", string(gameModel.(*Game).Storefront), string(test.expectedStorefront)},
 				{"website", gameModel.(*Game).Website.String, test.expectedWebsite},
 				{"publisher", gameModel.(*Game).Publisher.String, test.expectedPublisher},
-				{"developer_verified", strconv.FormatBool(gameModel.(*Game).DeveloperVerified), strconv.FormatBool(test.expectedDeveloperVerified)},
+				{"verified_developer_usernames", strings.Join(gameModel.(*Game).VerifiedDeveloperUsernames, ","), strings.Join(test.expectedVerifiedDeveloperUsernames.ToSlice(), ",")},
+				{"developers", strings.Join(gameModel.(*Game).Developers, ","), strings.Join(test.expectedDevelopers.ToSlice(), ",")},
 				{"release_date", gameModel.(*Game).ReleaseDate.Time.String(), test.expectedReleaseDate.String()},
 			} {
 				if check.actual != check.expected {

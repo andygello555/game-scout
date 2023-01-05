@@ -70,8 +70,8 @@ func (d *Developer) LatestDeveloperSnapshot(db *gorm.DB) (developerSnap *Develop
 
 // Games returns the games for this developer ordered by weighted score descending.
 func (d *Developer) Games(db *gorm.DB) (games []*Game, err error) {
-	if err = db.Model(&Game{}).Where("developer_id = ?", d.ID).Order("weighted_score desc").Find(&games).Error; err != nil {
-		return games, errors.Wrapf(err, "could not find Games for %s", d.ID)
+	if err = db.Model(&Game{}).Where("? = ANY(developers)", d.Username).Order("weighted_score desc").Find(&games).Error; err != nil {
+		return games, errors.Wrapf(err, "could not find Games for %s (%s)", d.Username, d.ID)
 	}
 	return
 }

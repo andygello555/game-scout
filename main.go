@@ -339,7 +339,7 @@ func main() {
 						Name:            null.StringFrom("fake"),
 						Storefront:      models.SteamStorefront,
 						Website:         null.StringFrom("https://store.steampowered.com/app/240"),
-						DeveloperID:     developer.ID,
+						Developers:      []string{developer.ID},
 						Publisher:       publishers[rand.Intn(len(publishers))],
 						TotalReviews:    null.Int32From(totalReviews),
 						PositiveReviews: null.Int32From(positiveReviews),

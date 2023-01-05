@@ -9,6 +9,7 @@ import (
 	"github.com/andygello555/game-scout/steamcmd"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/pkg/errors"
 	"github.com/volatiletech/null/v9"
 	"gorm.io/gorm"
@@ -32,11 +33,10 @@ type Game struct {
 	Storefront Storefront `gorm:"type:storefront_type"`
 	// Website is the URL for this game's website. Usually a Steam store page.
 	Website null.String `gorm:"index:idx_website,where:website is not null,unique"`
-	// DeveloperID is the foreign key to the Developer.
-	DeveloperID string
-	Developer   *Developer `gorm:"constraint:OnDelete:CASCADE;"`
-	// DeveloperVerified indicates whether the developer's Twitter username can be found somewhere on the Game's Website.
-	DeveloperVerified bool
+	// Developers are the Twitter usernames that could be developers for this Game.
+	Developers pq.StringArray `gorm:"type:varchar(15)[];default:'{}'"`
+	// VerifiedDeveloperUsernames are the Twitter usernames that can be found somewhere on the Game's Website.
+	VerifiedDeveloperUsernames pq.StringArray `gorm:"type:varchar(15)[];default:'{}'"`
 	// Updates is the number of times this app has been updated. 0 means that the Game has just been created. Please
 	// don't set this yourself when creating a Game.
 	Updates uint64
@@ -67,7 +67,7 @@ type Game struct {
 	// that tag by the default value/override value for that tag. See TagConfig for more info.
 	TagScore null.Float64
 	// WeightedScore is a weighted average comprised of the values taken from Publisher, TotalReviews, ReviewScore,
-	// TotalUpvotes, TotalDownvotes, TotalComments, TagScore, Updates, and DeveloperVerified for this game. If
+	// TotalUpvotes, TotalDownvotes, TotalComments, TagScore, and Updates for this game. If
 	// Game.CheckCalculateWeightedScore is false then this will be nil. This is a computed field, no need to set it
 	// before saving.
 	WeightedScore null.Float64
@@ -78,32 +78,30 @@ type Game struct {
 type gameWeight float64
 
 const (
-	GamePublisherWeight         gameWeight = 0.55
-	GameTotalReviewsWeight      gameWeight = 0.75
-	GameReviewScoreWeight       gameWeight = 0.65
-	GameTotalUpvotesWeight      gameWeight = 0.45
-	GameTotalDownvotesWeight    gameWeight = 0.25
-	GameTotalCommentsWeight     gameWeight = 0.35
-	GameTagScoreWeight          gameWeight = 0.25
-	GameUpdatesWeight           gameWeight = -0.15
-	GameDeveloperVerifiedWeight gameWeight = 0.8
-	GameReleaseDateWeight       gameWeight = 0.7
+	GamePublisherWeight      gameWeight = 0.55
+	GameTotalReviewsWeight   gameWeight = 0.75
+	GameReviewScoreWeight    gameWeight = 0.65
+	GameTotalUpvotesWeight   gameWeight = 0.45
+	GameTotalDownvotesWeight gameWeight = 0.25
+	GameTotalCommentsWeight  gameWeight = 0.35
+	GameTagScoreWeight       gameWeight = 0.25
+	GameUpdatesWeight        gameWeight = -0.15
+	GameReleaseDateWeight    gameWeight = 0.7
 )
 
 // gameWeightedField represents a field that can have a weighting calculation applied to it in Game.
 type gameWeightedField string
 
 const (
-	GamePublisher         gameWeightedField = "Publisher"
-	GameTotalReviews      gameWeightedField = "TotalReviews"
-	GameReviewScore       gameWeightedField = "ReviewScore"
-	GameTotalUpvotes      gameWeightedField = "TotalUpvotes"
-	GameTotalDownvotes    gameWeightedField = "TotalDownvotes"
-	GameTotalComments     gameWeightedField = "TotalComments"
-	GameTagScore          gameWeightedField = "TagScore"
-	GameUpdates           gameWeightedField = "Updates"
-	GameDeveloperVerified gameWeightedField = "DeveloperVerified"
-	GameReleaseDate       gameWeightedField = "ReleaseDate"
+	GamePublisher      gameWeightedField = "Publisher"
+	GameTotalReviews   gameWeightedField = "TotalReviews"
+	GameReviewScore    gameWeightedField = "ReviewScore"
+	GameTotalUpvotes   gameWeightedField = "TotalUpvotes"
+	GameTotalDownvotes gameWeightedField = "TotalDownvotes"
+	GameTotalComments  gameWeightedField = "TotalComments"
+	GameTagScore       gameWeightedField = "TagScore"
+	GameUpdates        gameWeightedField = "Updates"
+	GameReleaseDate    gameWeightedField = "ReleaseDate"
 )
 
 // String returns the string value of the gameWeightedField.
@@ -129,8 +127,6 @@ func (gf gameWeightedField) Weight() (w float64, inverse bool) {
 		w = float64(GameTagScoreWeight)
 	case GameUpdates:
 		w = float64(GameUpdatesWeight)
-	case GameDeveloperVerified:
-		w = float64(GameDeveloperVerifiedWeight)
 	case GameReleaseDate:
 		w = float64(GameReleaseDateWeight)
 	default:
@@ -192,12 +188,12 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 		return []float64{val}
 	case GameUpdates:
 		return []float64{float64(f.Uint()+1) / 1500.0}
-	case GameDeveloperVerified:
-		val := -50000.0
-		if f.Bool() {
-			val = 4000.0
-		}
-		return []float64{val}
+	//case GameDeveloperVerified:
+	//	val := -50000.0
+	//	if f.Bool() {
+	//		val = 4000.0
+	//	}
+	//	return []float64{val}
 	case GameReleaseDate:
 		nullTime := f.Interface().(null.Time)
 		var val float64
@@ -228,7 +224,6 @@ func (gf gameWeightedField) Fields() []WeightedField {
 		GameTotalComments,
 		GameTagScore,
 		GameUpdates,
-		GameDeveloperVerified,
 		GameReleaseDate,
 	}
 }
@@ -269,6 +264,10 @@ func (g *Game) Empty() any {
 	return &Game{}
 }
 
+func (g *Game) Order() string {
+	return "id"
+}
+
 func (g *Game) BeforeCreate(tx *gorm.DB) (err error) {
 	if err = g.UpdateComputedFields(tx); err != nil {
 		err = errors.Wrapf(err, "could not update computed fields for Game %s", g.ID.String())
@@ -287,18 +286,43 @@ func (g *Game) BeforeUpdate(tx *gorm.DB) (err error) {
 
 // OnConflict returns the clause.OnConflict that should be checked in an upsert clause.
 func (g *Game) OnConflict() clause.OnConflict {
+	// For the developers column we will perform a union on the existing Game row and this Game so that we don't
+	// overwrite any previous updates.
+	// Note: we do not have to do this with verified_developer_usernames as we always take the newest update to be gospel.
+	doUpdates := clause.Assignments(map[string]interface{}{
+		"developers": gorm.Expr("ARRAY(SELECT DISTINCT UNNEST(\"developers\" || \"excluded\".\"developers\"))"),
+	})
+	doUpdates = append(doUpdates, clause.AssignmentColumns([]string{
+		"name",
+		"storefront",
+		"website",
+		"verified_developer_usernames",
+		"updates",
+		"release_date",
+		"publisher",
+		"total_reviews",
+		"positive_reviews",
+		"negative_reviews",
+		"review_score",
+		"total_upvotes",
+		"total_downvotes",
+		"total_comments",
+		"tag_score",
+		"weighted_score",
+	})...)
 	return clause.OnConflict{
 		Columns: []clause.Column{{Name: "website"}},
 		TargetWhere: clause.Where{Exprs: []clause.Expression{clause.Not(clause.Expression(clause.Eq{
 			Column: "website",
 			Value:  nil,
 		}))}},
+		DoUpdates: doUpdates,
 	}
 }
 
 // OnCreateOmit returns the fields that should be omitted when creating a Game.
 func (g *Game) OnCreateOmit() []string {
-	return []string{"Developer"}
+	return []string{}
 }
 
 // Update will update the Game. It does this by calling the Storefront.ScrapeGame method on the referred to Game.
@@ -659,12 +683,12 @@ func (g *GameSteamStorefront) ScrapeTags(config ScrapeConfig, maxTries int, minD
 func (g *GameSteamStorefront) ScrapeExtra(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) (err error) {
 	appID := args[0]
 	// Fetch the game's app page so that we can see if they have included a link to the dev's/game's twitter page. This
-	// is only done when there is a Developer filled for the Game (i.e. the Game's Developer field is not nil). This is
+	// is only done when there is a Developer for the Game (i.e. the Game's Developers field is not empty). This is
 	// also a fallback for finding the release date for games that are unreleased.
-	if g.Game.Developer != nil || !g.Game.ReleaseDate.IsValid() {
+	if len(g.Game.Developers) > 0 || !g.Game.ReleaseDate.IsValid() {
 		twitterUserURLPattern := regexp.MustCompile(`^https?://(?:www\.)?twitter\.com/(?:#!/)?@?([^/?#]*)(?:[?#].*)?$`)
 		return browser.SteamAppPage.RetrySoup(maxTries, minDelay, func(doc *soup.Root) (err error) {
-			if g.Game.Developer != nil {
+			if len(g.Game.Developers) > 0 {
 				links := doc.FindAll("a")
 				usernames := mapset.NewThreadUnsafeSet[string]()
 				for _, link := range links {
@@ -679,11 +703,9 @@ func (g *GameSteamStorefront) ScrapeExtra(config ScrapeConfig, maxTries int, min
 					}
 				}
 
-				g.Game.DeveloperVerified = usernames.Contains(g.Game.Developer.Username)
-				log.INFO.Printf(
-					"Twitter usernames found for %d: %v. Contains \"%s\" = %t",
-					appID, usernames, g.Game.Developer.Username, g.Game.DeveloperVerified,
-				)
+				usernames.Remove("steam")
+				g.Game.VerifiedDeveloperUsernames = usernames.ToSlice()
+				log.INFO.Printf("Twitter usernames found for %d: %v", appID, usernames)
 			}
 
 			if !g.Game.ReleaseDate.IsValid() {
@@ -707,7 +729,7 @@ func (g *GameSteamStorefront) ScrapeExtra(config ScrapeConfig, maxTries int, min
 		}, appID)
 	} else {
 		log.WARNING.Printf("Game's Developer field is null, and ReleaseDate has already been found, skipping " +
-			"DeveloperVerified check...")
+			"VerifiedDeveloperUsernames scrape...")
 	}
 	return
 }
