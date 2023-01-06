@@ -57,15 +57,19 @@ func trendFinder(jobs <-chan *models.Developer, results chan<- *trendFinderResul
 			results <- result
 			continue
 		}
+		log.INFO.Printf("Developer %s (%s) has %d games", job.Username, job.ID, len(result.Games))
 
 		if result.Snapshots, result.err = job.DeveloperSnapshots(db.DB); result.err != nil {
 			result.err = errors.Wrapf(result.err, "trendFinder cannot find snapshots for %s (%s)", result.Developer.Username, result.Developer.ID)
 			results <- result
 			continue
 		}
+		log.INFO.Printf("Developer %s (%s) has %d snapshots", job.Username, job.ID, len(result.Snapshots))
 
 		if result.Trend, result.err = job.Trend(db.DB); result.err != nil {
 			result.err = errors.Wrapf(result.err, "trendFinder cannot find trend for %s (%s)", result.Developer.Username, result.Developer.ID)
+		} else {
+			log.INFO.Printf("Found trend for developer %s (%s) = %.2f", job.Username, job.ID, result.Trend.GetCoeffs()[1])
 		}
 		results <- result
 	}
@@ -79,17 +83,40 @@ func MeasurePhase(state *ScoutState) (err error) {
 	}
 
 	// To find the top performing Developers we need to:
-	// 1. Get all non-disabled developers
+	// 1. Get all non-disabled developers that have more than 1 snapshot to their name
 	// 2. Find the regression line coefficients for each in a worker pattern
 	// 3. Order the Developers by the values of these coefficients descending
 	// 4: Slice off the top maxTrendingDevelopers
 	// 5: Increment each developer's TimesHighlighted field
 	// 6. Add the collected trending developers to the MeasureContext instance
 	var enabledDevelopers []*models.Developer
-	if err = db.DB.Where("not disabled").Find(&enabledDevelopers).Error; err != nil {
+	// select developers.*
+	// from developers
+	// left join developer_snapshots on developers.id = developer_id
+	// where not disabled
+	// group by developers.id
+	// having count(developer_snapshots.id) > 1;
+	if err = db.DB.Select(
+		"developers.*",
+	).Joins(
+		"LEFT JOIN developer_snapshots on developers.id = developer_id",
+	).Where(
+		"not disabled",
+	).Group(
+		"developers.id",
+	).Having(
+		"COUNT(developer_snapshots.id) > 1",
+	).Find(&enabledDevelopers).Error; err != nil {
 		return myErrors.TemporaryWrap(false, err, "cannot fetch enabled developers in Measure")
 	}
-	measureContext.EnabledDevelopers = len(enabledDevelopers)
+
+	if err = db.DB.Model(&models.Developer{}).Where("not disabled").Count(&measureContext.EnabledDevelopers).Error; err != nil {
+		log.ERROR.Printf("Could not find the number of enabled developers: %v", err)
+	}
+	log.INFO.Printf(
+		"There are %d enabled developers, we are going to find the trend of %d developers",
+		measureContext.EnabledDevelopers, len(enabledDevelopers),
+	)
 
 	jobs := make(chan *models.Developer, len(enabledDevelopers))
 	results := make(chan *trendFinderResult, len(enabledDevelopers))
@@ -117,6 +144,8 @@ func MeasurePhase(state *ScoutState) (err error) {
 	close(results)
 
 	// Add the top maxTrendingDevelopers (or however many we found)
+	topDevelopersNo := int(math.Min(float64(topDevelopers.Len()), maxTrendingDevelopers))
+	log.INFO.Printf("Adding top %d developers to the MeasureContext", topDevelopersNo)
 	for i := 0; i < int(math.Min(float64(topDevelopers.Len()), maxTrendingDevelopers)); i++ {
 		topDeveloper := topDevelopers[i]
 		if debug, _ := state.GetCachedField(StateType).Get("Debug"); !debug.(bool) {
@@ -142,7 +171,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 	).Order(
 		"weighted_score desc",
 	).Limit(maxTopSteamApps).Find(&steamApps).Error; err != nil {
-		return errors.Wrapf(err, "could not find the top %d SteamApps", maxTopSteamApps)
+		return myErrors.TemporaryWrapf(false, err, "could not find the top %d SteamApps", maxTopSteamApps)
 	}
 	measureContext.TopSteamApps = steamApps
 
@@ -162,7 +191,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 	// Finally, we construct the email and send it
 	var pdf *email.Template
 	if pdf = measureContext.HTML().PDF(); pdf.Error != nil {
-		return errors.Wrap(pdf.Error, "could not construct Measure PDF")
+		return myErrors.TemporaryWrap(false, pdf.Error, "could not construct Measure PDF")
 	}
 
 	// TODO: Remove this and replace it with email sending

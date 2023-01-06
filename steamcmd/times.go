@@ -21,6 +21,7 @@ const (
 	MonthDayStOrdYear = "January 2st, 2006"
 	MonthDayThOrdYear = "January 2th, 2006"
 	ShortMonthYear    = "Jan 2006"
+	FullMonthYear     = "January 2006"
 	// QuarterYear is actually parsed with the "Q" number as the day, this is converted in SteamDateLayout.Parse to the
 	// correct date. The time.Time returned by SteamDateLayout.Parse will be a date to the first day of the quarter.
 	QuarterYear = "Q2 2006"
@@ -48,6 +49,8 @@ func (sdf SteamDateLayout) String() string {
 		return "MonthDayThOrdYear"
 	case ShortMonthYear:
 		return "ShortMonthYear"
+	case FullMonthYear:
+		return "FullMonthYear"
 	case QuarterYear:
 		return "QuarterYear"
 	case Year:

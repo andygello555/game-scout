@@ -39,7 +39,7 @@ func (d *Developer) GetVariableNames() []string { return []string{"Snapshot Date
 func (d *Developer) Train(trend *Trend) (err error) {
 	var snapshots []*DeveloperSnapshot
 	if snapshots, err = d.DeveloperSnapshots(trend.db); err != nil {
-		return
+		return errors.Wrapf(err, "cannot Train %s (%s) as we cannot find snapshots for it", d.Username, d.ID)
 	}
 	if len(snapshots) < 2 {
 		return fmt.Errorf("cannot Train on %d datapoints for Developer %s (%s)", len(snapshots), d.Username, d.ID)

@@ -290,7 +290,7 @@ func (g *Game) OnConflict() clause.OnConflict {
 	// overwrite any previous updates.
 	// Note: we do not have to do this with verified_developer_usernames as we always take the newest update to be gospel.
 	doUpdates := clause.Assignments(map[string]interface{}{
-		"developers": gorm.Expr("ARRAY(SELECT DISTINCT UNNEST(\"developers\" || \"excluded\".\"developers\"))"),
+		"developers": gorm.Expr("ARRAY(SELECT DISTINCT UNNEST(\"games\".\"developers\" || \"excluded\".\"developers\"))"),
 	})
 	doUpdates = append(doUpdates, clause.AssignmentColumns([]string{
 		"name",

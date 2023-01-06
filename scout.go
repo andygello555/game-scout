@@ -91,6 +91,8 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 		state.GetCachedField(StateType).SetOrAdd("BatchSize", batchSize)
 		state.GetCachedField(StateType).SetOrAdd("DiscoveryTweets", discoveryTweets)
 	}
+	// We always set the Debug flag in the State to be the same as the debug flag in the ScrapeConfig.
+	state.GetCachedField(StateType).SetOrAdd("Debug", globalConfig.Scrape.Debug)
 
 	getPhase := func() Phase {
 		phase, _ := state.GetCachedField(StateType).Get("Phase")

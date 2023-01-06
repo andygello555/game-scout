@@ -10,6 +10,7 @@ import (
 	"github.com/andygello555/game-scout/db/models"
 	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/andygello555/gotils/v2/ints"
+	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/pkg/errors"
 	"github.com/playwright-community/playwright-go"
 	"github.com/volatiletech/null/v9"
@@ -48,7 +49,7 @@ type MeasureContext struct {
 	TrendingDevs           []*TrendingDev
 	TopSteamApps           []*models.SteamApp
 	DevelopersBeingDeleted []*TrendingDev
-	EnabledDevelopers      int
+	EnabledDevelopers      int64
 	Config                 Config
 }
 
@@ -57,6 +58,9 @@ func (m *MeasureContext) Template() *Template { return m.Path().Template() }
 func (m *MeasureContext) HTML() *Template     { return m.Template().HTML(m) }
 func (m *MeasureContext) Funcs() template.FuncMap {
 	return map[string]any{
+		"contains": func(set []string, elem string) bool {
+			return mapset.NewThreadUnsafeSet(set...).Contains(elem)
+		},
 		"timePretty": func(t time.Time) string {
 			loc, _ := time.LoadLocation("Europe/London")
 			t = t.In(loc)

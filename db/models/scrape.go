@@ -118,6 +118,7 @@ type StorefrontConfig interface {
 
 // ScrapeConfig contains the configuration for the scrape.
 type ScrapeConfig interface {
+	ScrapeDebug() bool
 	ScrapeStorefronts() []StorefrontConfig
 	ScrapeGetStorefront(storefront Storefront) StorefrontConfig
 }

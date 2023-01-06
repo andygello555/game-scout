@@ -162,9 +162,13 @@ func (sfc *StorefrontConfig) StorefrontStorefront() models.Storefront { return s
 func (sfc *StorefrontConfig) StorefrontTags() models.TagConfig        { return sfc.Tags }
 
 type ScrapeConfig struct {
+	// Debug is the value for the State.Debug field.
+	Debug bool `json:"debug"`
 	// Storefronts is a list of StorefrontConfig that contains the configs for each models.Storefront.
 	Storefronts []*StorefrontConfig `json:"storefronts"`
 }
+
+func (sc *ScrapeConfig) ScrapeDebug() bool { return sc.Debug }
 
 func (sc *ScrapeConfig) ScrapeStorefronts() []models.StorefrontConfig {
 	storefronts := make([]models.StorefrontConfig, len(sc.Storefronts))

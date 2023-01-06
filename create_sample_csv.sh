@@ -1,0 +1,1 @@
+psql game_scout_db -c "\copy (select * from developers inner join developer_snapshots on developer_snapshots.developer_id = developers.id left join games on developers.username = ANY(games.developers) where not developers.disabled) to '/Users/andygello/Documents/Projects/Work/Curve/game-scout/2023-01-06_sample.csv' CSV HEADER;"

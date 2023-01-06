@@ -515,8 +515,8 @@ func main() {
 					Usage: "whether to forceCreate the ScoutState",
 				},
 				cli.BoolFlag{
-					Name:  "debug",
-					Usage: "whether to set the Debug flag in the ScoutState",
+					Name:  "cleanup",
+					Usage: "cleanup the state cache after finishing successfully",
 				},
 			},
 			Usage: "run a single phase",
@@ -527,7 +527,10 @@ func main() {
 				}
 
 				if state.Loaded {
-					log.WARNING.Printf("Previous ScoutState \"%s\" was loaded from disk so we are ignoring batchSize and discoveryTweets parameters:")
+					log.WARNING.Printf(
+						"Previous ScoutState \"%s\" was loaded from disk so we are ignoring batchSize and discoveryTweets parameters:",
+						state.BaseDir(),
+					)
 					log.WARNING.Println(state.String())
 				} else {
 					// If no state has been loaded, then we'll assume that the previous run of Scout was successful and
@@ -536,7 +539,7 @@ func main() {
 					state.GetCachedField(StateType).SetOrAdd("BatchSize", c.Int("batchSize"))
 					state.GetCachedField(StateType).SetOrAdd("DiscoveryTweets", c.Int("discoveryTweets"))
 				}
-				state.GetCachedField(StateType).SetOrAdd("Debug", c.Bool("debug"))
+				state.GetCachedField(StateType).SetOrAdd("Debug", globalConfig.Scrape.Debug)
 
 				if err = PhaseFromString(c.String("phase")).Run(state); err != nil {
 					return cli.NewExitError(err.Error(), 1)
@@ -546,6 +549,9 @@ func main() {
 				fmt.Println("developerSnapshots:", state.GetIterableCachedField(DeveloperSnapshotsType))
 				fmt.Println("gameIDs:", state.GetIterableCachedField(GameIDsType))
 				fmt.Println("deletedDevelopers:", state.GetIterableCachedField(DeletedDevelopersType))
+				if c.Bool("cleanup") {
+					state.Delete()
+				}
 				return
 			},
 		},

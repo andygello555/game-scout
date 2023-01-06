@@ -677,7 +677,15 @@ func (p Phase) Run(state *ScoutState) (err error) {
 	}
 
 	state.GetCachedField(StateType).SetOrAdd("Start", time.Now().UTC())
-	switch phase, _ := state.GetCachedField(StateType).Get("Phase"); phase.(Phase) {
+	phase, _ := state.GetCachedField(StateType).Get("Phase")
+	if phase.(Phase) != p {
+		return fmt.Errorf(
+			"state's saved phase (%s) does not much the phase being run (%s)",
+			phase.(Phase).String(), p.String(),
+		)
+	}
+
+	switch phase.(Phase) {
 	case Discovery:
 		discoveryTweetsAny, _ := state.GetCachedField(StateType).Get("DiscoveryTweets")
 		discoveryTweets := discoveryTweetsAny.(int)
@@ -1128,7 +1136,7 @@ func (state *ScoutState) Delete() {
 // String returns the top-line information for the ScoutState.
 func (state *ScoutState) String() string {
 	start, _ := state.GetCachedField(StateType).Get("Start")
-	finished, _ := state.GetCachedField(StateType).Get("Continue")
+	finished, _ := state.GetCachedField(StateType).Get("Finished")
 	phase, _ := state.GetCachedField(StateType).Get("Phase")
 	phaseStart, _ := state.GetCachedField(StateType).Get("PhaseStart")
 	batchSize, _ := state.GetCachedField(StateType).Get("BatchSize")
@@ -1136,7 +1144,7 @@ func (state *ScoutState) String() string {
 	return fmt.Sprintf(`Directory: %s
 Date: %s
 Start: %s
-Continue: %s
+Finished: %s
 Phase: %v
 Phase start: %s
 Batch size: %d
