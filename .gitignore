@@ -44,3 +44,4 @@ tweetCap.json
 *.html
 !**/templates/**
 *.pdf
+*.icloud
