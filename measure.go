@@ -146,8 +146,12 @@ func MeasurePhase(state *ScoutState) (err error) {
 	// Add the top maxTrendingDevelopers (or however many we found)
 	topDevelopersNo := int(math.Min(float64(topDevelopers.Len()), maxTrendingDevelopers))
 	log.INFO.Printf("Adding top %d developers to the MeasureContext", topDevelopersNo)
-	for i := 0; i < int(math.Min(float64(topDevelopers.Len()), maxTrendingDevelopers)); i++ {
-		topDeveloper := topDevelopers[i]
+	for i := 0; i < topDevelopersNo; i++ {
+		topDeveloper := heap.Pop(&topDevelopers).(*trendFinderResult)
+		log.INFO.Printf(
+			"%d: Adding Developer \"%s\" (%s) with trend %.10f to email context...",
+			i+1, topDeveloper.Developer.Username, topDeveloper.Developer.ID, topDeveloper.Trend.GetCoeffs()[1],
+		)
 		if debug, _ := state.GetCachedField(StateType).Get("Debug"); !debug.(bool) {
 			// Update the number of times this developer has been highlighted
 			if err = db.DB.Model(topDeveloper.Developer).Update("times_highlighted", gorm.Expr("times_highlighted + 1")).Error; err != nil {

@@ -483,10 +483,21 @@ func main() {
 					Usage: "models to update computed fields for",
 					Value: &cli.StringSlice{},
 				},
+				cli.StringSliceFlag{
+					Name:  "pks",
+					Usage: "the primary-key values of the instances of the models to update the computed fields for",
+					Value: &cli.StringSlice{},
+				},
 			},
 			Usage: "run UpdateComputedFieldsForModels for the given models names",
 			Action: func(c *cli.Context) (err error) {
-				if err = db.UpdateComputedFieldsForModels(c.StringSlice("models")...); err != nil {
+				if err = db.UpdateComputedFieldsForModels(
+					c.StringSlice("models"),
+					slices.Comprehension(
+						c.StringSlice("pks"),
+						func(idx int, value string, arr []string) any { return value },
+					),
+				); err != nil {
 					return cli.NewExitError(err.Error(), 1)
 				}
 				return
@@ -861,7 +872,7 @@ func main() {
 					filename := fmt.Sprintf(
 						"measure_email_for_steamapps_%s_%s",
 						strings.Join(
-							slices.Comprehension[int, string](
+							slices.Comprehension(
 								c.IntSlice("id"),
 								func(idx int, value int, arr []int) string {
 									return strconv.Itoa(value)

@@ -150,7 +150,7 @@ func Close() {
 }
 
 // UpdateComputedFieldsForModels will update the computed fields in all rows of the given model names.
-func UpdateComputedFieldsForModels(modelNames ...string) (err error) {
+func UpdateComputedFieldsForModels(modelNames []string, pks []any) (err error) {
 	log.INFO.Printf("Running UpdateComputedFieldsForModels")
 	if len(modelNames) == 0 {
 		for modelName := range models {
@@ -178,9 +178,14 @@ func UpdateComputedFieldsForModels(modelNames ...string) (err error) {
 
 	for i, modelName := range modelNames {
 		model := models[modelName]
+		pkFieldName := model.Schema.PrimaryFieldDBNames[0]
 		if _, ok := model.Model.(ComputedFieldsModel); ok {
 			var count int64
-			if err = DB.Model(model.Model).Count(&count).Error; err != nil {
+			countQuery := DB.Model(model.Model)
+			if len(pks) > 0 {
+				countQuery = countQuery.Where(fmt.Sprintf("%s IN ?", pkFieldName), pks)
+			}
+			if err = countQuery.Count(&count).Error; err != nil {
 				return errors.Wrapf(err, "could not find count for Model %s", modelName)
 			}
 			if count > 0 {
@@ -200,7 +205,7 @@ func UpdateComputedFieldsForModels(modelNames ...string) (err error) {
 							var rows *sql.Rows
 
 							// We find the rows with the limit and the offset for the page
-							if rows, workerErr = DB.Model(
+							pageQuery := DB.Model(
 								model.Model,
 							).Order(
 								model.Model.(ComputedFieldsModel).Order(),
@@ -208,7 +213,13 @@ func UpdateComputedFieldsForModels(modelNames ...string) (err error) {
 								pageSize,
 							).Offset(
 								job * pageSize,
-							).Rows(); workerErr != nil {
+							)
+
+							if len(pks) > 0 {
+								pageQuery = pageQuery.Where(fmt.Sprintf("%s IN ?", pkFieldName), pks)
+							}
+
+							if rows, workerErr = pageQuery.Rows(); workerErr != nil {
 								panic(workerErr)
 							}
 

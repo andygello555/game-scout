@@ -484,7 +484,7 @@ func (d *DeletedDevelopers) Serialise(pathsToBytes *PathsToBytes) (err error) {
 			d.Len(),
 			strings.Join(strings.Split(strings.Trim(fmt.Sprintf(
 				"%v",
-				slices.Comprehension[*email.TrendingDev, string](*d, func(idx int, value *email.TrendingDev, arr []*email.TrendingDev) string {
+				slices.Comprehension(*d, func(idx int, value *email.TrendingDev, arr []*email.TrendingDev) string {
 					return value.Developer.ID
 				})), "[]"), " "), ", ",
 			),
@@ -755,7 +755,7 @@ func (p Phase) Run(state *ScoutState) (err error) {
 		// on the number of tweets we get to use in the update phase the next time around.
 		phaseBefore()
 
-		if err = DisablePhase(); err != nil {
+		if err = DisablePhase(state); err != nil {
 			return errors.Wrap(err, "disable phase has failed")
 		}
 
@@ -825,6 +825,15 @@ type State struct {
 	// UpdatedDevelopers are the developer IDs that have been updated in a previous UpdatePhase. This applies to both
 	// the Discovery and Update Phase.
 	UpdatedDevelopers []string
+	// DisabledDevelopers are the IDs of the models.Developer that have been disabled in a previous DisablePhase. This
+	// applies to both the Disable and Enable Phase.
+	DisabledDevelopers []string
+	// EnabledDevelopers are the IDs of the models.Developer that were re-enabled in a previous EnablePhase. This
+	// applies to only the Enable Phase.
+	EnabledDevelopers []string
+	// DevelopersToEnable is the number of developers to go to be re-enabled in the EnablePhase. This applies only to
+	// the Enable Phase.
+	DevelopersToEnable int
 	// PhaseStart is the time that the most recent Phase was started.
 	PhaseStart time.Time
 	// Start time of the Scout procedure.
@@ -880,6 +889,12 @@ func (s *State) SetOrAdd(args ...any) {
 	case "UpdatedDevelopers":
 		// We will append to UpdatedDevelopers rather than set it
 		s.UpdatedDevelopers = append(s.UpdatedDevelopers, args[1].(string))
+	case "DisabledDevelopers":
+		s.DisabledDevelopers = args[1].([]string)
+	case "EnabledDevelopers":
+		s.EnabledDevelopers = append(s.EnabledDevelopers, args[1].(string))
+	case "DevelopersToEnable":
+		s.DevelopersToEnable = args[1].(int)
 	case "PhaseStart":
 		s.PhaseStart = args[1].(time.Time)
 	case "Start":
@@ -907,6 +922,12 @@ func (s *State) Get(key any) (any, bool) {
 		return s.CurrentDiscoveryToken, true
 	case "UpdatedDevelopers":
 		return s.UpdatedDevelopers, true
+	case "DisabledDevelopers":
+		return s.DisabledDevelopers, true
+	case "EnabledDevelopers":
+		return s.EnabledDevelopers, true
+	case "DevelopersToEnable":
+		return s.DevelopersToEnable, true
 	case "PhaseStart":
 		return s.PhaseStart, true
 	case "Start":
@@ -946,7 +967,11 @@ func (cft CachedFieldType) Make() CachedField {
 		dd := make(DeletedDevelopers, 0)
 		return &dd
 	case StateType:
-		return &State{UpdatedDevelopers: make([]string, 0)}
+		return &State{
+			UpdatedDevelopers:  make([]string, 0),
+			DisabledDevelopers: make([]string, 0),
+			EnabledDevelopers:  make([]string, 0),
+		}
 	default:
 		return nil
 	}

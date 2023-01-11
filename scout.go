@@ -16,7 +16,7 @@ const (
 	// updateDeveloperWorkers is the number of updateDeveloperWorker that will be spun up in the update phase.
 	updateDeveloperWorkers = 5
 	// maxUpdateTweets is the maximum number of tweets fetched in the update phase.
-	maxUpdateTweets = 12
+	maxUpdateTweets = 11
 	// secondsBetweenDiscoveryBatches is the number of seconds to sleep between DiscoveryBatch batches.
 	secondsBetweenDiscoveryBatches = time.Second * 3
 	// secondsBetweenUpdateBatches is the number of seconds to sleep between queue batches of updateDeveloperJob.
@@ -28,8 +28,12 @@ const (
 	maxTotalDiscoveryTweets = float64(myTwitter.TweetsPerDay) * maxTotalDiscoveryTweetsDailyPercent
 	// maxTotalUpdateTweets is the maximum number of tweets that can be scraped by the Update phase.
 	maxTotalUpdateTweets = float64(myTwitter.TweetsPerDay) * (1.0 - maxTotalDiscoveryTweetsDailyPercent)
-	// maxEnabledDevelopers is the number of developers to keep in the Disable phase.
-	maxEnabledDevelopers = maxTotalUpdateTweets / maxUpdateTweets
+	// maxEnabledDevelopersAfterEnablePhase is the number of enabled developers that should exist after the Enable phase.
+	maxEnabledDevelopersAfterEnablePhase = maxTotalUpdateTweets / maxUpdateTweets
+	// maxEnabledDevelopersAfterDisablePhase is the number of developers to keep in the Disable phase.
+	maxEnabledDevelopersAfterDisablePhase = maxEnabledDevelopersAfterEnablePhase * 0.9165
+	// maxDevelopersToEnable is the maximum number of developers that can be re-enabled in the Enable phase.
+	maxDevelopersToEnable = maxEnabledDevelopersAfterEnablePhase - maxEnabledDevelopersAfterDisablePhase
 	// discoveryGameScrapeWorkers is the number of scrapeStorefrontsForGameWorker to start in the discovery phase.
 	discoveryGameScrapeWorkers = 10
 	// discoveryMaxConcurrentGameScrapeWorkers is number of scrapeStorefrontsForGameWorker that can be processing a job

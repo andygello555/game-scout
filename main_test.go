@@ -66,7 +66,7 @@ func ExampleScrapeURL_ExtractArgs() {
 
 func ExampleScrapeURL_Soup() {
 	fmt.Printf("Getting name of app 477160 from %s:\n", browser.SteamAppPage.Fill(477160))
-	if soup, err := browser.SteamAppPage.Soup(477160); err != nil {
+	if soup, _, err := browser.SteamAppPage.Soup(477160); err != nil {
 		fmt.Printf("Could not get soup for %s, because %s", browser.SteamAppPage.Fill(477160), err.Error())
 	} else {
 		fmt.Println(soup.Find("div", "id", "appHubAppName").Text())
@@ -79,12 +79,12 @@ func ExampleScrapeURL_Soup() {
 func ExampleScrapeURL_JSON() {
 	args := []any{477160, "*", "all", 20, "all", "all", -1, -1, "all"}
 	fmt.Printf("Getting review stats for 477160 from %s:\n", browser.SteamAppReviews.Fill(args...))
-	if json, err := browser.SteamAppReviews.JSON(args...); err != nil {
+	if j, _, err := browser.SteamAppReviews.JSON(args...); err != nil {
 		fmt.Printf("Could not get reviews for %s, because %s", browser.SteamAppReviews.Fill(args...), err.Error())
 	} else {
 		var i int
-		keys := make([]string, len(json["query_summary"].(map[string]any)))
-		for key := range json["query_summary"].(map[string]any) {
+		keys := make([]string, len(j["query_summary"].(map[string]any)))
+		for key := range j["query_summary"].(map[string]any) {
 			keys[i] = key
 			i++
 		}
@@ -299,7 +299,7 @@ func TestDisablePhase(t *testing.T) {
 	rand.Seed(time.Now().Unix())
 	const (
 		extraDevelopers       = 100
-		fakeDevelopers        = maxEnabledDevelopers + extraDevelopers
+		fakeDevelopers        = maxEnabledDevelopersAfterDisablePhase + extraDevelopers
 		minDeveloperSnapshots = 1
 		maxDeveloperSnapshots = 10
 	)
@@ -318,7 +318,7 @@ func TestDisablePhase(t *testing.T) {
 			PublicMetrics: &twitter.UserMetricsObj{
 				Followers: d * 100,
 				Following: d * 10,
-				Tweets:    d * 200,
+				Tweets:    100,
 				Listed:    d * 2,
 			},
 		}
@@ -331,8 +331,8 @@ func TestDisablePhase(t *testing.T) {
 		}
 
 		snaps := rand.Intn(maxDeveloperSnapshots-minDeveloperSnapshots+1) + minDeveloperSnapshots
-		maxTweetTimeRange := float64(time.Hour) * 24.0 * (1.0 / float64(d))
-		maxAverageDurationBetweenTweets := float64(time.Minute) * 30.0 * (1.0 / float64(d))
+		maxTweetTimeRange := float64(time.Hour) * 24.0 * (float64(d) / (fakeDevelopers / 7))
+		maxAverageDurationBetweenTweets := float64(time.Minute) * 30.0 * (float64(d) / (fakeDevelopers / 7))
 		maxTweetPublicMetrics := twitter.TweetMetricsObj{
 			Impressions:       d * 2,
 			URLLinkClicks:     d * 5,
@@ -343,15 +343,21 @@ func TestDisablePhase(t *testing.T) {
 			Quotes:            0,
 		}
 		fmt.Printf("Created developer: \"%s\" (%s). Creating %d snapshots for it:\n", developer.Username, developer.ID, snaps)
+		fmt.Printf("MaxTweetTimeRange = %f, MaxAverageDurationBetweenTweets = %f\n", maxTweetTimeRange, maxAverageDurationBetweenTweets)
 		for snap := 1; snap <= snaps; snap++ {
 			wayThrough := float64(snap) / float64(snaps)
 			developerSnap := models.DeveloperSnapshot{}
 			developerSnap.DeveloperID = developer.ID
-			developerSnap.Tweets = int32(d * 3)
+			developerSnap.Tweets = 10
+			developerSnap.Games = 1
 			tweetTimeRange := time.Duration(maxTweetTimeRange * wayThrough)
 			developerSnap.TweetTimeRange = models.NullDurationFromPtr(&tweetTimeRange)
 			averageDurationBetweenTweets := time.Duration(maxAverageDurationBetweenTweets * wayThrough)
 			developerSnap.AverageDurationBetweenTweets = models.NullDurationFromPtr(&averageDurationBetweenTweets)
+			fmt.Printf(
+				"\tTweetTimeRange.Minutes = %f, AverageDurationBetweenTweets.Minutes = %f\n",
+				tweetTimeRange.Minutes(), averageDurationBetweenTweets.Minutes(),
+			)
 			developerSnap.TweetsPublicMetrics = &twitter.TweetMetricsObj{
 				Impressions:       int(float64(maxTweetPublicMetrics.Impressions) * wayThrough),
 				URLLinkClicks:     int(float64(maxTweetPublicMetrics.URLLinkClicks) * wayThrough),
@@ -364,7 +370,7 @@ func TestDisablePhase(t *testing.T) {
 			developerSnap.UserPublicMetrics = &twitter.UserMetricsObj{
 				Followers: int(float64(developer.PublicMetrics.Followers) * wayThrough),
 				Following: int(float64(developer.PublicMetrics.Following) * wayThrough),
-				Tweets:    int(float64(developer.PublicMetrics.Tweets) * wayThrough),
+				Tweets:    developer.PublicMetrics.Tweets,
 				Listed:    int(float64(developer.PublicMetrics.Listed) * wayThrough),
 			}
 			if err = db.DB.Create(&developerSnap).Error; err != nil {
@@ -372,7 +378,7 @@ func TestDisablePhase(t *testing.T) {
 			}
 
 			if snap == snaps {
-				if developerSnap.WeightedScore > previousWeightedScore {
+				if developerSnap.WeightedScore > previousWeightedScore || d == 1 {
 					previousWeightedScore = developerSnap.WeightedScore
 				} else {
 					t.Errorf(
@@ -387,7 +393,8 @@ func TestDisablePhase(t *testing.T) {
 		}
 	}
 
-	if err = DisablePhase(); err != nil {
+	state := StateInMemory()
+	if err = DisablePhase(state); err != nil {
 		t.Errorf("Error was not expected to occur in DisablePhase: %s", err.Error())
 	}
 
@@ -397,10 +404,10 @@ func TestDisablePhase(t *testing.T) {
 		t.Errorf("Could not get count of enabled developers: %s", err.Error())
 	}
 
-	if enabledDevelopers != int64(math.Floor(maxEnabledDevelopers)) {
+	if enabledDevelopers != int64(math.Floor(maxEnabledDevelopersAfterDisablePhase)) {
 		t.Errorf(
 			"The number of enabled developers is not %d, it is %d",
-			int(math.Floor(maxEnabledDevelopers)), enabledDevelopers,
+			int(math.Floor(maxEnabledDevelopersAfterDisablePhase)), enabledDevelopers,
 		)
 	}
 
@@ -417,6 +424,14 @@ func TestDisablePhase(t *testing.T) {
 	for _, id := range developerIDs {
 		intID, _ := strconv.Atoi(id.ID)
 		seenIDs.Add(intID)
+	}
+
+	disabledDevelopers, _ := state.GetCachedField(StateType).Get("DisabledDevelopers")
+	if disabledDevelopersNo := len(disabledDevelopers.([]string)); disabledDevelopersNo != extraDevelopers {
+		t.Errorf(
+			"List of IDs for the disabled developers does not equal %d (it equals %d)",
+			extraDevelopers, disabledDevelopersNo,
+		)
 	}
 
 	if !seenIDs.Equal(expectedIDs) {

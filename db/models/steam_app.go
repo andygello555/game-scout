@@ -13,6 +13,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"math"
+	"net/http"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -45,6 +46,12 @@ type SteamApp struct {
 	Developer   *Developer `gorm:"constraint:OnDelete:SET NULL;"`
 	// ReleaseDate is when this game was/is going to be released on SteamStorefront.
 	ReleaseDate time.Time
+	// OwnersOnly indicates whether the games details can only be seen by owners of the game. If this is true then it
+	// negatively impacts this SteamApp's WeightedScore.
+	OwnersOnly bool
+	// HasStorepage indicates whether this game has a storepage on Steam. If this is false then it negatively impacts
+	// this SteamApp's WeightedScore.
+	HasStorepage bool
 	// Publisher is the publisher for this game. If this cannot be found it is set to nil. If this is set then it
 	// negatively contributes to the SteamApp's WeightedScore.
 	Publisher null.String
@@ -97,6 +104,8 @@ const (
 	SteamAppCreatedAtWeight         steamAppWeight = 0.8
 	SteamAppReleaseDateWeight       steamAppWeight = 0.6
 	SteamAppTimesHighlightedWeight  steamAppWeight = 0.9
+	SteamAppOwnersOnlyWeight        steamAppWeight = 0.7
+	SteamAppHasStorepageWeight      steamAppWeight = 0.7
 )
 
 // steamAppWeightedField represents a field that can have a weighting calculation applied to it in SteamApp.
@@ -115,6 +124,8 @@ const (
 	SteamAppCreatedAt         steamAppWeightedField = "CreatedAt"
 	SteamAppReleaseDate       steamAppWeightedField = "ReleaseDate"
 	SteamAppTimesHighlighted  steamAppWeightedField = "TimesHighlighted"
+	SteamAppOwnersOnly        steamAppWeightedField = "OwnersOnly"
+	SteamAppHasStorepage      steamAppWeightedField = "HasStorepage"
 )
 
 // String returns the string value of the gameWeightedField.
@@ -148,6 +159,10 @@ func (sf steamAppWeightedField) Weight() (w float64, inverse bool) {
 		w = float64(SteamAppReleaseDateWeight)
 	case SteamAppTimesHighlighted:
 		w = float64(SteamAppTimesHighlightedWeight)
+	case SteamAppOwnersOnly:
+		w = float64(SteamAppOwnersOnlyWeight)
+	case SteamAppHasStorepage:
+		w = float64(SteamAppHasStorepageWeight)
 	default:
 		panic(fmt.Errorf("\"%s\" is not a steamAppWeightedField", sf))
 	}
@@ -222,6 +237,16 @@ func (sf steamAppWeightedField) GetValueFromWeightedModel(model WeightedModel) [
 		// TimesHighlighted is turned into a negative number that is in the thousands, we really don't want highlighted
 		// developers to come up again.
 		return []float64{float64(f.Int()) * -10000.0}
+	case SteamAppOwnersOnly:
+		return []float64{map[bool]float64{
+			true:  -100000.0,
+			false: 100.0,
+		}[f.Bool()]}
+	case SteamAppHasStorepage:
+		return []float64{map[bool]float64{
+			true:  100.0,
+			false: -50000.0,
+		}[f.Bool()]}
 	default:
 		panic(fmt.Errorf("steamAppWeightedField \"%s\" is not recognized, and cannot be converted to []float64", sf))
 	}
@@ -241,6 +266,8 @@ func (sf steamAppWeightedField) Fields() []WeightedField {
 		SteamAppCreatedAt,
 		SteamAppReleaseDate,
 		SteamAppTimesHighlighted,
+		SteamAppOwnersOnly,
+		SteamAppHasStorepage,
 	}
 }
 
@@ -385,6 +412,7 @@ func (s *SteamAppSteamStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, 
 			appName           any
 			appAssetMTime     string
 			appAssetMTimeInt  int64
+			appSectionType    string
 			appReleaseDate    string
 			appReleaseDateInt int64
 			associations      map[string]any
@@ -411,6 +439,7 @@ func (s *SteamAppSteamStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, 
 			return fmt.Errorf("cannot find \"type\" key in common details for %d", appID)
 		}
 		s.SteamApp.Type = strings.ToLower(appType.(string))
+		log.INFO.Printf("SteamApp %d has type: %s", appID, s.SteamApp.Type)
 
 		// We exit out of the scrape if the SteamApp is not a Game. This is so we can not waste anymore time with app.
 		if s.SteamApp.Type != "game" {
@@ -439,6 +468,16 @@ func (s *SteamAppSteamStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, 
 			log.INFO.Printf("App %v had its assets last modified on %s", appID, s.SteamApp.AssetModifiedTime.String())
 		}
 
+		// Check if this game is visible to owners only
+		s.SteamApp.OwnersOnly = false
+		if appSectionType, ok = appDetails["section_type"].(string); ok {
+			s.SteamApp.OwnersOnly = appSectionType == "ownersonly"
+			log.INFO.Printf(
+				"SteamApp %d has a defined section_type = %s, OwnersOnly = %t",
+				appID, appSectionType, s.SteamApp.OwnersOnly,
+			)
+		}
+
 		// steam_release_date is a timestamp as a string. This is our primary way of finding the release date of the
 		// SteamApp. However, it sometimes does not appear for unreleased games. In cases where it doesn't appear we will
 		// skip over it rather than retry the flow.
@@ -464,28 +503,34 @@ func (s *SteamAppSteamStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, 
 			return fmt.Errorf("cannot find \"associations\" key or could not assert it to a map for %v", appID)
 		}
 
-		var developerName, publisherName strings.Builder
+		developers, publishers := mapset.NewThreadUnsafeSet[string](), mapset.NewThreadUnsafeSet[string]()
 		for i, association := range associations {
 			var associationMap map[string]any
 			if associationMap, ok = association.(map[string]any); !ok {
 				return fmt.Errorf("association %s in details for %v is not a map", i, appID)
 			}
 
+			name := associationMap["name"].(string)
 			switch associationMap["type"].(string) {
 			case "developer":
-				developerName.WriteString(associationMap["name"].(string) + ",")
+				developers.Add(name)
 			case "publisher":
-				publisherName.WriteString(associationMap["name"].(string) + ",")
+				publishers.Add(name)
 			default:
 				break
 			}
 		}
 
-		log.INFO.Printf("Publisher for %v: \"%s\"", appID, publisherName.String())
-		log.INFO.Printf("Developer for %v: \"%s\"", appID, developerName.String())
-		if developerName.String() != publisherName.String() {
-			s.SteamApp.Publisher = null.StringFrom(strings.TrimRight(publisherName.String(), ","))
+		log.INFO.Printf("Publisher(s) for %v: %s", appID, publishers.String())
+		log.INFO.Printf("Developer(s) for %v: %s", appID, developers.String())
+		var uniquePublishers mapset.Set[string]
+		if uniquePublishers = publishers.Difference(developers); uniquePublishers.Cardinality() > 0 {
+			s.SteamApp.Publisher = null.StringFrom(strings.Join(uniquePublishers.ToSlice(), ","))
 		}
+		log.INFO.Printf(
+			"Unique publisher(s) for %v: %s, Publisher.IsValid = %t",
+			appID, uniquePublishers.String(), s.SteamApp.Publisher.IsValid(),
+		)
 		return
 	})
 }
@@ -497,7 +542,7 @@ func (s *SteamAppSteamStorefront) ScrapeReviews(config ScrapeConfig, maxTries in
 	}
 
 	// Fetch reviews to gather headline stats on the number of reviews
-	return browser.SteamAppReviews.RetryJSON(maxTries, minDelay, func(jsonBody map[string]any) error {
+	return browser.SteamAppReviews.RetryJSON(maxTries, minDelay, func(jsonBody map[string]any, resp *http.Response) error {
 		querySummary, ok := jsonBody["query_summary"].(map[string]any)
 		if ok {
 			s.SteamApp.TotalReviews = int32(querySummary["total_reviews"].(float64))
@@ -549,7 +594,7 @@ func (s *SteamAppSteamStorefront) ScrapeCommunity(config ScrapeConfig, maxTries 
 			}()
 
 			var jsonBody map[string]any
-			if jsonBody, err = browser.SteamCommunityPosts.JSON(appID, 0, batchSize, gidEvent, gidAnnouncement); err != nil {
+			if jsonBody, _, err = browser.SteamCommunityPosts.JSON(appID, 0, batchSize, gidEvent, gidAnnouncement); err != nil {
 				log.WARNING.Printf("Could not get SteamCommunityPosts JSON for %d: %s. Tries left: %d", appID, err.Error(), tries)
 				if tries > 0 {
 					tries--
@@ -620,7 +665,7 @@ func (s *SteamAppSteamStorefront) ScrapeTags(config ScrapeConfig, maxTries int, 
 	// Use SteamSpy to find the accumulated TagScore for the game
 	storefrontConfig := config.ScrapeGetStorefront(SteamStorefront)
 	tagConfig := storefrontConfig.StorefrontTags()
-	return browser.SteamSpyAppDetails.RetryJSON(maxTries, minDelay, func(jsonBody map[string]any) (err error) {
+	return browser.SteamSpyAppDetails.RetryJSON(maxTries, minDelay, func(jsonBody map[string]any, resp *http.Response) (err error) {
 		// We fall back to SteamSpy for fetching the game's name and publisher if we haven't got them yet
 		if s.SteamApp.Name == "" || !s.SteamApp.Publisher.IsValid() {
 			log.INFO.Printf(
@@ -724,77 +769,85 @@ func (s *SteamAppSteamStorefront) ScrapeExtra(config ScrapeConfig, maxTries int,
 	}
 
 	twitterUserURLPattern := regexp.MustCompile(`^https?://(?:www\.)?twitter\.com/(?:#!/)?@?([^/?#]*)(?:[?#].*)?$`)
-	// We only make a request to the SteamApp's SteamAppPage if we still need to find the ReleaseDate or the SteamApp has
-	// no publisher, and we need to find the Developer using the Twitter API.
-	if s.SteamApp.ReleaseDate.IsZero() || !s.SteamApp.Publisher.IsValid() {
-		return browser.SteamAppPage.RetrySoup(maxTries, minDelay, func(doc *soup.Root) (err error) {
-			if err = doc.Find("div", "id", "home_gutter_recommendedtags").Error; err == nil {
-				log.INFO.Printf("Redirected to Steam Store homepage. App %d probably doesn't exist...", appID)
-				return myErrors.Done
-			}
-			err = nil
+	return browser.SteamAppPage.RetrySoup(maxTries, minDelay, func(doc *soup.Root, resp *http.Response) (err error) {
+		url := resp.Request.URL.String()
+		if s.SteamApp.HasStorepage, err = regexp.MatchString(`^https?://store\.steampowered\.com/app/\d+(/\w+)?/?$`, url); err != nil {
+			err = errors.Wrapf(err, "could not execute regex on URL %s", url)
+			return
+		}
+		log.INFO.Printf(
+			"When requesting URL \"%s\" for SteamApp %d we are redirected to \"%s\"",
+			browser.SteamAppPage.Fill(appID), appID, url,
+		)
 
-			if !s.SteamApp.Publisher.IsValid() {
-				links := doc.FindAll("a")
-				usernames := mapset.NewThreadUnsafeSet[string]()
-				for _, link := range links {
-					attrs := link.Attrs()
-					if href, ok := attrs["href"]; ok {
-						if twitterUserURLPattern.MatchString(href) {
-							subs := twitterUserURLPattern.FindStringSubmatch(href)
-							if len(subs) > 0 {
-								usernames.Add(subs[1])
-							}
+		// If the SteamApp doesn't have a storepage, we don't bother continuing
+		if !s.SteamApp.HasStorepage {
+			log.INFO.Printf("Redirected to \"%s\". App %d probably doesn't exist...", url, appID)
+			return myErrors.Done
+		}
+		log.INFO.Printf("SteamApp \"%s\" (%d) has a storepage!", s.SteamApp.Name, appID)
+
+		if !s.SteamApp.Publisher.IsValid() {
+			links := doc.FindAll("a")
+			usernames := mapset.NewThreadUnsafeSet[string]()
+			for _, link := range links {
+				attrs := link.Attrs()
+				if href, ok := attrs["href"]; ok {
+					if twitterUserURLPattern.MatchString(href) {
+						subs := twitterUserURLPattern.FindStringSubmatch(href)
+						if len(subs) > 0 {
+							usernames.Add(subs[1])
 						}
 					}
 				}
-
-				// Remove Steam's Twitter account
-				usernames.Remove("steam")
-				if usernames.Cardinality() > 0 {
-					username, _ := usernames.Pop()
-					log.INFO.Printf("Passing back Twitter username \"%s\" found for %d", username, appID)
-					s.SteamApp.Developer = &Developer{Username: username}
-				} else {
-					log.INFO.Printf(
-						"SteamAppPage for %d now contains no Twitter usernames after removing \"Steam\" social. "+
-							"Skipping fetch for Twitter username...",
-						appID,
-					)
-				}
-			} else {
-				log.INFO.Printf("Skipping Twitter API lookup of devs for %d because they already have a publisher", appID)
 			}
 
-			// This is a fallback for finding the release date for games that are unreleased.
-			if s.SteamApp.ReleaseDate.IsZero() {
-				if date := doc.Find("div", "class", "date"); date.Error != nil {
-					log.WARNING.Printf("Could not find release date on store page for %d: %v", appID, date.Error.Error())
-				} else {
-					releaseDateString := strings.TrimSpace(date.Text())
-					var releaseDate time.Time
-					if releaseDate, err = steamcmd.ParseSteamDate(releaseDateString); err != nil {
-						releaseDate = time.Now().UTC().Add(time.Hour * 24 * 30 * 5)
-						log.WARNING.Printf(
-							"Could not parse release date \"%s\" for %d, assuming that game is coming soon: %s",
-							releaseDateString, appID, releaseDate.String(),
-						)
-					}
-					s.SteamApp.ReleaseDate = releaseDate
-					log.INFO.Printf("ReleaseDate found for %d: %s", appID, s.SteamApp.ReleaseDate.String())
-				}
+			// Remove Steam's Twitter account
+			usernames.Remove("steam")
+			log.INFO.Printf(
+				"Found the following Twitter users on the storepage for SteamApp %d: %s",
+				appID, usernames.String(),
+			)
+			if usernames.Cardinality() > 0 {
+				username, _ := usernames.Pop()
+				log.INFO.Printf("Passing back Twitter username \"%s\" found for %d", username, appID)
+				s.SteamApp.Developer = &Developer{Username: username}
 			} else {
 				log.INFO.Printf(
-					"Skipping fetching release date for %d as we already have a non-zero release date (%s)",
-					appID, s.SteamApp.ReleaseDate.String(),
+					"SteamAppPage for %d now contains no Twitter usernames after removing \"Steam\" social. "+
+						"Skipping fetch for Twitter username...",
+					appID,
 				)
 			}
-			return
-		}, appID)
-	} else {
-		log.INFO.Printf("Skipping ScrapeExtra for SteamApp %d as we don't need to find the Developer, or the ReleaseDate", appID)
-	}
-	return
+		} else {
+			log.INFO.Printf("Skipping Twitter API lookup of devs for %d because they already have a publisher", appID)
+		}
+
+		// This is a fallback for finding the release date for games that are unreleased.
+		if s.SteamApp.ReleaseDate.IsZero() {
+			if date := doc.Find("div", "class", "date"); date.Error != nil {
+				log.WARNING.Printf("Could not find release date on store page for %d: %v", appID, date.Error.Error())
+			} else {
+				releaseDateString := strings.TrimSpace(date.Text())
+				var releaseDate time.Time
+				if releaseDate, err = steamcmd.ParseSteamDate(releaseDateString); err != nil {
+					releaseDate = time.Now().UTC().Add(time.Hour * 24 * 30 * 5)
+					log.WARNING.Printf(
+						"Could not parse release date \"%s\" for %d, assuming that game is coming soon: %s",
+						releaseDateString, appID, releaseDate.String(),
+					)
+				}
+				s.SteamApp.ReleaseDate = releaseDate
+				log.INFO.Printf("ReleaseDate found for %d: %s", appID, s.SteamApp.ReleaseDate.String())
+			}
+		} else {
+			log.INFO.Printf(
+				"Skipping fetching release date for %d as we already have a non-zero release date (%s)",
+				appID, s.SteamApp.ReleaseDate.String(),
+			)
+		}
+		return
+	}, appID)
 }
 
 func (s *SteamAppSteamStorefront) AfterScrape(args ...any) {
@@ -813,7 +866,7 @@ func CreateInitialSteamApps(db *gorm.DB) (err error) {
 
 	if count == 0 {
 		apps := make(map[uint64]*SteamApp)
-		if err = browser.SteamGetAppList.RetryJSON(3, time.Second*20, func(jsonBody map[string]any) (err error) {
+		if err = browser.SteamGetAppList.RetryJSON(3, time.Second*20, func(jsonBody map[string]any, resp *http.Response) (err error) {
 			var (
 				appObjs []any
 				ok      bool

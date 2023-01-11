@@ -15,6 +15,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"math"
+	"net/http"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -438,28 +439,34 @@ func (g *GameSteamStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, minD
 			return fmt.Errorf("cannot find \"associations\" key or could not assert it to a map for %v", appID)
 		}
 
-		var developerName, publisherName strings.Builder
+		developers, publishers := mapset.NewThreadUnsafeSet[string](), mapset.NewThreadUnsafeSet[string]()
 		for i, association := range associations {
 			var associationMap map[string]any
 			if associationMap, ok = association.(map[string]any); !ok {
 				return fmt.Errorf("association %s in details for %v is not a map", i, appID)
 			}
 
+			name := associationMap["name"].(string)
 			switch associationMap["type"].(string) {
 			case "developer":
-				developerName.WriteString(associationMap["name"].(string) + ",")
+				developers.Add(name)
 			case "publisher":
-				publisherName.WriteString(associationMap["name"].(string) + ",")
+				publishers.Add(name)
 			default:
 				break
 			}
 		}
 
-		log.INFO.Printf("Publisher for %v: %s", appID, publisherName.String())
-		log.INFO.Printf("Developer for %v: %s", appID, developerName.String())
-		if developerName.String() != publisherName.String() {
-			g.Game.Publisher = null.StringFrom(strings.TrimRight(publisherName.String(), ","))
+		log.INFO.Printf("Publisher(s) for %v: %s", appID, publishers.String())
+		log.INFO.Printf("Developer(s) for %v: %s", appID, developers.String())
+		var uniquePublishers mapset.Set[string]
+		if uniquePublishers = publishers.Difference(developers); uniquePublishers.Cardinality() > 0 {
+			g.Game.Publisher = null.StringFrom(strings.Join(uniquePublishers.ToSlice(), ","))
 		}
+		log.INFO.Printf(
+			"Unique publisher(s) for %v: %s, Publisher.IsValid = %t",
+			appID, uniquePublishers.String(), g.Game.Publisher.IsValid(),
+		)
 		return
 	})
 }
@@ -467,7 +474,7 @@ func (g *GameSteamStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, minD
 func (g *GameSteamStorefront) ScrapeReviews(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
 	appID := args[0]
 	// Fetch reviews to gather headline stats on the number of reviews
-	return browser.SteamAppReviews.RetryJSON(maxTries, minDelay, func(jsonBody map[string]any) error {
+	return browser.SteamAppReviews.RetryJSON(maxTries, minDelay, func(jsonBody map[string]any, resp *http.Response) error {
 		querySummary, ok := jsonBody["query_summary"].(map[string]any)
 		if ok {
 			g.Game.TotalReviews = null.Int32From(int32(querySummary["total_reviews"].(float64)))
@@ -515,7 +522,7 @@ func (g *GameSteamStorefront) ScrapeCommunity(config ScrapeConfig, maxTries int,
 			}()
 
 			var jsonBody map[string]any
-			if jsonBody, err = browser.SteamCommunityPosts.JSON(appID, 0, batchSize, gidEvent, gidAnnouncement); err != nil {
+			if jsonBody, _, err = browser.SteamCommunityPosts.JSON(appID, 0, batchSize, gidEvent, gidAnnouncement); err != nil {
 				log.WARNING.Printf("Could not get SteamCommunityPosts JSON for %d: %s. Tries left: %d", appID, err.Error(), tries)
 				if tries > 0 {
 					tries--
@@ -580,7 +587,7 @@ func (g *GameSteamStorefront) ScrapeTags(config ScrapeConfig, maxTries int, minD
 	// Use SteamSpy to find the accumulated TagScore for the game
 	storefrontConfig := config.ScrapeGetStorefront(SteamStorefront)
 	tagConfig := storefrontConfig.StorefrontTags()
-	return browser.SteamSpyAppDetails.RetryJSON(maxTries, minDelay, func(jsonBody map[string]any) (err error) {
+	return browser.SteamSpyAppDetails.RetryJSON(maxTries, minDelay, func(jsonBody map[string]any, resp *http.Response) (err error) {
 		// We fall back to SteamSpy for fetching the game's name and publisher if we haven't got them yet
 		if !g.Game.Name.IsValid() && !g.Game.Publisher.IsValid() {
 			log.INFO.Printf(
@@ -687,7 +694,7 @@ func (g *GameSteamStorefront) ScrapeExtra(config ScrapeConfig, maxTries int, min
 	// also a fallback for finding the release date for games that are unreleased.
 	if len(g.Game.Developers) > 0 || !g.Game.ReleaseDate.IsValid() {
 		twitterUserURLPattern := regexp.MustCompile(`^https?://(?:www\.)?twitter\.com/(?:#!/)?@?([^/?#]*)(?:[?#].*)?$`)
-		return browser.SteamAppPage.RetrySoup(maxTries, minDelay, func(doc *soup.Root) (err error) {
+		return browser.SteamAppPage.RetrySoup(maxTries, minDelay, func(doc *soup.Root, resp *http.Response) (err error) {
 			if len(g.Game.Developers) > 0 {
 				links := doc.FindAll("a")
 				usernames := mapset.NewThreadUnsafeSet[string]()
