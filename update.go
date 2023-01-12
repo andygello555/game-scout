@@ -7,6 +7,7 @@ import (
 	"github.com/andygello555/game-scout/db/models"
 	myErrors "github.com/andygello555/game-scout/errors"
 	myTwitter "github.com/andygello555/game-scout/twitter"
+	"github.com/andygello555/gotils/v2/numbers"
 	"github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/google/uuid"
@@ -294,7 +295,7 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 		// latest developer snapshot's LastTweetTime. We decide how many tweets to request for each developer by dividing
 		// the remaining number of tweets for this day by the number of developers we need to update.
 		totalTweetsForEachDeveloper := (int(myTwitter.TweetsPerDay) - discoveryTweets) / len(unscrapedDevelopers)
-		totalTweetsForEachDeveloper = models.Clamp(totalTweetsForEachDeveloper, maxUpdateTweets)
+		totalTweetsForEachDeveloper = numbers.Clamp(totalTweetsForEachDeveloper, maxUpdateTweets)
 		log.INFO.Printf("Initial number of tweets fetched for %d developers is %d", len(unscrapedDevelopers), totalTweetsForEachDeveloper)
 
 		// In the case that we can't get enough tweets to satisfy the minimum resources per-request for RecentSearch for

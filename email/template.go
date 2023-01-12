@@ -9,7 +9,7 @@ import (
 	"github.com/andygello555/game-scout/browser"
 	"github.com/andygello555/game-scout/db/models"
 	myErrors "github.com/andygello555/game-scout/errors"
-	"github.com/andygello555/gotils/v2/ints"
+	"github.com/andygello555/gotils/v2/numbers"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/pkg/errors"
 	"github.com/playwright-community/playwright-go"
@@ -18,8 +18,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
-	"strings"
 	"time"
 	"unicode"
 )
@@ -64,7 +62,7 @@ func (m *MeasureContext) Funcs() template.FuncMap {
 		"timePretty": func(t time.Time) string {
 			loc, _ := time.LoadLocation("Europe/London")
 			t = t.In(loc)
-			return ints.Ordinal(t.Day()) + t.Format(" January 2006 at 3pm")
+			return numbers.Ordinal(t.Day()) + t.Format(" January 2006 at 3pm")
 		},
 		"percentage": func(f null.Float64) string {
 			perc := f.Float64
@@ -90,7 +88,7 @@ func (m *MeasureContext) Funcs() template.FuncMap {
 			return i + 1
 		},
 		"ord": func(num int) string {
-			return strings.TrimPrefix(ints.Ordinal(num), strconv.Itoa(num))
+			return numbers.OrdinalOnly(num)
 		},
 		"date": func(date time.Time) time.Time {
 			year, month, day := date.Date()

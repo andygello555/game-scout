@@ -34,6 +34,8 @@ const (
 	maxEnabledDevelopersAfterDisablePhase = maxEnabledDevelopersAfterEnablePhase * 0.9165
 	// maxDevelopersToEnable is the maximum number of developers that can be re-enabled in the Enable phase.
 	maxDevelopersToEnable = maxEnabledDevelopersAfterEnablePhase - maxEnabledDevelopersAfterDisablePhase
+	// percentageOfDisabledDevelopersToDelete is the percentage of all disabled developers to delete in the Delete phase.
+	percentageOfDisabledDevelopersToDelete = 0.1
 	// discoveryGameScrapeWorkers is the number of scrapeStorefrontsForGameWorker to start in the discovery phase.
 	discoveryGameScrapeWorkers = 10
 	// discoveryMaxConcurrentGameScrapeWorkers is number of scrapeStorefrontsForGameWorker that can be processing a job

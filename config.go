@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/game-scout/email"
 	task "github.com/andygello555/game-scout/tasks"
@@ -14,6 +15,17 @@ import (
 
 const ConfigDefaultPath = "config.json"
 
+// PhaseRWAccessConfig represents the read/write permissions for a specific Phase.
+type PhaseRWAccessConfig struct {
+	Phase Phase `json:"phase"`
+	Read  bool  `json:"read"`
+	Write bool  `json:"write"`
+}
+
+func (rw *PhaseRWAccessConfig) ID() int { return int(rw.Phase) }
+func (rw *PhaseRWAccessConfig) R() bool { return rw.Read }
+func (rw *PhaseRWAccessConfig) W() bool { return rw.Write }
+
 // DBConfig contains the config variables for the DB to connect to via Gorm.
 type DBConfig struct {
 	Host     string `json:"host"`
@@ -23,6 +35,13 @@ type DBConfig struct {
 	Port     int    `json:"port"`
 	SSLMode  bool   `json:"sslmode"`
 	Timezone string `json:"timezone"`
+	// PhaseRWAccess this is the DB read/write access for individual phases.
+	// TODO: Implement a way of asserting read/write access to the DB in different phases, probably by creating a custom
+	//       clause or by creating a set of callbacks?
+	PhaseRWAccess []*PhaseRWAccessConfig `json:"phase_rw_access"`
+	// DefaultPhaseRWAccess describes the default PhaseRWAccess that will be used when a given Phase does not exist in
+	// PhaseRWAccess.
+	DefaultPhaseRWAccess *PhaseRWAccessConfig `json:"default_phase_rw_access"`
 }
 
 func (c *DBConfig) DBHost() string     { return c.Host }
@@ -39,6 +58,37 @@ func (c *DBConfig) DBSSLMode() string {
 	return sslMode
 }
 func (c *DBConfig) DBTimezone() string { return c.Timezone }
+
+func (c *DBConfig) DBDefaultRWAccess() (config db.RWConfig) {
+	return c.DefaultPhaseRWAccess
+}
+
+func (c *DBConfig) DBRWAccessConfigForID(id int) (config db.RWConfig) {
+	for _, config = range c.PhaseRWAccess {
+		if config.ID() == id {
+			break
+		}
+	}
+	if config == nil {
+		config = c.DefaultPhaseRWAccess
+	}
+	return
+}
+
+func (c *DBConfig) DBRWAccessForID(id int) (read bool, write bool) {
+	phaseConfig := c.DBRWAccessConfigForID(id)
+	return phaseConfig.R(), phaseConfig.R()
+}
+
+func (c *DBConfig) DBPhaseReadAccess(id int) bool {
+	read, _ := c.DBRWAccessForID(id)
+	return read
+}
+
+func (c *DBConfig) DBPhaseWriteAccess(id int) bool {
+	_, write := c.DBRWAccessForID(id)
+	return write
+}
 
 // TemplateConfig contains the constants used for a specific email.TemplatePath.
 type TemplateConfig struct {

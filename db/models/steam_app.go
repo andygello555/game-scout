@@ -7,6 +7,7 @@ import (
 	"github.com/andygello555/game-scout/browser"
 	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/andygello555/game-scout/steamcmd"
+	"github.com/andygello555/gotils/v2/numbers"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/pkg/errors"
 	"github.com/volatiletech/null/v9"
@@ -189,7 +190,7 @@ func (sf steamAppWeightedField) GetValueFromWeightedModel(model WeightedModel) [
 		if totalReviews > 5000 {
 			totalReviews = 5000
 		}
-		return []float64{ScaleRange(float64(totalReviews), 1.0, 5000.0, 1000000.0, -1000000.0)}
+		return []float64{numbers.ScaleRange(float64(totalReviews), 1.0, 5000.0, 1000000.0, -1000000.0)}
 	case SteamAppReviewScore:
 		return []float64{f.Float() * 1500.0}
 	case SteamAppTotalUpvotes, SteamAppTotalDownvotes, SteamAppTotalComments:
@@ -197,7 +198,7 @@ func (sf steamAppWeightedField) GetValueFromWeightedModel(model WeightedModel) [
 		if total > 5000 {
 			total = 5000
 		}
-		return []float64{ScaleRange(float64(total*2), 0, 10000, -1000, 10000)}
+		return []float64{numbers.ScaleRange(float64(total*2), 0, 10000, -1000, 10000)}
 	case SteamAppTagScore:
 		// If the game has no tags and a release date that is in the future, we will give the tag score a boost
 		tagScore := f.Float()
@@ -222,7 +223,7 @@ func (sf steamAppWeightedField) GetValueFromWeightedModel(model WeightedModel) [
 		if timeDiff > time.Hour*24*30*5 {
 			timeDiff = time.Hour * 24 * 30 * 5
 		}
-		return []float64{ScaleRange(timeDiff.Hours(), 0, 24*30*5, 2000, 0)}
+		return []float64{numbers.ScaleRange(timeDiff.Hours(), 0, 24*30*5, 2000, 0)}
 	case SteamAppReleaseDate:
 		// The value for release date is calculated by subtracting the time now from the release date, then finding the
 		// hours for that duration. We also subtract 1 month from the duration, so we still look positively on games

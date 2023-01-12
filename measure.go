@@ -26,22 +26,38 @@ type trendFinderResult struct {
 	*email.TrendingDev
 }
 
-type trendFinderResultHeap []*trendFinderResult
-
-func (h trendFinderResultHeap) Len() int { return len(h) }
-func (h trendFinderResultHeap) Less(i, j int) bool {
-	return h[i].Trend.GetCoeffs()[1] > h[j].Trend.GetCoeffs()[1]
+type trendFinderResultHeap struct {
+	reverse bool
+	arr     []*trendFinderResult
 }
-func (h trendFinderResultHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
 
-func (h *trendFinderResultHeap) Push(x any) { *h = append(*h, x.(*trendFinderResult)) }
+func (h trendFinderResultHeap) Len() int { return len(h.arr) }
+
+func (h trendFinderResultHeap) Less(i, j int) bool {
+	if h.reverse {
+		return h.arr[i].Trend.GetCoeffs()[1] < h.arr[j].Trend.GetCoeffs()[1]
+	} else {
+		return h.arr[i].Trend.GetCoeffs()[1] > h.arr[j].Trend.GetCoeffs()[1]
+	}
+}
+
+func (h trendFinderResultHeap) Swap(i, j int) { h.arr[i], h.arr[j] = h.arr[j], h.arr[i] }
+
+func (h *trendFinderResultHeap) Push(x any) { h.arr = append(h.arr, x.(*trendFinderResult)) }
 
 func (h *trendFinderResultHeap) Pop() any {
 	old := *h
-	n := len(old)
-	x := old[n-1]
-	*h = old[0 : n-1]
+	n := len(old.arr)
+	x := old.arr[n-1]
+	h.arr = old.arr[0 : n-1]
 	return x
+}
+
+func newTrendFinderResultHeap(reverse bool) trendFinderResultHeap {
+	return trendFinderResultHeap{
+		reverse: reverse,
+		arr:     make([]*trendFinderResult, 0),
+	}
 }
 
 func trendFinder(jobs <-chan *models.Developer, results chan<- *trendFinderResult) {
@@ -129,7 +145,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 	}
 	close(jobs)
 
-	topDevelopers := make(trendFinderResultHeap, 0)
+	topDevelopers := newTrendFinderResultHeap(false)
 	for i := 0; i < len(enabledDevelopers); i++ {
 		result := <-results
 		if result.err != nil {

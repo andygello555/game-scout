@@ -595,11 +595,29 @@ func (d *DeletedDevelopers) SetOrAdd(args ...any) {
 }
 
 func (d *DeletedDevelopers) Get(key any) (any, bool) {
-	i := key.(int)
-	if i < 0 || i > d.Len() {
+	switch key.(type) {
+	case int:
+		// Get the key-th DeletedDeveloper
+		i := key.(int)
+		if i < 0 || i > d.Len() {
+			return nil, false
+		}
+		return (*d)[key.(int)], true
+	case string:
+		// Get the DeletedDeveloper by ID
+		var value any = nil
+		ok := false
+		for _, deletedDeveloper := range *d {
+			if deletedDeveloper.Developer.ID == key.(string) {
+				value = deletedDeveloper
+				ok = true
+				break
+			}
+		}
+		return value, ok
+	default:
 		return nil, false
 	}
-	return (*d)[key.(int)], true
 }
 
 func (d *DeletedDevelopers) Len() int {
@@ -633,6 +651,8 @@ const (
 	Update
 	Snapshot
 	Disable
+	Enable
+	Delete
 	Measure
 	Done
 )
@@ -648,6 +668,10 @@ func (p Phase) String() string {
 		return "Snapshot"
 	case Disable:
 		return "Disable"
+	case Enable:
+		return "Enable"
+	case Delete:
+		return "Delete"
 	case Measure:
 		return "Measure"
 	case Done:
@@ -760,9 +784,29 @@ func (p Phase) Run(state *ScoutState) (err error) {
 		}
 
 		phaseAfter()
+	case Enable:
+		// 5th phase: Enable: Enable a certain amount of developers who were disabled before today based off of how well
+		// their snapshots have been trending.
+		phaseBefore()
+
+		if err = EnablePhase(state); err != nil {
+			return errors.Wrap(err, "enable phase has failed")
+		}
+
+		phaseAfter()
+	case Delete:
+		// 6th phase: Delete. Delete a certain percentage of the disabled developer that are performing the worst. This
+		// is decided by calculating their trend so far.
+		phaseBefore()
+
+		if err = DisablePhase(state); err != nil {
+			return errors.Wrap(err, "delete phase has failed")
+		}
+
+		phaseAfter()
 	case Measure:
-		// 5th phase: Measure. For all the users that have a good number of snapshots we'll see if any are shining above the
-		// rest
+		// 7th phase: Measure. For all the users that have a good number of snapshots we'll see if any are shining above
+		// the rest
 		phaseBefore()
 
 		if err = MeasurePhase(state); err != nil {

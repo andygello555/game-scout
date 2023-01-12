@@ -3,6 +3,7 @@ package models
 import (
 	"fmt"
 	myTwitter "github.com/andygello555/game-scout/twitter"
+	"github.com/andygello555/gotils/v2/numbers"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/google/uuid"
@@ -140,7 +141,7 @@ func (wf developerSnapshotWeightedField) GetValueFromWeightedModel(model Weighte
 		return []float64{0.0}
 	case Tweets:
 		// Tweets are clamped to 100, anymore is kinda sus within a 7-day period (this is usually against bots and AI)
-		return []float64{ScaleRange(float64(Clamp(f.Int(), 100)), 0.0, 100.0, 100_000.0, -500_000.0)}
+		return []float64{numbers.ScaleRange(float64(numbers.Clamp(f.Int(), 100)), 0.0, 100.0, 100_000.0, -500_000.0)}
 	case Games:
 		// Return a penalty if the number of games is 0...
 		val := float64(f.Int())
@@ -150,7 +151,7 @@ func (wf developerSnapshotWeightedField) GetValueFromWeightedModel(model Weighte
 
 		// Clamp the number of games to 100 and scale to a range of 100_000 -> -1_000_000
 		// Note: reflects badly against bots; which is what we want.
-		return []float64{ScaleRange(Clamp(val, 100.0), 1.0, 100.0, 100_000.0, -5_000_000.0)}
+		return []float64{numbers.ScaleRange(numbers.Clamp(val, 100.0), 1.0, 100.0, 100_000.0, -5_000_000.0)}
 	case TweetTimeRange, AverageDurationBetweenTweets:
 		var val float64
 		duration := f.Interface().(NullDuration)
@@ -159,19 +160,19 @@ func (wf developerSnapshotWeightedField) GetValueFromWeightedModel(model Weighte
 		} else {
 			return []float64{-10_000.0}
 		}
-		return []float64{ScaleRange(ClampMinMax(val, 1.0, 10_000.0), 1.0, 10_000.0, -10_000.0, 10_000.0)}
+		return []float64{numbers.ScaleRange(numbers.ClampMinMax(val, 1.0, 10_000.0), 1.0, 10_000.0, -10_000.0, 10_000.0)}
 	case TweetsPublicMetrics:
 		tweetMetricsObj := f.Interface().(*twitter.TweetMetricsObj)
 		if tweetMetricsObj != nil {
 			// Clamp all tweet public metrics to 5000
 			return []float64{
-				float64(Clamp(tweetMetricsObj.Impressions, 1000)),
-				float64(Clamp(tweetMetricsObj.URLLinkClicks, 1000)),
-				float64(Clamp(tweetMetricsObj.UserProfileClicks, 1000)),
-				float64(Clamp(tweetMetricsObj.Likes, 1000)),
-				float64(Clamp(tweetMetricsObj.Replies, 1000)),
-				float64(Clamp(tweetMetricsObj.Retweets, 1000)),
-				float64(Clamp(tweetMetricsObj.Quotes, 1000)),
+				float64(numbers.Clamp(tweetMetricsObj.Impressions, 1000)),
+				float64(numbers.Clamp(tweetMetricsObj.URLLinkClicks, 1000)),
+				float64(numbers.Clamp(tweetMetricsObj.UserProfileClicks, 1000)),
+				float64(numbers.Clamp(tweetMetricsObj.Likes, 1000)),
+				float64(numbers.Clamp(tweetMetricsObj.Replies, 1000)),
+				float64(numbers.Clamp(tweetMetricsObj.Retweets, 1000)),
+				float64(numbers.Clamp(tweetMetricsObj.Quotes, 1000)),
 			}
 		}
 		return []float64{0.0}
@@ -179,10 +180,10 @@ func (wf developerSnapshotWeightedField) GetValueFromWeightedModel(model Weighte
 		userMetricsObj := f.Interface().(*twitter.UserMetricsObj)
 		if userMetricsObj != nil {
 			return []float64{
-				float64(Clamp(userMetricsObj.Followers, 1000)),
-				float64(Clamp(userMetricsObj.Following, 1000)),
-				ScaleRange(float64(Clamp(userMetricsObj.Tweets, 10_000)), 0.0, 10_000.0, 100_000.0, -1_000_000.0),
-				float64(Clamp(userMetricsObj.Listed, 1000)),
+				float64(numbers.Clamp(userMetricsObj.Followers, 1000)),
+				float64(numbers.Clamp(userMetricsObj.Following, 1000)),
+				numbers.ScaleRange(float64(numbers.Clamp(userMetricsObj.Tweets, 10_000)), 0.0, 10_000.0, 100_000.0, -1_000_000.0),
+				float64(numbers.Clamp(userMetricsObj.Listed, 1000)),
 			}
 		}
 		return []float64{0.0}

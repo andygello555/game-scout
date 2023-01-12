@@ -24,10 +24,34 @@ var DB *gorm.DB
 var models map[string]*DBModel
 var enums []Enum
 var extensions []string
+var c Config
 
 type DBModel struct {
 	Schema *schema.Schema
 	Model  any
+}
+
+// RW returns a copy of DB with the appropriate gorm.Session and hooks applied so that the read/write permissions of the
+// permission of the given ID will be reflected in any queries run using the returned gorm.DB. This is achieved by
+// setting the DryRun flag in the gorm.Session/gorm.DB appropriately.
+func RW(permissionID int) (db *gorm.DB) {
+	read, write := c.DBRWAccessForID(permissionID)
+	db = DB
+	if !read {
+		db = DB.Session(&gorm.Session{DryRun: true})
+	} else if !write {
+		db = DB.Session(&gorm.Session{})
+		writeBlock := func(db *gorm.DB) { db.DryRun = true }
+		if err := myErrors.MergeErrors(
+			db.Callback().Delete().After("gorm:before_delete").Register("write_block:delete", writeBlock),
+			db.Callback().Update().After("gorm:before_update").Register("write_block:update", writeBlock),
+			db.Callback().Create().After("gorm:before_delete").Register("write_block:create", writeBlock),
+			db.Callback().Raw().Before("gorm:raw").Register("write_block:raw", writeBlock),
+		); err != nil {
+			panic(err)
+		}
+	}
+	return
 }
 
 // ColumnDBNames gets all the column names of the DBModel that are not the empty string.
@@ -105,6 +129,7 @@ type Upsertable interface {
 // Open and initialise the DB global variable and run AutoMigrate for all the registered models.
 func Open(config Config) error {
 	var err error
+	c = config
 	dsn := configToDSN(config)
 	dbName := config.DBName()
 	if flag.Lookup("test.v") != nil {

@@ -7,6 +7,7 @@ import (
 	"github.com/andygello555/game-scout/browser"
 	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/andygello555/game-scout/steamcmd"
+	"github.com/andygello555/gotils/v2/numbers"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -166,7 +167,7 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 			if valInt > 5000 {
 				valInt = 5000
 			}
-			val = ScaleRange(float64(valInt), 1.0, 5000.0, 1000000.0, -1000000.0)
+			val = numbers.ScaleRange(float64(valInt), 1.0, 5000.0, 1000000.0, -1000000.0)
 		}
 		return []float64{val}
 	case GameTotalUpvotes, GameTotalDownvotes, GameTotalComments:
@@ -177,7 +178,7 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 			if val > 5000 {
 				val = 5000
 			}
-			val = ScaleRange(val*2, 0, 10000, -1000, 10000)
+			val = numbers.ScaleRange(val*2, 0, 10000, -1000, 10000)
 		}
 		return []float64{val}
 	case GameTagScore:

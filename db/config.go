@@ -2,6 +2,12 @@ package db
 
 import "fmt"
 
+type RWConfig interface {
+	ID() int
+	R() bool
+	W() bool
+}
+
 type Config interface {
 	DBHost() string
 	DBUser() string
@@ -11,6 +17,11 @@ type Config interface {
 	DBPort() int
 	DBSSLMode() string
 	DBTimezone() string
+	DBDefaultRWAccess() (config RWConfig)
+	DBRWAccessConfigForID(id int) (config RWConfig)
+	DBRWAccessForID(id int) (read bool, write bool)
+	DBPhaseReadAccess(id int) bool
+	DBPhaseWriteAccess(id int) bool
 }
 
 const (

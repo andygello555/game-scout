@@ -3,7 +3,6 @@ package models
 import (
 	"database/sql"
 	"fmt"
-	"golang.org/x/exp/constraints"
 	"gorm.io/gorm/callbacks"
 	"time"
 )
@@ -67,33 +66,6 @@ type WeightedField interface {
 	GetValueFromWeightedModel(model WeightedModel) []float64
 	// Fields returns all the WeightedField that make up the set of WeightedField
 	Fields() []WeightedField
-}
-
-type Number interface {
-	constraints.Float | constraints.Integer
-}
-
-// ScaleRange scales a value x, that is between xMin and xMax, to be between yMin and yMax.
-func ScaleRange[N Number](x, xMin, xMax, yMin, yMax N) N {
-	return (x-xMin)/(xMax-xMin)*(yMax-yMin) + yMin
-}
-
-// Clamp clamps the given Number at the given maximum value.
-func Clamp[N Number](x, max N) N {
-	if x > max {
-		x = max
-	}
-	return x
-}
-
-// ClampMinMax clamps the given Number at the given minimum and maximum values.
-func ClampMinMax[N Number](x, min, max N) N {
-	if x < min {
-		x = min
-	} else if x > max {
-		x = max
-	}
-	return x
 }
 
 func CalculateWeightedScore(model WeightedModel, singleField WeightedField) float64 {

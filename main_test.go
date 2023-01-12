@@ -5,14 +5,18 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/browser"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/game-scout/email"
 	myTwitter "github.com/andygello555/game-scout/twitter"
+	"github.com/andygello555/gotils/v2/numbers"
+	"github.com/andygello555/gotils/v2/slices"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/google/uuid"
+	"github.com/schollz/progressbar/v3"
 	"github.com/volatiletech/null/v9"
 	"gorm.io/gorm"
 	"math"
@@ -293,23 +297,21 @@ func TestUpdatePhase(t *testing.T) {
 	}
 }
 
-func TestDisablePhase(t *testing.T) {
+const (
+	extraDevelopers       = 200
+	fakeDevelopers        = maxEnabledDevelopersAfterDisablePhase + extraDevelopers
+	minDeveloperSnapshots = 1
+	maxDeveloperSnapshots = 10
+)
+
+func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelopers int, expectedOffset int) (expectedIDs mapset.Set[int]) {
 	var err error
-	clearDB(t)
-	rand.Seed(time.Now().Unix())
-	const (
-		extraDevelopers       = 100
-		fakeDevelopers        = maxEnabledDevelopersAfterDisablePhase + extraDevelopers
-		minDeveloperSnapshots = 1
-		maxDeveloperSnapshots = 10
-	)
-
-	expectedIDs := mapset.NewThreadUnsafeSet[int]()
-
-	// To test the "disable" phase, we need to create some fake developers and snapshots for said developers. The
-	// developers are created in a way that more "desirable" developers will be given a higher ID.
+	expectedIDs = mapset.NewThreadUnsafeSet[int]()
+	// To test the "disable" phase, we need to create some fake developers, snapshots, and games for said developers.
+	// These are created in a way that more "desirable" developers will be given a higher ID.
 	previousWeightedScore := 0.0
-	for d := 1; d <= int(math.Floor(fakeDevelopers)); d++ {
+	bar := progressbar.Default(int64(endDevelopers - startDevelopers + 1))
+	for d := startDevelopers; d <= endDevelopers; d++ {
 		developer := models.Developer{
 			ID:          strconv.Itoa(d),
 			Name:        fmt.Sprintf("Developer: %d", d),
@@ -326,13 +328,48 @@ func TestDisablePhase(t *testing.T) {
 			t.Errorf("Cannot create developer: \"%s\"", developer.Username)
 		}
 
-		if d <= extraDevelopers {
+		if d <= expectedOffset {
 			expectedIDs.Add(d)
 		}
 
+		games := int(numbers.ScaleRange(float64(d), float64(startDevelopers), float64(endDevelopers), 5.0, 1.0))
+		if testing.Verbose() {
+			fmt.Printf("Creating %d games for developer %s\n", games, developer.Username)
+		}
+		for g := 1; g <= games; g++ {
+			game := models.Game{
+				Name:       null.StringFrom(fmt.Sprintf("Game for Developer %d", d)),
+				Storefront: models.SteamStorefront,
+				Website: null.StringFrom(fmt.Sprintf(
+					"https://store.steampowered.com/app/%sgame%d",
+					developer.Username, g,
+				)),
+				Developers:                 []string{developer.Username},
+				VerifiedDeveloperUsernames: []string{developer.Username},
+				ReleaseDate:                null.TimeFromPtr(nil),
+				Publisher:                  null.StringFromPtr(nil),
+				TotalReviews:               null.Int32From(0),
+				PositiveReviews:            null.Int32From(0),
+				NegativeReviews:            null.Int32From(0),
+				TotalUpvotes:               null.Int32From(0),
+				TotalDownvotes:             null.Int32From(0),
+				TotalComments:              null.Int32From(0),
+				TagScore:                   null.Float64From(0.0),
+			}
+			if err = db.DB.Create(&game).Error; err != nil {
+				t.Errorf("Could not create game no. %d for the developer: %s", g, developer.Username)
+			}
+			if testing.Verbose() {
+				fmt.Printf(
+					"\tCreated game %s no. %d/%d for developer %s. Weighted score = %f\n",
+					game.Website.String, g, games, developer.Username, game.WeightedScore.Float64,
+				)
+			}
+		}
+
 		snaps := rand.Intn(maxDeveloperSnapshots-minDeveloperSnapshots+1) + minDeveloperSnapshots
-		maxTweetTimeRange := float64(time.Hour) * 24.0 * (float64(d) / (fakeDevelopers / 7))
-		maxAverageDurationBetweenTweets := float64(time.Minute) * 30.0 * (float64(d) / (fakeDevelopers / 7))
+		maxTweetTimeRange := float64(time.Hour) * 24.0 * (float64(d) / (float64(endDevelopers) / 7))
+		maxAverageDurationBetweenTweets := float64(time.Minute) * 30.0 * (float64(d) / (float64(endDevelopers) / 7))
 		maxTweetPublicMetrics := twitter.TweetMetricsObj{
 			Impressions:       d * 2,
 			URLLinkClicks:     d * 5,
@@ -342,8 +379,10 @@ func TestDisablePhase(t *testing.T) {
 			Retweets:          d * 2,
 			Quotes:            0,
 		}
-		fmt.Printf("Created developer: \"%s\" (%s). Creating %d snapshots for it:\n", developer.Username, developer.ID, snaps)
-		fmt.Printf("MaxTweetTimeRange = %f, MaxAverageDurationBetweenTweets = %f\n", maxTweetTimeRange, maxAverageDurationBetweenTweets)
+		if testing.Verbose() {
+			fmt.Printf("Created developer: \"%s\" (%s). Creating %d snapshots for it:\n", developer.Username, developer.ID, snaps)
+			fmt.Printf("MaxTweetTimeRange = %f, MaxAverageDurationBetweenTweets = %f\n", maxTweetTimeRange, maxAverageDurationBetweenTweets)
+		}
 		for snap := 1; snap <= snaps; snap++ {
 			wayThrough := float64(snap) / float64(snaps)
 			developerSnap := models.DeveloperSnapshot{}
@@ -354,10 +393,12 @@ func TestDisablePhase(t *testing.T) {
 			developerSnap.TweetTimeRange = models.NullDurationFromPtr(&tweetTimeRange)
 			averageDurationBetweenTweets := time.Duration(maxAverageDurationBetweenTweets * wayThrough)
 			developerSnap.AverageDurationBetweenTweets = models.NullDurationFromPtr(&averageDurationBetweenTweets)
-			fmt.Printf(
-				"\tTweetTimeRange.Minutes = %f, AverageDurationBetweenTweets.Minutes = %f\n",
-				tweetTimeRange.Minutes(), averageDurationBetweenTweets.Minutes(),
-			)
+			if testing.Verbose() {
+				fmt.Printf(
+					"\tTweetTimeRange.Minutes = %f, AverageDurationBetweenTweets.Minutes = %f\n",
+					tweetTimeRange.Minutes(), averageDurationBetweenTweets.Minutes(),
+				)
+			}
 			developerSnap.TweetsPublicMetrics = &twitter.TweetMetricsObj{
 				Impressions:       int(float64(maxTweetPublicMetrics.Impressions) * wayThrough),
 				URLLinkClicks:     int(float64(maxTweetPublicMetrics.URLLinkClicks) * wayThrough),
@@ -378,7 +419,7 @@ func TestDisablePhase(t *testing.T) {
 			}
 
 			if snap == snaps {
-				if developerSnap.WeightedScore > previousWeightedScore || d == 1 {
+				if developerSnap.WeightedScore > previousWeightedScore || d == startDevelopers {
 					previousWeightedScore = developerSnap.WeightedScore
 				} else {
 					t.Errorf(
@@ -389,14 +430,36 @@ func TestDisablePhase(t *testing.T) {
 				}
 			}
 
-			fmt.Printf("\tCreated snapshot no. %d/%d for developer. Weighted score = %f\n", snap, snaps, developerSnap.WeightedScore)
+			if testing.Verbose() {
+				fmt.Printf(
+					"\tCreated snapshot no. %d/%d for developer %s. Weighted score = %f\n",
+					snap, snaps, developer.Username, developerSnap.WeightedScore,
+				)
+			}
 		}
+		_ = bar.Add(1)
 	}
+	return
+}
 
-	state := StateInMemory()
+func disablePhaseTest(t *testing.T) (state *ScoutState, expectedIDs mapset.Set[int]) {
+	var err error
+	rand.Seed(time.Now().Unix())
+
+	expectedIDs = createFakeDevelopersWithSnaps(t, 1, int(math.Floor(fakeDevelopers)), extraDevelopers)
+
+	state = StateInMemory()
 	if err = DisablePhase(state); err != nil {
 		t.Errorf("Error was not expected to occur in DisablePhase: %s", err.Error())
 	}
+	return
+}
+
+func TestDisablePhase(t *testing.T) {
+	var err error
+	clearDB(t)
+
+	state, expectedIDs := disablePhaseTest(t)
 
 	// Check if there are exactly maxNonDisabledDevelopers
 	var enabledDevelopers int64
@@ -438,6 +501,168 @@ func TestDisablePhase(t *testing.T) {
 		t.Errorf(
 			"The disabled developers aren't the first %d developers that were created. They are: %s",
 			extraDevelopers, seenIDs.String(),
+		)
+	}
+}
+
+func enablePhaseTest(t *testing.T) (state *ScoutState, enabledDeveloperCount int64) {
+	var err error
+	const additionalDisabledDevelopers = 500
+
+	state, _ = disablePhaseTest(t)
+
+	if err = db.DB.Model(&models.Developer{}).Where("not disabled").Count(&enabledDeveloperCount).Error; err != nil {
+		t.Errorf("Error was not expected to occur whilst getting the count of the Developers table")
+	} else {
+		log.INFO.Printf("Enabled developers after Disable phase: %d", enabledDeveloperCount)
+	}
+
+	// Create 500 more developers to disable
+	start, end := int(math.Floor(fakeDevelopers+1)), int(math.Floor(fakeDevelopers))+additionalDisabledDevelopers
+	createdDevelopers := createFakeDevelopersWithSnaps(t, start, end, end)
+	if err = db.DB.Model(
+		&models.Developer{},
+	).Where(
+		"id IN ?",
+		slices.Comprehension(createdDevelopers.ToSlice(), func(idx int, value int, arr []int) string {
+			return strconv.Itoa(value)
+		}),
+	).Update("disabled", true).Error; err != nil {
+		t.Errorf(
+			"Error was not expected to occur whilst creating %d more disabled Developers",
+			createdDevelopers.Cardinality(),
+		)
+	}
+
+	if err = db.DB.Model(&models.Developer{}).Where("not disabled").Count(&enabledDeveloperCount).Error; err != nil {
+		t.Errorf("Error was not expected to occur whilst getting the count of the Developers table")
+	} else {
+		log.INFO.Printf(
+			"Enabled developers after creating %d more disabled Developers: %d",
+			additionalDisabledDevelopers, enabledDeveloperCount,
+		)
+	}
+
+	if err = EnablePhase(state); err != nil {
+		t.Errorf("Error was not expected to occur in EnablePhase: %s", err.Error())
+	}
+	return
+}
+
+func TestEnablePhase(t *testing.T) {
+	var err error
+	clearDB(t)
+
+	_, enabledDeveloperCount := enablePhaseTest(t)
+
+	if err = db.DB.Model(&models.Developer{}).Where("not disabled").Count(&enabledDeveloperCount).Error; err != nil {
+		t.Errorf("Error was not expected to occur whilst getting the final count of the Developers table")
+	}
+
+	if enabledDeveloperCount != int64(math.Floor(maxEnabledDevelopersAfterEnablePhase)) {
+		t.Errorf(
+			"The number of enabled developers after the Enable phase does not equal the expected value: %d (expected) vs. %d (actual)",
+			int64(math.Floor(maxEnabledDevelopersAfterEnablePhase)), enabledDeveloperCount,
+		)
+	}
+}
+
+func TestDeletePhase(t *testing.T) {
+	var err error
+	clearDB(t)
+
+	state, _ := enablePhaseTest(t)
+
+	// Create a referenced SteamApp for each disabled developer
+	var disabledDevelopersBefore []*models.Developer
+	if err = db.DB.Where("disabled").Find(&disabledDevelopersBefore).Error; err != nil {
+		t.Errorf("Error was not expected to occur whilst finding disabled developers: %s", err.Error())
+	}
+	expectedDevelopersDeleted := int(math.Floor(float64(len(disabledDevelopersBefore)) * percentageOfDisabledDevelopersToDelete))
+
+	// Create a SteamApp for every disabled developer
+	disabledDevApp := make(map[string]uint64)
+	for i, disabledDeveloper := range disabledDevelopersBefore {
+		app := models.SteamApp{
+			ID:          uint64(i + 1),
+			Name:        fmt.Sprintf("SteamApp for %s", disabledDeveloper.Username),
+			DeveloperID: &disabledDeveloper.ID,
+		}
+		disabledDevApp[disabledDeveloper.ID] = app.ID
+		if err = db.DB.Create(&app).Error; err != nil {
+			t.Errorf("Could not create a SteamApp for developer %s: %v", disabledDeveloper.Username, err)
+		}
+	}
+
+	// Run the DeletePhase
+	if err = DeletePhase(state); err != nil {
+		t.Errorf("Error was not expected to occur in DeletePhase: %s", err.Error())
+	}
+
+	// Check if the number of deleted developers is what we expected
+	actualDevelopersDeleted := state.GetIterableCachedField(DeletedDevelopersType).Len()
+	if actualDevelopersDeleted != expectedDevelopersDeleted {
+		t.Errorf(
+			"The number of developers deleted does not equal the number expected. %d vs %d",
+			actualDevelopersDeleted, expectedDevelopersDeleted,
+		)
+	}
+
+	// Check if the number of games for each deleted dev is 0, and if the related SteamApp has no developer referenced
+	iter := state.GetIterableCachedField(DeletedDevelopersType).Iter()
+	for iter.Continue() {
+		deletedDev := iter.Key().(*email.TrendingDev)
+		var gamesForDev int64
+		if err = db.DB.Model(
+			&models.Game{},
+		).Where(
+			"? = ANY(developers)",
+			deletedDev.Developer.Username,
+		).Count(&gamesForDev).Error; err != nil {
+			t.Errorf(
+				"Unexpected error whilst finding the number of games for deleted dev. %s: %v",
+				deletedDev.Developer.Username, err,
+			)
+		} else {
+			if gamesForDev != 0 {
+				t.Errorf(
+					"There is/are %d game(s) for deleted dev. %s that still exist",
+					gamesForDev, deletedDev.Developer.Username,
+				)
+			}
+		}
+
+		var steamApp models.SteamApp
+		if err = db.DB.Where(
+			"id = ?",
+			disabledDevApp[deletedDev.Developer.ID],
+		).Find(&steamApp).Error; err != nil {
+			t.Errorf(
+				"Unexpected error whilst finding the SteamApp for deleted dev. %s: %v",
+				deletedDev.Developer.Username, err,
+			)
+		} else {
+			if steamApp.DeveloperID != nil {
+				t.Errorf(
+					"SteamApp %s (%d) is still referenced by developer %s",
+					steamApp.Name, steamApp.ID, *steamApp.DeveloperID,
+				)
+			}
+		}
+		iter.Next()
+	}
+
+	var disabledDevelopersAfterCount int64
+	if err = db.DB.Model(&models.Developer{}).Where("disabled").Count(&disabledDevelopersAfterCount).Error; err != nil {
+		t.Errorf("Unexpected error whilst finding the new count of all the disabled developers: %v", err)
+	}
+
+	actualDevelopersDeleted = len(disabledDevelopersBefore) - int(disabledDevelopersAfterCount)
+	if actualDevelopersDeleted != expectedDevelopersDeleted {
+		t.Errorf(
+			"%d (disabledDevelopersBefore) - %d (disabledDevelopersAfter) = %d. Expected %d",
+			len(disabledDevelopersBefore), disabledDevelopersAfterCount, actualDevelopersDeleted,
+			expectedDevelopersDeleted,
 		)
 	}
 }

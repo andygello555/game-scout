@@ -8,7 +8,7 @@ require (
 	github.com/RichardKnop/machinery v1.10.6
 	github.com/SebastiaanKlippert/go-wkhtmltopdf v1.8.2
 	github.com/anaskhan96/soup v1.2.5
-	github.com/andygello555/gotils/v2 v2.0.0
+	github.com/andygello555/gotils/v2 v2.1.0
 	github.com/deckarep/golang-set/v2 v2.1.0
 	github.com/g8rswimmer/go-twitter/v2 v2.1.2
 	github.com/google/uuid v1.3.0
@@ -23,6 +23,7 @@ require (
 	github.com/urfave/cli v1.22.10
 	github.com/volatiletech/null/v9 v9.0.0
 	github.com/wcharczuk/go-chart v2.0.1+incompatible
+	golang.org/x/exp v0.0.0-20230111222715-75897c7a292a
 	gorm.io/driver/postgres v1.4.4
 	gorm.io/gorm v1.24.0
 )
@@ -81,7 +82,6 @@ require (
 	go.opentelemetry.io/otel/metric v0.17.0 // indirect
 	go.opentelemetry.io/otel/trace v0.17.0 // indirect
 	golang.org/x/crypto v0.0.0-20221012134737-56aed061732a // indirect
-	golang.org/x/exp v0.0.0-20230105000112-eab7a2c85304 // indirect
 	golang.org/x/image v0.0.0-20220302094943-723b81ca9867 // indirect
 	golang.org/x/net v0.0.0-20221014081412-f15817d10f9b // indirect
 	golang.org/x/oauth2 v0.0.0-20221014153046-6fdb5e3db783 // indirect
