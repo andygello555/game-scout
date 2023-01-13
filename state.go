@@ -799,7 +799,7 @@ func (p Phase) Run(state *ScoutState) (err error) {
 		// is decided by calculating their trend so far.
 		phaseBefore()
 
-		if err = DisablePhase(state); err != nil {
+		if err = DeletePhase(state); err != nil {
 			return errors.Wrap(err, "delete phase has failed")
 		}
 

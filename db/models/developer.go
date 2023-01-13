@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/gob"
 	"fmt"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/pkg/errors"
@@ -8,6 +9,10 @@ import (
 	"gorm.io/gorm/clause"
 	"time"
 )
+
+func init() {
+	gob.Register(Developer{})
+}
 
 // Developer represents a potential indie developer's Twitter account. This also contains some current metrics for their
 // profile.

@@ -3,6 +3,7 @@ package models
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/gob"
 	"fmt"
 	"github.com/pkg/errors"
 	"github.com/sajari/regression"
@@ -13,6 +14,10 @@ import (
 	"reflect"
 	"time"
 )
+
+func init() {
+	gob.Register(Trend{})
+}
 
 // trendModel is implemented by Model instances that need to have their trends measured by one or more metrics that
 // exist as a field in the model.

@@ -3,6 +3,7 @@ package email
 import (
 	"bytes"
 	"embed"
+	"encoding/gob"
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/SebastiaanKlippert/go-wkhtmltopdf"
@@ -21,6 +22,11 @@ import (
 	"time"
 	"unicode"
 )
+
+func init() {
+	gob.Register(TrendingDev{})
+	gob.Register(MeasureContext{})
+}
 
 // Context will be implemented by structures that are used to fill out a Template in Template.HTML.
 type Context interface {

@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/gob"
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/anaskhan96/soup"
@@ -21,6 +22,10 @@ import (
 	"strings"
 	"time"
 )
+
+func init() {
+	gob.Register(SteamApp{})
+}
 
 // SteamApp represents an app on Steam that has been consumed from the ScoutWebPipes co-process. It can be
 // created/updated in the websocket client that reads info pushed from the ScoutWebPipes process.

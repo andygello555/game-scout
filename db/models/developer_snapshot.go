@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/gob"
 	"fmt"
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	"github.com/andygello555/gotils/v2/numbers"
@@ -14,6 +15,10 @@ import (
 	"reflect"
 	"time"
 )
+
+func init() {
+	gob.Register(DeveloperSnapshot{})
+}
 
 // DeveloperSnapshot is snapshot of a potential developer's public user metrics, aggregations of tweet metrics
 type DeveloperSnapshot struct {

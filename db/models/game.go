@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/gob"
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/anaskhan96/soup"
@@ -23,6 +24,10 @@ import (
 	"strings"
 	"time"
 )
+
+func init() {
+	gob.Register(Game{})
+}
 
 // Game represents a game (supposedly) being developed by a Developer. The Website of which can be on one of many
 // Storefront.

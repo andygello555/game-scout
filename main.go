@@ -633,8 +633,18 @@ func main() {
 					Required: false,
 				},
 				cli.BoolFlag{
+					Name:     "deletedDevelopers",
+					Usage:    "add these Developers to the DeletedDevelopers cached field and save the cache",
+					Required: false,
+				},
+				cli.BoolFlag{
 					Name:     "measure",
 					Usage:    "execute the Measure template for this Developer",
+					Required: false,
+				},
+				cli.BoolFlag{
+					Name:     "measureDelete",
+					Usage:    "execute the Measure template for this Developer but treat it as though it is being deleted",
 					Required: false,
 				},
 				cli.BoolFlag{
@@ -646,12 +656,26 @@ func main() {
 					Name:  "stateForceCreate",
 					Usage: "whether to forceCreate the ScoutState",
 				},
+				cli.BoolFlag{
+					Name:     "stateDelete",
+					Usage:    "whether to delete the state when the developer command has finished",
+					Required: false,
+				},
 			},
 			Usage: "subcommand for viewing resources related to a developer in the DB",
 			Action: func(c *cli.Context) (err error) {
 				measureContext := email.MeasureContext{
-					TrendingDevs: make([]*email.TrendingDev, len(c.StringSlice("id"))),
-					Config:       globalConfig.Email,
+					TrendingDevs:           make([]*email.TrendingDev, len(c.StringSlice("id"))),
+					DevelopersBeingDeleted: make([]*email.TrendingDev, len(c.StringSlice("id"))),
+					Config:                 globalConfig.Email,
+				}
+
+				var state *ScoutState
+				createState := c.Bool("update") || c.Bool("deletedDevelopers")
+				if createState {
+					if state, err = StateLoadOrCreate(c.Bool("stateForceCreate")); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
 				}
 
 				for developerNo, id := range c.StringSlice("id") {
@@ -683,11 +707,6 @@ func main() {
 					}
 
 					if c.Bool("update") {
-						var state *ScoutState
-						if state, err = StateLoadOrCreate(c.Bool("stateForceCreate")); err != nil {
-							return cli.NewExitError(err.Error(), 1)
-						}
-
 						gameScrapers := models.NewStorefrontScrapers[string](
 							globalConfig.Scrape, db.DB, 1, 1, 12*maxGamesPerTweet,
 							minScrapeStorefrontsForGameWorkerWaitTime, maxScrapeStorefrontsForGameWorkerWaitTime,
@@ -735,27 +754,46 @@ func main() {
 						)
 					}
 
-					if c.Bool("measure") {
+					trendingDev := func() (*email.TrendingDev, error) {
 						var games []*models.Game
 						if games, err = developer.Games(db.DB); err != nil {
-							return cli.NewExitError(err.Error(), 1)
+							return nil, cli.NewExitError(err.Error(), 1)
 						}
 
 						var snapshots []*models.DeveloperSnapshot
 						if snapshots, err = developer.DeveloperSnapshots(db.DB); err != nil {
-							return cli.NewExitError(err.Error(), 1)
+							return nil, cli.NewExitError(err.Error(), 1)
 						}
 
 						var trend *models.Trend
 						if trend, err = developer.Trend(db.DB); err != nil {
-							return cli.NewExitError(err.Error(), 1)
+							return nil, cli.NewExitError(err.Error(), 1)
 						}
 
-						measureContext.TrendingDevs[developerNo] = &email.TrendingDev{
+						return &email.TrendingDev{
 							Developer: &developer,
 							Snapshots: snapshots,
 							Games:     games,
 							Trend:     trend,
+						}, nil
+					}
+
+					if c.Bool("measure") || c.Bool("measureDelete") || c.Bool("deletedDevelopers") {
+						if measureContext.TrendingDevs[developerNo], err = trendingDev(); err != nil {
+							return err
+						}
+
+						// Also add the TrendingDev to the DevelopersBeingDeleted slice if measureDelete is given
+						if c.Bool("measureDelete") {
+							measureContext.DevelopersBeingDeleted[developerNo] = measureContext.TrendingDevs[developerNo]
+						}
+
+						if c.Bool("deletedDevelopers") {
+							fmt.Println("adding to deleted developers")
+							state.GetIterableCachedField(DeletedDevelopersType).SetOrAdd(measureContext.TrendingDevs[developerNo])
+							if err = state.Save(); err != nil {
+								return cli.NewExitError(err.Error(), 1)
+							}
 						}
 					}
 
@@ -797,6 +835,10 @@ func main() {
 					); err != nil {
 						return cli.NewExitError(err.Error(), 1)
 					}
+				}
+
+				if createState && c.Bool("stateDelete") {
+					state.Delete()
 				}
 				return
 			},
