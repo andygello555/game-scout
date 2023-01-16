@@ -247,8 +247,8 @@ func (ds *DeveloperSnapshot) calculateGameField(tx *gorm.DB) (err error) {
 	if games.Error != nil {
 		return errors.Wrapf(
 			games.Error,
-			"could not get Games for developer %s (%s) in DeveloperSnapshot.BeforeCreate",
-			developer.Username, developer.ID,
+			"could not get Games for Developer %v in DeveloperSnapshot.BeforeCreate",
+			developer,
 		)
 	}
 
@@ -259,8 +259,8 @@ func (ds *DeveloperSnapshot) calculateGameField(tx *gorm.DB) (err error) {
 	} else if queryCount.Error != nil {
 		return errors.Wrapf(
 			queryCount.Error,
-			"could not count the number of Games for developer %s (%s) in DeveloperSnapshot.BeforeCreate",
-			developer.Username, developer.ID,
+			"could not count the number of Games for Developer %v in DeveloperSnapshot.BeforeCreate",
+			developer,
 		)
 	}
 
@@ -269,8 +269,8 @@ func (ds *DeveloperSnapshot) calculateGameField(tx *gorm.DB) (err error) {
 	if err = games.Where("weighted_score IS NOT NULL").Find(&weightedGames).Error; err != nil {
 		return errors.Wrapf(
 			err,
-			"could not find the Games with weighted_scores for developer %s (%s) in DeveloperSnapshot.BeforeCreate",
-			developer.Username, developer.ID,
+			"could not find the Games with weighted_scores for developer %v in DeveloperSnapshot.BeforeCreate",
+			developer,
 		)
 	}
 

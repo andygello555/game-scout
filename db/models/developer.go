@@ -12,6 +12,7 @@ import (
 
 func init() {
 	gob.Register(Developer{})
+	gob.Register(TrendingDev{})
 }
 
 // Developer represents a potential indie developer's Twitter account. This also contains some current metrics for their
@@ -37,6 +38,14 @@ type Developer struct {
 	Disabled bool
 }
 
+// String returns a string representation of the Developer's Username, ID, and Disabled fields.
+func (d *Developer) String() string {
+	return fmt.Sprintf("\"%s\" (%s, %s)", d.Username, d.ID, map[bool]string{
+		true:  "disabled",
+		false: "enabled",
+	}[d.Disabled])
+}
+
 func (d *Developer) GetObservedName() string { return "Snapshot Weighted Score" }
 
 func (d *Developer) GetVariableNames() []string { return []string{"Snapshot Date"} }
@@ -44,10 +53,10 @@ func (d *Developer) GetVariableNames() []string { return []string{"Snapshot Date
 func (d *Developer) Train(trend *Trend) (err error) {
 	var snapshots []*DeveloperSnapshot
 	if snapshots, err = d.DeveloperSnapshots(trend.db); err != nil {
-		return errors.Wrapf(err, "cannot Train %s (%s) as we cannot find snapshots for it", d.Username, d.ID)
+		return errors.Wrapf(err, "cannot Train %v as we cannot find snapshots for it", d)
 	}
 	if len(snapshots) < 2 {
-		return fmt.Errorf("cannot Train on %d datapoints for Developer %s (%s)", len(snapshots), d.Username, d.ID)
+		return fmt.Errorf("cannot Train on %d datapoints for Developer %v", len(snapshots), d)
 	}
 
 	for _, snapshot := range snapshots {
@@ -76,7 +85,51 @@ func (d *Developer) LatestDeveloperSnapshot(db *gorm.DB) (developerSnap *Develop
 // Games returns the games for this developer ordered by weighted score descending.
 func (d *Developer) Games(db *gorm.DB) (games []*Game, err error) {
 	if err = db.Model(&Game{}).Where("? = ANY(developers)", d.Username).Order("weighted_score desc").Find(&games).Error; err != nil {
-		return games, errors.Wrapf(err, "could not find Games for %s (%s)", d.Username, d.ID)
+		return games, errors.Wrapf(err, "could not find Games for %v", d)
+	}
+	return
+}
+
+// Trend returns the Trend that has been trained on the DeveloperSnapshot for the referred to Developer.
+func (d *Developer) Trend(db *gorm.DB) (trend *Trend, err error) {
+	trend = NewTrend(db, d)
+	if err = trend.Train(); err != nil {
+		err = errors.Wrapf(err, "Trend could not be trained for Developer %v", d)
+		return
+	}
+
+	if _, err = trend.Trend(); err != nil {
+		err = errors.Wrapf(err, "Trend could not be run for Developer %v", d)
+		return
+	}
+	return
+}
+
+type TrendingDev struct {
+	Developer *Developer
+	Snapshots []*DeveloperSnapshot
+	Games     []*Game
+	Trend     *Trend
+}
+
+// TrendingDev returns the TrendingDev that is comprised from the Developer's Games, DeveloperSnapshots, and Trend.
+func (d *Developer) TrendingDev(db *gorm.DB) (trendingDev *TrendingDev, err error) {
+	trendingDev = &TrendingDev{
+		Developer: d,
+	}
+
+	if trendingDev.Games, err = d.Games(db); err != nil {
+		err = errors.Wrapf(err, "could find Games for %v", d)
+		return
+	}
+
+	if trendingDev.Snapshots, err = d.DeveloperSnapshots(db); err != nil {
+		err = errors.Wrapf(err, "could find DeveloperSnapshots for %v", d)
+		return
+	}
+
+	if trendingDev.Trend, err = d.Trend(db); err != nil {
+		err = errors.Wrapf(err, "could not find Trend for %v", d)
 	}
 	return
 }
@@ -89,18 +142,4 @@ func (d *Developer) OnConflict() clause.OnConflict {
 // OnCreateOmit returns the fields that should be omitted when creating a Developer.
 func (d *Developer) OnCreateOmit() []string {
 	return []string{}
-}
-
-func (d *Developer) Trend(db *gorm.DB) (trend *Trend, err error) {
-	trend = NewTrend(db, d)
-	if err = trend.Train(); err != nil {
-		err = errors.Wrapf(err, "Trend could not be trained for Developer %s (%s)", d.Username, d.ID)
-		return
-	}
-
-	if _, err = trend.Trend(); err != nil {
-		err = errors.Wrapf(err, "Trend could not be run for Developer %s (%s)", d.Username, d.ID)
-		return
-	}
-	return
 }

@@ -23,7 +23,7 @@ const (
 
 type trendFinderResult struct {
 	err error
-	*email.TrendingDev
+	*models.TrendingDev
 }
 
 type trendFinderResultHeap struct {
@@ -62,38 +62,23 @@ func newTrendFinderResultHeap(reverse bool) trendFinderResultHeap {
 
 func trendFinder(jobs <-chan *models.Developer, results chan<- *trendFinderResult) {
 	for job := range jobs {
-		result := &trendFinderResult{
-			TrendingDev: &email.TrendingDev{
-				Developer: job,
-			},
-		}
-
-		if result.Games, result.err = job.Games(db.DB); result.err != nil {
-			result.err = errors.Wrapf(result.err, "trendFinder cannot find games for %s (%s)", result.Developer.Username, result.Developer.ID)
+		result := &trendFinderResult{}
+		if result.TrendingDev, result.err = job.TrendingDev(db.DB); result.err != nil {
+			result.err = errors.Wrapf(result.err, "trendFinder cannot create TrendingDev")
 			results <- result
 			continue
 		}
-		log.INFO.Printf("Developer %s (%s) has %d games", job.Username, job.ID, len(result.Games))
 
-		if result.Snapshots, result.err = job.DeveloperSnapshots(db.DB); result.err != nil {
-			result.err = errors.Wrapf(result.err, "trendFinder cannot find snapshots for %s (%s)", result.Developer.Username, result.Developer.ID)
-			results <- result
-			continue
-		}
-		log.INFO.Printf("Developer %s (%s) has %d snapshots", job.Username, job.ID, len(result.Snapshots))
-
-		if result.Trend, result.err = job.Trend(db.DB); result.err != nil {
-			result.err = errors.Wrapf(result.err, "trendFinder cannot find trend for %s (%s)", result.Developer.Username, result.Developer.ID)
-		} else {
-			log.INFO.Printf("Found trend for developer %s (%s) = %.2f", job.Username, job.ID, result.Trend.GetCoeffs()[1])
-		}
+		log.INFO.Printf("Developer %v has %d games", job, len(result.Games))
+		log.INFO.Printf("Developer %v has %d snapshots", job, len(result.Snapshots))
+		log.INFO.Printf("Found trend for Developer %v = %.2f", job, result.Trend.GetCoeffs()[1])
 		results <- result
 	}
 }
 
 func MeasurePhase(state *ScoutState) (err error) {
 	measureContext := email.MeasureContext{
-		TrendingDevs:           make([]*email.TrendingDev, 0),
+		TrendingDevs:           make([]*models.TrendingDev, 0),
 		DevelopersBeingDeleted: *state.GetIterableCachedField(DeletedDevelopersType).(*DeletedDevelopers),
 		Config:                 globalConfig.Email,
 	}
@@ -150,8 +135,8 @@ func MeasurePhase(state *ScoutState) (err error) {
 		result := <-results
 		if result.err != nil {
 			log.ERROR.Printf(
-				"Error occurred when trying to find trend for %s (%s): %v, skipping...",
-				result.Developer.Username, result.Developer.ID, result.err,
+				"Error occurred when trying to find trend for Developer %v: %v, skipping...",
+				result.Developer, result.err,
 			)
 		} else {
 			heap.Push(&topDevelopers, result)
@@ -165,18 +150,18 @@ func MeasurePhase(state *ScoutState) (err error) {
 	for i := 0; i < topDevelopersNo; i++ {
 		topDeveloper := heap.Pop(&topDevelopers).(*trendFinderResult)
 		log.INFO.Printf(
-			"%d: Adding Developer \"%s\" (%s) with trend %.10f to email context...",
-			i+1, topDeveloper.Developer.Username, topDeveloper.Developer.ID, topDeveloper.Trend.GetCoeffs()[1],
+			"%d: Adding Developer %v with trend %.10f to email context...",
+			i+1, topDeveloper.Developer, topDeveloper.Trend.GetCoeffs()[1],
 		)
 		if debug, _ := state.GetCachedField(StateType).Get("Debug"); !debug.(bool) {
 			// Update the number of times this developer has been highlighted
 			if err = db.DB.Model(topDeveloper.Developer).Update("times_highlighted", gorm.Expr("times_highlighted + 1")).Error; err != nil {
-				log.ERROR.Printf("Could not increment TimesHighlighted for %s (%s): %v", topDeveloper.Developer.Username, topDeveloper.Developer.ID, err)
+				log.ERROR.Printf("Could not increment TimesHighlighted for Developer %v: %v", topDeveloper.Developer, err)
 			}
 		} else {
 			log.WARNING.Printf(
-				"ScoutState.Debug is set, so we are skipping incrementing times_highlighted on %s (%s)",
-				topDeveloper.Developer.Username, topDeveloper.Developer.ID,
+				"ScoutState.Debug is set, so we are skipping incrementing times_highlighted on Developer %s (%s)",
+				topDeveloper.Developer,
 			)
 		}
 		measureContext.TrendingDevs = append(measureContext.TrendingDevs, topDeveloper.TrendingDev)

@@ -205,7 +205,7 @@ func DiscoveryBatch(
 			// developerSnapshots
 			if _, ok := state.GetIterableCachedField(DeveloperSnapshotsType).Get(result.developer.ID); !ok {
 				// Create/update the developer if a developer snapshot for it hasn't been added yet
-				log.INFO.Printf("%sthis is the first time we have seen developer: %s (%s)", logPrefix, result.developer.Username, result.developer.ID)
+				log.INFO.Printf("%sthis is the first time we have seen Developer %v", logPrefix, result.developer)
 				_, err = db.Upsert(result.developer)
 			}
 

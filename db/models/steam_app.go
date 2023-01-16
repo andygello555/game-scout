@@ -277,6 +277,10 @@ func (sf steamAppWeightedField) Fields() []WeightedField {
 	}
 }
 
+func (app *SteamApp) String() string {
+	return fmt.Sprintf("\"%s\" (%d)", app.Name, app.ID)
+}
+
 func (app *SteamApp) Empty() any {
 	return &SteamApp{}
 }

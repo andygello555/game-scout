@@ -50,7 +50,7 @@ func TestMeasureContext_Template(t *testing.T) {
 	}{
 		{
 			context: &MeasureContext{
-				TrendingDevs: []*TrendingDev{
+				TrendingDevs: []*models.TrendingDev{
 					{
 						Developer: &models.Developer{
 							Username: "testdev",

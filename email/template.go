@@ -24,7 +24,6 @@ import (
 )
 
 func init() {
-	gob.Register(TrendingDev{})
 	gob.Register(MeasureContext{})
 }
 
@@ -41,18 +40,11 @@ type Context interface {
 	HTML() *Template
 }
 
-type TrendingDev struct {
-	Developer *models.Developer
-	Snapshots []*models.DeveloperSnapshot
-	Games     []*models.Game
-	Trend     *models.Trend
-}
-
 // MeasureContext is a Context that contains the data required to fill out the Measure HTML template.
 type MeasureContext struct {
-	TrendingDevs           []*TrendingDev
+	TrendingDevs           []*models.TrendingDev
 	TopSteamApps           []*models.SteamApp
-	DevelopersBeingDeleted []*TrendingDev
+	DevelopersBeingDeleted []*models.TrendingDev
 	EnabledDevelopers      int64
 	Config                 Config
 }

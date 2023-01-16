@@ -5,7 +5,6 @@ import (
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
-	"github.com/andygello555/game-scout/email"
 	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/andygello555/gotils/v2/numbers"
 	"github.com/andygello555/gotils/v2/slices"
@@ -13,12 +12,17 @@ import (
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"math"
+	"strings"
 )
 
-// DeletePhase will run the "disable" phase of the Scout procedure. This phase deletes the lowest performing disabled
-// developers. The way we find the lowest performing developers is by finding the trend for each, and sorting it by the
-// value of the first coefficient for each regression in ascending order. The top percentageOfDisabledDevelopersToDelete
-// of this set will be deleted.
+// DeletePhase will run the "disable" phase of the Scout procedure.
+//
+// This Phase first deletes any developers that have less than 3 snapshots and their latest snapshot was created over
+// staleDeveloperDays ago.
+//
+// Then the Phase will delete the lowest performing disabled developers. We find the lowest performing developers by
+// finding the trend for each, and sorting it by the value of the first coefficient for each regression in ascending order.
+// The top percentageOfDisabledDevelopersToDelete of this set will be deleted.
 //
 // All games that reference these deleted developers will have the developer's username removed from its developers
 // field. If any games after this procedure are left with no developers within their developers field, they also will be
@@ -27,6 +31,79 @@ import (
 // The deleted developers are stored within the DeletedDevelopers cached field of the given ScoutState, along with all
 // their snapshots and games, so that they can be mentioned in the Measure Phase.
 func DeletePhase(state *ScoutState) (err error) {
+	// We only select developers that have 0 verified games
+	whereZeroVerified := db.DB.Model(&models.Game{}).Select(
+		"COUNT(*)",
+	).Where(
+		"developers.username = ANY(games.verified_developer_usernames)",
+	)
+
+	latestSnapshotQuery := db.DB.Model(
+		&models.DeveloperSnapshot{},
+	).Select(
+		"developer_snapshots.developer_id, max(version) AS latest_version",
+	).Group("developer_snapshots.developer_id")
+
+	// First find any developers that haven't had a snapshot for a while and add them to the developers to be deleted
+	log.INFO.Printf(
+		"First we are going to queue up any developers that haven't had a new snapshot in %d days to be deleted",
+		staleDeveloperDays,
+	)
+
+	// SELECT developers.*
+	// FROM (
+	//   SELECT developer_snapshots.developer_id, max(version) AS latest_version
+	//   FROM developer_snapshots
+	//   GROUP BY developer_snapshots.developer_id
+	// ) AS ds1
+	// JOIN developer_snapshots ds2 ON ds1.developer_id = ds2.developer_id AND ds1.latest_version = ds2.version
+	// JOIN developers ON ds2.developer_id = developers.id
+	// WHERE ds2.created_at < NOW() - (<staleDeveloperDays> * INTERVAL '1 DAY') AND ds2.version < 2 AND (
+	//   SELECT COUNT(*)
+	//   FROM games
+	//   WHERE developers.username = ANY(games.verified_developer_usernames)
+	// ) = 0
+	// ORDER BY ds2.weighted_score
+
+	query := db.DB.Table(
+		"(?) AS ds1",
+		latestSnapshotQuery,
+	).Select(
+		"developers.*",
+	).Joins(
+		"JOIN developer_snapshots ds2 ON ds1.developer_id = ds2.developer_id AND ds1.latest_version = ds2.version",
+	).Joins(
+		"JOIN developers ON ds2.developer_id = developers.id",
+	).Where(
+		"ds2.created_at < NOW() - (? * INTERVAL '1 DAY') AND ds2.version < 2 AND (?) = 0",
+		staleDeveloperDays,
+		whereZeroVerified,
+	).Order(
+		"ds2.created_at",
+	)
+
+	var staleDevelopers []*models.Developer
+	if err = query.Find(&staleDevelopers).Error; err != nil {
+		return myErrors.TemporaryWrap(false, err, "could not find stale developers in Delete Phase")
+	}
+	log.INFO.Printf(
+		"Found %d stale developers. Creating TrendingDevs for each and adding them to the DeletedDevelopers cached field",
+		len(staleDevelopers),
+	)
+
+	added := 0
+	for _, staleDeveloper := range staleDevelopers {
+		var trendingDev *models.TrendingDev
+		if trendingDev, err = staleDeveloper.TrendingDev(db.DB); err != nil && !strings.Contains(err.Error(), "could not find Trend for") {
+			log.WARNING.Printf("Error occurred whilst creating TrendingDev for stale developer: %v", err)
+			continue
+		}
+		state.GetIterableCachedField(DeletedDevelopersType).SetOrAdd(trendingDev)
+		added++
+		log.INFO.Printf("\tAdded stale Developer %v to DeletedDevelopers", staleDeveloper)
+	}
+	log.INFO.Printf("Finished adding %d/%d stale Developers to DeletedDevelopers", added, len(staleDevelopers))
+
 	var totalDisabledDevelopers int64
 	if err = db.DB.Model(&models.Developer{}).Where("disabled").Count(&totalDisabledDevelopers).Error; err != nil {
 		return myErrors.TemporaryWrap(false, err, "could not find the total number of disabled developers")
@@ -34,25 +111,37 @@ func DeletePhase(state *ScoutState) (err error) {
 
 	developersToDelete := int(math.Floor(float64(totalDisabledDevelopers) * percentageOfDisabledDevelopersToDelete))
 	log.INFO.Printf(
-		"There are %d total disabled developers in the DB, we have to delete %.2f percent of those, which is %d",
-		totalDisabledDevelopers, percentageOfDisabledDevelopersToDelete, developersToDelete,
+		"There are %d total disabled developers in the DB, we have to delete %.1f%% of those, which is %d",
+		totalDisabledDevelopers, percentageOfDisabledDevelopersToDelete*100, developersToDelete,
 	)
 
-	query := db.DB.Table(
+	// SELECT developers.*
+	// FROM (
+	//   SELECT developer_snapshots.developer_id, max(version) AS latest_version
+	//   FROM developer_snapshots
+	//   GROUP BY developer_snapshots.developer_id
+	// ) AS ds1
+	// JOIN developer_snapshots ds2 ON ds1.developer_id = ds2.developer_id AND ds1.latest_version = ds2.version
+	// JOIN developers ON ds2.developer_id = developers.id
+	// WHERE developers.disabled AND (
+	//   SELECT COUNT(*)
+	//   FROM games
+	//   WHERE developers.username = ANY(games.verified_developer_usernames)
+	// ) = 0
+	// ORDER BY ds2.weighted_score
+
+	query = db.DB.Table(
 		"(?) AS ds1",
-		db.DB.Model(
-			&models.DeveloperSnapshot{},
-		).Select(
-			"developer_snapshots.developer_id, max(version) AS latest_version",
-		).Group("developer_snapshots.developer_id"),
+		latestSnapshotQuery,
 	).Select(
 		"developers.*",
 	).Joins(
 		"JOIN developer_snapshots ds2 ON ds1.developer_id = ds2.developer_id AND ds1.latest_version = ds2.version",
 	).Joins(
-		"JOIN developers on ds2.developer_id = developers.id",
+		"JOIN developers ON ds2.developer_id = developers.id",
 	).Where(
-		"developers.disabled",
+		"developers.disabled AND (?) = 0",
+		whereZeroVerified,
 	).Order(
 		"ds2.weighted_score",
 	)
@@ -113,33 +202,9 @@ func DeletePhase(state *ScoutState) (err error) {
 		developerSortedSample := newTrendFinderResultHeap(true)
 		for _, developer := range developerSample {
 			if _, ok := state.GetIterableCachedField(DeletedDevelopersType).Get(developer.ID); !ok {
-				result := &trendFinderResult{
-					TrendingDev: &email.TrendingDev{
-						Developer: developer,
-					},
-				}
-
-				if result.Games, err = developer.Games(db.DB); err != nil {
-					log.WARNING.Printf(
-						"Could find games for \"%s\" (%s): %v, skipping...",
-						developer.Username, developer.ID, err,
-					)
-					continue
-				}
-
-				if result.Snapshots, err = developer.DeveloperSnapshots(db.DB); err != nil {
-					log.WARNING.Printf(
-						"Could find snapshots for \"%s\" (%s): %v, skipping...",
-						developer.Username, developer.ID, err,
-					)
-					continue
-				}
-
-				if result.Trend, err = developer.Trend(db.DB); err != nil {
-					log.WARNING.Printf(
-						"Could not find trend for \"%s\" (%s): %v, skipping...",
-						developer.Username, developer.ID, err,
-					)
+				result := &trendFinderResult{}
+				if result.TrendingDev, result.err = developer.TrendingDev(db.DB); result.err != nil {
+					log.WARNING.Printf("Error whilst creating TrendingDev: %v, skipping...", result.err)
 					continue
 				}
 
@@ -160,10 +225,7 @@ func DeletePhase(state *ScoutState) (err error) {
 			} else {
 				// This should never happen, as the sample is sorted by weighted_score and offset and limit to create
 				// distinct batches.
-				log.WARNING.Printf(
-					"DeletedDevelopers already contains ID for Developer \"%s\" (%s)",
-					developer.Username, developer.ID,
-				)
+				log.WARNING.Printf("DeletedDevelopers already contains ID for Developer %v", developer)
 			}
 		}
 
@@ -178,9 +240,8 @@ func DeletePhase(state *ScoutState) (err error) {
 		for i := 0; i < developersNeeded; i++ {
 			developer := heap.Pop(&developerSortedSample).(*trendFinderResult)
 			log.INFO.Printf(
-				"Developer \"%s\" (%s) is placed %s out of %d developers in sample no. %d with coeff[1] = %.10f",
-				developer.Developer.Username, developer.Developer.ID, numbers.Ordinal(i+1), developersNeeded, sample+1,
-				developer.Trend.GetCoeffs()[1],
+				"Developer %v is placed %s out of %d developers in sample no. %d with coeff[1] = %.10f",
+				developer, numbers.Ordinal(i+1), developersNeeded, sample+1, developer.Trend.GetCoeffs()[1],
 			)
 			state.GetIterableCachedField(DeletedDevelopersType).SetOrAdd(developer.TrendingDev)
 		}
@@ -194,93 +255,89 @@ func DeletePhase(state *ScoutState) (err error) {
 	deletedDevelopers := state.GetIterableCachedField(DeletedDevelopersType).(*DeletedDevelopers)
 	actuallyDeletedDevs := 0
 	log.INFO.Printf("Deleting %d under performing developers", deletedDevelopers.Len())
-	if debug, _ := state.GetCachedField(StateType).Get("Debug"); !debug.(bool) {
-		if deletedDevelopers.Len() > 0 {
-			// Iterate over the deleted developers and remove their reference from each related Game. If the Game has no
-			// developers left after this modification, then we will delete that Game.
-			iter := deletedDevelopers.Iter()
-			for iter.Continue() {
-				deletedDev := iter.Key().(*email.TrendingDev)
-				log.INFO.Printf(
-					"Starting process to remove any traces of Developer \"%s\" (%s) which is %s in our list of devs to delete",
-					deletedDev.Developer.Username, deletedDev.Developer.ID, numbers.Ordinal(iter.I()+1),
+	if deletedDevelopers.Len() > 0 {
+		// Iterate over the deleted developers and remove their reference from each related Game. If the Game has no
+		// developers left after this modification, then we will delete that Game.
+		iter := deletedDevelopers.Iter()
+		for iter.Continue() {
+			deletedDev := iter.Key().(*models.TrendingDev)
+			log.INFO.Printf(
+				"Starting process to remove any traces of Developer %v which is %s in our list of devs to delete",
+				deletedDev, numbers.Ordinal(iter.I()+1),
+			)
+			gameIDs := slices.Comprehension(deletedDev.Games, func(idx int, value *models.Game, arr []*models.Game) uuid.UUID {
+				return value.ID
+			})
+
+			// Update the developers games to remove their username from the developers field
+			log.INFO.Printf(
+				"\tRemoving reference to \"%s\" from the developers field of %d Games for Developer %v",
+				deletedDev.Developer.Username, len(gameIDs), deletedDev,
+			)
+			if err = db.DB.Model(
+				&models.Game{},
+			).Where(
+				"id IN ?",
+				gameIDs,
+			).Update(
+				"developers",
+				gorm.Expr("array_remove(developers, ?)", deletedDev.Developer.Username),
+			).Error; err != nil {
+				log.ERROR.Printf(
+					"\tCould not remove \"%s\" from the developers field of all Games related to Developer %v: %v",
+					deletedDev.Developer.Username, deletedDev.Developer, err,
 				)
-				gameIDs := slices.Comprehension(deletedDev.Games, func(idx int, value *models.Game, arr []*models.Game) uuid.UUID {
-					return value.ID
-				})
+			}
 
-				// Update the developers games to remove their username from the developers field
-				log.INFO.Printf(
-					"\tRemoving reference to \"%s\" from the developers field of %d Games for Developer \"%s\" (%s)",
-					deletedDev.Developer.Username, len(gameIDs), deletedDev.Developer.Username, deletedDev.Developer.ID,
+			// Delete any Games that now have no referenced developers
+			deleteQuery := db.DB.Model(&models.Game{}).Where(
+				"id IN ? AND cardinality(developers) = 0",
+				gameIDs,
+			)
+
+			var toBeDeletedGames int64
+			if err = deleteQuery.Count(&toBeDeletedGames).Error; err != nil {
+				log.ERROR.Printf(
+					"\tCould not find the number of Games that have an empty developers field that are also related to "+
+						"Developer %v: %v",
+					deletedDev.Developer, deletedDev, err,
 				)
-				if err = db.DB.Model(
-					&models.Game{},
-				).Where(
-					"id IN ?",
-					gameIDs,
-				).Update(
-					"developers",
-					gorm.Expr("array_remove(developers, ?)", deletedDev.Developer.Username),
-				).Error; err != nil {
-					log.ERROR.Printf(
-						"\tCould not remove \"%s\" from the developers field of all Games related to Developer \"%s\" (%s): %v",
-						deletedDev.Developer.Username, deletedDev.Developer.Username, deletedDev.Developer.ID, err,
-					)
-				}
-
-				// Delete any Games that now have no referenced developers
-				deleteQuery := db.DB.Model(&models.Game{}).Where(
-					"id IN ? AND cardinality(developers) = 0",
-					gameIDs,
-				)
-
-				var toBeDeletedGames int64
-				if err = deleteQuery.Count(&toBeDeletedGames).Error; err != nil {
-					log.ERROR.Printf(
-						"\tCould not find the number of Games that have an empty developers field that are also related to "+
-							"Developer \"%s\" (%s): %v",
-						deletedDev.Developer.Username, deletedDev.Developer.ID, err,
-					)
-				}
-				log.INFO.Printf(
-					"\tDeleting %d/%d Games for Developer \"%s\" (%s) that now have an empty developers field",
-					toBeDeletedGames, len(gameIDs), deletedDev.Developer.Username, deletedDev.Developer.ID,
-				)
-
-				if deleteResult := deleteQuery.Delete(&models.Game{}); deleteResult.Error != nil {
-					log.ERROR.Printf(
-						"\tCould not delete %d Games for Developer \"%s\" (%s) that now have an empty developers field: %v",
-						toBeDeletedGames, deletedDev.Developer.Username, deletedDev.Developer.ID, err,
-					)
-				} else if toBeDeletedGames > 0 {
-					log.INFO.Printf(
-						"\tDeleted %d/%d Games for Developer \"%s\" (%s) that now have empty developers fields",
-						deleteResult.RowsAffected, toBeDeletedGames, deletedDev.Developer.Username, deletedDev.Developer.ID,
-					)
-				}
-
-				// Finally, delete this developer
-				if err = db.DB.Delete(deletedDev.Developer).Error; err != nil {
-					log.ERROR.Printf(
-						"Could not delete Developer \"%s\" (%s)",
-						deletedDev.Developer.Username, deletedDev.Developer.ID,
-					)
-				} else {
-					log.INFO.Printf("Deleted Developer \"%s\" (%s)", deletedDev.Developer.Username, deletedDev.Developer.ID)
-					actuallyDeletedDevs++
-				}
-				iter.Next()
 			}
 			log.INFO.Printf(
-				"Deleted %d/%d disabled developers that should have been deleted",
-				actuallyDeletedDevs, deletedDevelopers.Len(),
+				"\tDeleting %d/%d Games for Developer %v that now have an empty developers field",
+				toBeDeletedGames, len(gameIDs), deletedDev.Developer,
 			)
-		} else {
-			log.WARNING.Printf("There are no developers to delete...")
+
+			if deleteResult := deleteQuery.Delete(&models.Game{}); deleteResult.Error != nil {
+				log.ERROR.Printf(
+					"\tCould not delete %d Games for Developer %v that now have an empty developers field: %v",
+					toBeDeletedGames, deletedDev.Developer, err,
+				)
+			} else if toBeDeletedGames > 0 {
+				log.INFO.Printf(
+					"\tDeleted %d/%d Games for Developer %v that now have empty developers fields",
+					deleteResult.RowsAffected, toBeDeletedGames, deletedDev.Developer,
+				)
+			}
+
+			// Finally, delete this developer
+			if err = db.DB.Delete(deletedDev.Developer).Error; err != nil {
+				log.ERROR.Printf(
+					"Could not delete Developer %v",
+					deletedDev.Developer,
+				)
+			} else {
+				log.INFO.Printf("Deleted Developer %v", deletedDev.Developer)
+				actuallyDeletedDevs++
+			}
+			iter.Next()
 		}
+		log.INFO.Printf(
+			"Deleted %d/%d disabled developers that should have been deleted",
+			actuallyDeletedDevs, deletedDevelopers.Len(),
+		)
 	} else {
-		log.WARNING.Printf("Skipping deletion of %d developers as debug is set", deletedDevelopers.Len())
+		log.WARNING.Printf("There are no developers to delete...")
 	}
 	return
 }

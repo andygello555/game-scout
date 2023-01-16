@@ -5,7 +5,6 @@ import (
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
-	"github.com/andygello555/game-scout/email"
 	"github.com/andygello555/gotils/v2/numbers"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/pkg/errors"
@@ -103,15 +102,15 @@ func EnablePhase(state *ScoutState) (err error) {
 		for _, developer := range developerSample {
 			if !mapset.NewThreadUnsafeSet(developersToEnable.([]string)...).Contains(developer.ID) {
 				result := &trendFinderResult{
-					TrendingDev: &email.TrendingDev{
+					TrendingDev: &models.TrendingDev{
 						Developer: developer,
 					},
 				}
 
 				if result.Trend, err = developer.Trend(db.DB); err != nil {
 					log.WARNING.Printf(
-						"Could not find trend for \"%s\" (%s): %v, skipping...",
-						developer.Username, developer.ID, err,
+						"Could not find trend for Developer %v: %v, skipping...",
+						developer, err,
 					)
 					continue
 				}
@@ -133,10 +132,7 @@ func EnablePhase(state *ScoutState) (err error) {
 			} else {
 				// This should never happen, as the sample is sorted by weighted_score and offset and limit to create
 				// distinct batches.
-				log.WARNING.Printf(
-					"EnabledDevelopers already contains ID for Developer \"%s\" (%s)",
-					developer.Username, developer.ID,
-				)
+				log.WARNING.Printf("EnabledDevelopers already contains ID for Developer %v", developer)
 			}
 		}
 
@@ -152,8 +148,8 @@ func EnablePhase(state *ScoutState) (err error) {
 		for i := 0; i < developersNeeded; i++ {
 			developer := heap.Pop(&developerSortedSample).(*trendFinderResult)
 			log.INFO.Printf(
-				"Developer \"%s\" (%s) is placed %s out of %d developers in sample no. %d with coeff[1] = %.10f",
-				developer.Developer.Username, developer.Developer.ID, numbers.Ordinal(i+1), developersNeeded, sample+1,
+				"Developer %v is placed %s out of %d developers in sample no. %d with coeff[1] = %.10f",
+				developer.Developer, numbers.Ordinal(i+1), developersNeeded, sample+1,
 				developer.Trend.GetCoeffs()[1],
 			)
 			state.GetCachedField(StateType).SetOrAdd("EnabledDevelopers", developer.Developer.ID)

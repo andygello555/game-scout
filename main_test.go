@@ -9,7 +9,6 @@ import (
 	"github.com/andygello555/game-scout/browser"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
-	"github.com/andygello555/game-scout/email"
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	"github.com/andygello555/gotils/v2/numbers"
 	"github.com/andygello555/gotils/v2/slices"
@@ -345,7 +344,7 @@ func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelop
 					developer.Username, g,
 				)),
 				Developers:                 []string{developer.Username},
-				VerifiedDeveloperUsernames: []string{developer.Username},
+				VerifiedDeveloperUsernames: []string{},
 				ReleaseDate:                null.TimeFromPtr(nil),
 				Publisher:                  null.StringFromPtr(nil),
 				TotalReviews:               null.Int32From(0),
@@ -380,7 +379,7 @@ func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelop
 			Quotes:            0,
 		}
 		if testing.Verbose() {
-			fmt.Printf("Created developer: \"%s\" (%s). Creating %d snapshots for it:\n", developer.Username, developer.ID, snaps)
+			fmt.Printf("Created Developer %v. Creating %d snapshots for it:\n", developer, snaps)
 			fmt.Printf("MaxTweetTimeRange = %f, MaxAverageDurationBetweenTweets = %f\n", maxTweetTimeRange, maxAverageDurationBetweenTweets)
 		}
 		for snap := 1; snap <= snaps; snap++ {
@@ -611,7 +610,7 @@ func TestDeletePhase(t *testing.T) {
 	// Check if the number of games for each deleted dev is 0, and if the related SteamApp has no developer referenced
 	iter := state.GetIterableCachedField(DeletedDevelopersType).Iter()
 	for iter.Continue() {
-		deletedDev := iter.Key().(*email.TrendingDev)
+		deletedDev := iter.Key().(*models.TrendingDev)
 		var gamesForDev int64
 		if err = db.DB.Model(
 			&models.Game{},
@@ -681,7 +680,7 @@ func ExampleStateLoadOrCreate() {
 	state.GetCachedField(UserTweetTimesType).SetOrAdd("1234", time.Now().UTC(), "12345", time.Now().UTC())
 	state.GetCachedField(DeveloperSnapshotsType).SetOrAdd("1234", &models.DeveloperSnapshot{DeveloperID: "1234"})
 	state.GetCachedField(GameIDsType).SetOrAdd(uuid.New(), uuid.New(), uuid.New())
-	state.GetCachedField(DeletedDevelopersType).SetOrAdd(&email.TrendingDev{
+	state.GetCachedField(DeletedDevelopersType).SetOrAdd(&models.TrendingDev{
 		Developer: &models.Developer{
 			ID:       "1234",
 			Name:     "Deleted developer 1",
@@ -715,9 +714,9 @@ func ExampleStateLoadOrCreate() {
 	fmt.Println("gameIDs:", state.GetIterableCachedField(GameIDsType).Len())
 	fmt.Println("deletedDevelopers:", state.GetIterableCachedField(DeletedDevelopersType).Len())
 	deletedDeveloperOne, _ := state.GetIterableCachedField(DeletedDevelopersType).Get(0)
-	fmt.Println("deletedDevelopers[0].Developer.ID:", deletedDeveloperOne.(*email.TrendingDev).Developer.ID)
-	fmt.Println("deletedDevelopers[0].Snapshots:", len(deletedDeveloperOne.(*email.TrendingDev).Snapshots))
-	fmt.Println("deletedDevelopers[0].Games:", len(deletedDeveloperOne.(*email.TrendingDev).Games))
+	fmt.Println("deletedDevelopers[0].Developer.ID:", deletedDeveloperOne.(*models.TrendingDev).Developer.ID)
+	fmt.Println("deletedDevelopers[0].Snapshots:", len(deletedDeveloperOne.(*models.TrendingDev).Snapshots))
+	fmt.Println("deletedDevelopers[0].Games:", len(deletedDeveloperOne.(*models.TrendingDev).Games))
 	phase, _ := state.GetCachedField(StateType).Get("Phase")
 	fmt.Println("phase:", phase)
 	state.Delete()

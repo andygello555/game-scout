@@ -235,6 +235,10 @@ func (gf gameWeightedField) Fields() []WeightedField {
 	}
 }
 
+func (g *Game) String() string {
+	return fmt.Sprintf("%s Game \"%s\"", g.Storefront.String(), g.Website.String)
+}
+
 // CheckCalculateWeightedScore checks if we can calculate the WeightedScore for this Game. This is dependent on the
 // Website field being set and the Storefront not being UnknownStorefront.
 func (g *Game) CheckCalculateWeightedScore() bool {

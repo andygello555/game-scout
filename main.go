@@ -665,8 +665,8 @@ func main() {
 			Usage: "subcommand for viewing resources related to a developer in the DB",
 			Action: func(c *cli.Context) (err error) {
 				measureContext := email.MeasureContext{
-					TrendingDevs:           make([]*email.TrendingDev, len(c.StringSlice("id"))),
-					DevelopersBeingDeleted: make([]*email.TrendingDev, len(c.StringSlice("id"))),
+					TrendingDevs:           make([]*models.TrendingDev, len(c.StringSlice("id"))),
+					DevelopersBeingDeleted: make([]*models.TrendingDev, len(c.StringSlice("id"))),
 					Config:                 globalConfig.Email,
 				}
 
@@ -695,10 +695,7 @@ func main() {
 							return cli.NewExitError(err.Error(), 1)
 						}
 
-						fmt.Printf(
-							"\tDeveloper %s (%s), has %d games:\n",
-							developer.Username, developer.ID, len(games),
-						)
+						fmt.Printf("\tDeveloper %v, has %d games:\n", developer, len(games))
 						if len(games) > 0 {
 							for i, game := range games {
 								fmt.Printf("\t\t%d) %v\n", i+1, game)
@@ -748,38 +745,11 @@ func main() {
 						); err != nil {
 							return cli.NewExitError(err.Error(), 1)
 						}
-						fmt.Printf(
-							"\tCoefficients for the trend of Developer %s (%s): %v\n",
-							developer.Username, developer.ID, trend.GetCoeffs(),
-						)
-					}
-
-					trendingDev := func() (*email.TrendingDev, error) {
-						var games []*models.Game
-						if games, err = developer.Games(db.DB); err != nil {
-							return nil, cli.NewExitError(err.Error(), 1)
-						}
-
-						var snapshots []*models.DeveloperSnapshot
-						if snapshots, err = developer.DeveloperSnapshots(db.DB); err != nil {
-							return nil, cli.NewExitError(err.Error(), 1)
-						}
-
-						var trend *models.Trend
-						if trend, err = developer.Trend(db.DB); err != nil {
-							return nil, cli.NewExitError(err.Error(), 1)
-						}
-
-						return &email.TrendingDev{
-							Developer: &developer,
-							Snapshots: snapshots,
-							Games:     games,
-							Trend:     trend,
-						}, nil
+						fmt.Printf("\tCoefficients for the trend of Developer %v: %v\n", developer, trend.GetCoeffs())
 					}
 
 					if c.Bool("measure") || c.Bool("measureDelete") || c.Bool("deletedDevelopers") {
-						if measureContext.TrendingDevs[developerNo], err = trendingDev(); err != nil {
+						if measureContext.TrendingDevs[developerNo], err = developer.TrendingDev(db.DB); err != nil {
 							return err
 						}
 

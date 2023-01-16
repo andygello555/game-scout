@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/db/models"
-	"github.com/andygello555/game-scout/email"
 	myErrors "github.com/andygello555/game-scout/errors"
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	"github.com/andygello555/gotils/v2/slices"
@@ -467,7 +466,7 @@ func (ids *GameIDs) Merge(field CachedField) {
 	ids.Set = ids.Union(field.(*GameIDs).Set)
 }
 
-type DeletedDevelopers []*email.TrendingDev
+type DeletedDevelopers []*models.TrendingDev
 
 func (d *DeletedDevelopers) BaseDir() string { return "deletedDevelopers" }
 
@@ -484,7 +483,7 @@ func (d *DeletedDevelopers) Serialise(pathsToBytes *PathsToBytes) (err error) {
 			d.Len(),
 			strings.Join(strings.Split(strings.Trim(fmt.Sprintf(
 				"%v",
-				slices.Comprehension(*d, func(idx int, value *email.TrendingDev, arr []*email.TrendingDev) string {
+				slices.Comprehension(*d, func(idx int, value *models.TrendingDev, arr []*models.TrendingDev) string {
 					return value.Developer.ID
 				})), "[]"), " "), ", ",
 			),
@@ -517,7 +516,7 @@ func (d *DeletedDevelopers) Serialise(pathsToBytes *PathsToBytes) (err error) {
 			var data bytes.Buffer
 			enc := gob.NewEncoder(&data)
 			if err = enc.Encode(field.value); err != nil {
-				err = errors.Wrapf(err, "could not encode %s for deleted developer %s (%s)", field.name, developer.Username, developer.ID)
+				err = errors.Wrapf(err, "could not encode %s for deleted Developer %v", field.name, developer)
 				return
 			}
 			pathsToBytes.AddFilenameBytes(d.Path(developer.ID, field.name), data.Bytes())
@@ -539,7 +538,7 @@ func deletedDevelopersDecodeValue[T interface {
 
 func (d *DeletedDevelopers) Deserialise(pathsToBytes *PathsToBytes) (err error) {
 	dFtb := pathsToBytes.BytesForDirectory(d.BaseDir())
-	deletedDeveloperMap := make(map[string]*email.TrendingDev)
+	deletedDeveloperMap := make(map[string]*models.TrendingDev)
 	for filename, data := range dFtb.inner {
 		base := filepath.Base(filename)
 		if base != "meta.json" {
@@ -548,7 +547,7 @@ func (d *DeletedDevelopers) Deserialise(pathsToBytes *PathsToBytes) (err error) 
 			developerID, fieldName := fileComponents[0], fileComponents[1]
 
 			if _, ok := deletedDeveloperMap[developerID]; !ok {
-				deletedDeveloperMap[developerID] = &email.TrendingDev{}
+				deletedDeveloperMap[developerID] = &models.TrendingDev{}
 			}
 			deletedDeveloper := deletedDeveloperMap[developerID]
 
@@ -589,8 +588,33 @@ func (d *DeletedDevelopers) Deserialise(pathsToBytes *PathsToBytes) (err error) 
 }
 
 func (d *DeletedDevelopers) SetOrAdd(args ...any) {
+	// DeletedDevelopers should act as a set, so we will check if each arg doesn't already exist in DeletedDevelopers
 	for _, arg := range args {
-		*d = append(*d, arg.(*email.TrendingDev))
+		found := false
+		toBeDeletedDeveloper := arg.(*models.TrendingDev)
+		for _, deletedDeveloper := range *d {
+			if deletedDeveloper.Developer.ID == toBeDeletedDeveloper.Developer.ID {
+				found = true
+				// If Games, Snapshots, or Trend is not set in the currently existing reference to the deleted developer,
+				// but they do exist in the deleted developer that is being added. We will set those fields.
+				if deletedDeveloper.Games == nil && toBeDeletedDeveloper.Games != nil {
+					deletedDeveloper.Games = toBeDeletedDeveloper.Games
+				}
+
+				if deletedDeveloper.Snapshots == nil && toBeDeletedDeveloper.Snapshots != nil {
+					deletedDeveloper.Snapshots = toBeDeletedDeveloper.Snapshots
+				}
+
+				if deletedDeveloper.Trend == nil && toBeDeletedDeveloper.Trend != nil {
+					deletedDeveloper.Trend = toBeDeletedDeveloper.Trend
+				}
+				break
+			}
+		}
+
+		if !found {
+			*d = append(*d, arg.(*models.TrendingDev))
+		}
 	}
 }
 

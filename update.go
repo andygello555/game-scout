@@ -27,38 +27,33 @@ func UpdateDeveloper(
 	gameScrapers *models.StorefrontScrapers[string],
 	state *ScoutState,
 ) (gameIDs mapset.Set[uuid.UUID], err error) {
-	log.INFO.Printf("Updating info for developer %s (%s)", developer.Username, developer.ID)
+	log.INFO.Printf("Updating info for Developer %v", developer)
 	var developerSnap *models.DeveloperSnapshot
 	if developerSnap, err = developer.LatestDeveloperSnapshot(db.DB); err != nil {
-		log.WARNING.Printf(
-			"Could not get latest DeveloperSnapshot for %s (%s) in UpdateDeveloper",
-			developer.Username, developer.ID,
-		)
+		log.WARNING.Printf("Could not get latest DeveloperSnapshot for Developer %v in UpdateDeveloper", developer)
 		return gameIDs, myErrors.TemporaryWrapf(
 			true, err, "could not get latest DeveloperSnapshot for %s in UpdateDeveloper",
 			developer.ID,
 		)
 	}
 	if developerSnap == nil {
-		log.WARNING.Printf("Could not get latest DeveloperSnapshot for %s (%s)", developer.Username, developer.ID)
+		log.WARNING.Printf("Could not get latest DeveloperSnapshot for Developer %v", developer)
 		return gameIDs, myErrors.TemporaryErrorf(
 			true,
 			"could not get latest DeveloperSnapshot for %s as there are no DeveloperSnapshots for it",
 			developer.ID,
 		)
 	}
-	log.INFO.Printf("Developer %s (%s) latest DeveloperSnapshot is version %d and was created on %s", developer.Username, developer.ID, developerSnap.Version, developerSnap.CreatedAt.String())
+	log.INFO.Printf("Developer %v latest DeveloperSnapshot is version %d and was created on %s", developer, developerSnap.Version, developerSnap.CreatedAt.String())
 
 	// First we update the user's games that exist in the DB
 	var games []*models.Game
 	gameIDs = mapset.NewThreadUnsafeSet[uuid.UUID]()
 	if games, err = developer.Games(db.DB); err != nil {
-		log.WARNING.Printf("Could not find any games for %s (%s)", developer.Username, developer.ID)
-		return gameIDs, myErrors.TemporaryWrapf(
-			true, err, "could not find Games for Developer %s (%s)", developer.Username, developer.ID,
-		)
+		log.WARNING.Printf("Could not find any Games for Developer %v", developer)
+		return gameIDs, myErrors.TemporaryWrapf(true, err, "could not find Games for Developer %v", developer)
 	}
-	log.INFO.Printf("Developer %s (%s) has %d game(s)", developer.Username, developer.ID, len(games))
+	log.INFO.Printf("Developer %v has %d game(s)", developer, len(games))
 
 	// Update all the games. We just start a new goroutine for each game, so we don't block this goroutine and can
 	// continue onto fetching the set of tweets.
@@ -66,14 +61,14 @@ func UpdateDeveloper(
 		gameIDs.Add(game.ID)
 		go func(game *models.Game) {
 			log.INFO.Printf(
-				"Queued update for Game \"%s\" (%s) for Developer %s (%s)",
-				game.Name.String, game.ID.String(), developer.Username, developer.ID,
+				"Queued update for Game \"%s\" (%s) for Developer %v",
+				game.Name.String, game.ID.String(), developer,
 			)
 			if gameChannel, ok := gameScrapers.Add(true, game, nil); ok {
 				<-gameChannel
 				log.INFO.Printf(
-					"Updated Game \"%s\" (%s) for Developer %s (%s)",
-					game.Name.String, game.ID.String(), developer.Username, developer.ID,
+					"Updated Game \"%s\" (%s) for Developer %v",
+					game.Name.String, game.ID.String(), developer,
 				)
 			}
 		}(game)
@@ -84,10 +79,7 @@ func UpdateDeveloper(
 	// If the startTime is before the last seven days then we will clamp it to seven days ago.
 	// Note: This is because RecentSearch can only look through the past 7 days of tweets.
 	if startTime.Before(sevenDaysAgo) {
-		log.WARNING.Printf(
-			"Clamping startTime for Developer %s (%s) to %s",
-			developer.Username, developer.ID, sevenDaysAgo.Format(time.RFC3339),
-		)
+		log.WARNING.Printf("Clamping startTime for Developer %v to %s", developer, sevenDaysAgo.Format(time.RFC3339))
 		startTime = sevenDaysAgo
 	}
 
@@ -129,18 +121,18 @@ func UpdateDeveloper(
 
 	// Then we make the request for totalTweets from RecentSearch
 	log.INFO.Printf(
-		"Making RecentSearch request for %d tweets from %s for Developer %s (%s)",
-		totalTweets, opts.StartTime.Format(time.RFC3339), developer.Username, developer.ID,
+		"Making RecentSearch request for %d tweets from %s for Developer %v",
+		totalTweets, opts.StartTime.Format(time.RFC3339), developer,
 	)
 	var result myTwitter.BindingResult
 	if result, err = myTwitter.Client.ExecuteBinding(myTwitter.RecentSearch, &myTwitter.BindingOptions{Total: totalTweets}, query, opts); err != nil {
 		log.ERROR.Printf(
-			"Could not fetch %d tweets for developer %s (%s) after %s: %s",
-			totalTweets, developer.Username, developer.ID, opts.StartTime.Format(time.RFC3339), err.Error(),
+			"Could not fetch %d tweets for Developer %v after %s: %s",
+			totalTweets, developer, opts.StartTime.Format(time.RFC3339), err.Error(),
 		)
 		return gameIDs, errors.Wrapf(
-			err, "could not fetch %d tweets for developer %s (%s) after %s",
-			totalTweets, developer.Username, developer.ID, opts.StartTime.Format(time.RFC3339),
+			err, "could not fetch %d tweets for Developer %v after %s",
+			totalTweets, developer, opts.StartTime.Format(time.RFC3339),
 		)
 	}
 
@@ -148,8 +140,8 @@ func UpdateDeveloper(
 	tweetRaw := result.Raw().(*twitter.TweetRaw)
 
 	log.INFO.Printf(
-		"Executing DiscoveryBatch for batch of %d tweets for developer %s (%s)",
-		len(tweetRaw.TweetDictionaries()), developer.Username, developer.ID,
+		"Executing DiscoveryBatch for batch of %d tweets for Developer %v",
+		len(tweetRaw.TweetDictionaries()), developer,
 	)
 	// Run DiscoveryBatch for this batch of tweet dictionaries
 	var subGameIDs mapset.Set[uuid.UUID]
@@ -158,8 +150,8 @@ func UpdateDeveloper(
 	); err != nil && !myErrors.IsTemporary(err) {
 		log.FATAL.Printf("Error returned by DiscoveryBatch is not temporary: %s. We have to stop :(", err.Error())
 		return gameIDs, myErrors.TemporaryWrapf(
-			false, err, "could not execute DiscoveryBatch for tweets fetched for Developer %s (%s)",
-			developer.Username, developer.ID,
+			false, err, "could not execute DiscoveryBatch for tweets fetched for Developer %v",
+			developer,
 		)
 	}
 	// MergeIterableCachedFields the gameIDs from DiscoveryBatch back into the local gameIDs
@@ -344,7 +336,7 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 			slicedUnscrapedDevelopers := unscrapedDevelopers[low:high]
 			currentBatchQueue := 0
 			for d, developer := range slicedUnscrapedDevelopers {
-				log.INFO.Printf("Queued update for Developer no. %d: %s (%s)", d, developer.Username, developer.ID)
+				log.INFO.Printf("Queued update for Developer no. %d: %v", d, developer)
 				jobs <- &updateDeveloperJob{
 					developerNo: d,
 					developer:   developer,
@@ -515,8 +507,8 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 				if result.error != nil && !myErrors.IsTemporary(result.error) {
 					finishedJobs <- result.developerNo
 					log.ERROR.Printf(
-						"Permanent error in result for %s (%s) contains an error: %s",
-						result.developer.Username, result.developer.ID, result.error.Error(),
+						"Permanent error in result for Developer %v contains an error: %s",
+						result.developer, result.error.Error(),
 					)
 					consumerErr = myErrors.MergeErrors(consumerErr, errors.Wrapf(
 						result.error,
@@ -526,24 +518,18 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 					return
 				} else if result.error != nil {
 					finishedJobs <- result.developerNo
-					log.ERROR.Printf(
-						"UpdateDeveloper result for %s (%s) contains an error: %s",
-						result.developer.Username, result.developer.ID, result.error.Error(),
-					)
+					log.ERROR.Printf("UpdateDeveloper result for %v contains an error: %s", result.developer, result.error.Error())
 					continue
 				} else {
-					log.INFO.Printf(
-						"Got UpdateDeveloper result for %s (%s)",
-						result.developer.Username, result.developer.ID,
-					)
+					log.INFO.Printf("Got UpdateDeveloper result for Developer %v", result.developer)
 				}
 
 				// MergeIterableCachedFields the gameIDs, userTweetTimes, and developerSnapshots from the result into
 				// the main state.
 				log.INFO.Printf(
-					"Merging gameIDs, userTweetTimes, and developerSnapshots from the result for %s (%s), back into "+
+					"Merging gameIDs, userTweetTimes, and developerSnapshots from the result for Developer %v, back into "+
 						"the main ScoutState",
-					result.developer.Username, result.developer.ID,
+					result.developer,
 				)
 				state.MergeIterableCachedFields(result.tempState)
 
