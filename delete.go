@@ -31,6 +31,28 @@ import (
 // The deleted developers are stored within the DeletedDevelopers cached field of the given ScoutState, along with all
 // their snapshots and games, so that they can be mentioned in the Measure Phase.
 func DeletePhase(state *ScoutState) (err error) {
+	// First we find the total number of disabled developers and how many of those need to be deleted
+	var totalDisabledDevelopers int64
+	if err = db.DB.Model(&models.Developer{}).Where("disabled").Count(&totalDisabledDevelopers).Error; err != nil {
+		return myErrors.TemporaryWrap(false, err, "could not find the total number of disabled developers")
+	}
+	developersToDelete := int(math.Floor(float64(totalDisabledDevelopers) * percentageOfDisabledDevelopersToDelete))
+
+	// We also set the developersToGo variable so that it won't be skewed by the number of stale developers. This will
+	// also subtract the number of existing deleted developers in the cache.
+	// NOTE: Because the deleted developers also stores the stale developers, if a previous scrape exits after finding
+	//       the stale developers, the developersToGo of the next run will be the developersToDelete minus the number of
+	//       staleDevelopers found in the previous run.
+	developersToGo := developersToDelete
+	if state.GetIterableCachedField(DeletedDevelopersType).Len() > 0 {
+		developersToGo -= state.GetIterableCachedField(DeletedDevelopersType).Len()
+		log.WARNING.Printf(
+			"ScoutState contains a non-empty DeletedDevelopers list. There are %d DeletedDevelopers already, so "+
+				"there are %d developers still left to delete...",
+			state.GetIterableCachedField(DeletedDevelopersType).Len(), developersToGo,
+		)
+	}
+
 	// We only select developers that have 0 verified games
 	whereZeroVerified := db.DB.Model(&models.Game{}).Select(
 		"COUNT(*)",
@@ -104,12 +126,6 @@ func DeletePhase(state *ScoutState) (err error) {
 	}
 	log.INFO.Printf("Finished adding %d/%d stale Developers to DeletedDevelopers", added, len(staleDevelopers))
 
-	var totalDisabledDevelopers int64
-	if err = db.DB.Model(&models.Developer{}).Where("disabled").Count(&totalDisabledDevelopers).Error; err != nil {
-		return myErrors.TemporaryWrap(false, err, "could not find the total number of disabled developers")
-	}
-
-	developersToDelete := int(math.Floor(float64(totalDisabledDevelopers) * percentageOfDisabledDevelopersToDelete))
 	log.INFO.Printf(
 		"There are %d total disabled developers in the DB, we have to delete %.1f%% of those, which is %d",
 		totalDisabledDevelopers, percentageOfDisabledDevelopersToDelete*100, developersToDelete,
@@ -156,18 +172,8 @@ func DeletePhase(state *ScoutState) (err error) {
 		log.INFO.Printf("Total disabled developers to sample from: %d", totalCount)
 	}
 
-	developersToGo := developersToDelete
 	offset := 0
 	sample := 0
-	if state.GetIterableCachedField(DeletedDevelopersType).Len() > 0 {
-		developersToGo -= state.GetIterableCachedField(DeletedDevelopersType).Len()
-		log.WARNING.Printf(
-			"ScoutState contains a non-empty DeletedDevelopers list. There are %d DeletedDevelopers already, so "+
-				"there are %d developers still left to delete...",
-			state.GetIterableCachedField(DeletedDevelopersType).Len(), developersToGo,
-		)
-	}
-
 	for developersToGo > 0 {
 		log.INFO.Printf(
 			"There are %d developers to find that should be deleted. We have found %d developers to delete. "+
@@ -241,7 +247,7 @@ func DeletePhase(state *ScoutState) (err error) {
 			developer := heap.Pop(&developerSortedSample).(*trendFinderResult)
 			log.INFO.Printf(
 				"Developer %v is placed %s out of %d developers in sample no. %d with coeff[1] = %.10f",
-				developer, numbers.Ordinal(i+1), developersNeeded, sample+1, developer.Trend.GetCoeffs()[1],
+				developer.Developer, numbers.Ordinal(i+1), developersNeeded, sample+1, developer.Trend.GetCoeffs()[1],
 			)
 			state.GetIterableCachedField(DeletedDevelopersType).SetOrAdd(developer.TrendingDev)
 		}
@@ -263,7 +269,7 @@ func DeletePhase(state *ScoutState) (err error) {
 			deletedDev := iter.Key().(*models.TrendingDev)
 			log.INFO.Printf(
 				"Starting process to remove any traces of Developer %v which is %s in our list of devs to delete",
-				deletedDev, numbers.Ordinal(iter.I()+1),
+				deletedDev.Developer, numbers.Ordinal(iter.I()+1),
 			)
 			gameIDs := slices.Comprehension(deletedDev.Games, func(idx int, value *models.Game, arr []*models.Game) uuid.UUID {
 				return value.ID
@@ -272,7 +278,7 @@ func DeletePhase(state *ScoutState) (err error) {
 			// Update the developers games to remove their username from the developers field
 			log.INFO.Printf(
 				"\tRemoving reference to \"%s\" from the developers field of %d Games for Developer %v",
-				deletedDev.Developer.Username, len(gameIDs), deletedDev,
+				deletedDev.Developer.Username, len(gameIDs), deletedDev.Developer,
 			)
 			if err = db.DB.Model(
 				&models.Game{},
@@ -300,7 +306,7 @@ func DeletePhase(state *ScoutState) (err error) {
 				log.ERROR.Printf(
 					"\tCould not find the number of Games that have an empty developers field that are also related to "+
 						"Developer %v: %v",
-					deletedDev.Developer, deletedDev, err,
+					deletedDev.Developer, err,
 				)
 			}
 			log.INFO.Printf(

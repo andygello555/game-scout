@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"time"
 	"unicode"
 )
@@ -54,6 +55,9 @@ func (m *MeasureContext) Template() *Template { return m.Path().Template() }
 func (m *MeasureContext) HTML() *Template     { return m.Template().HTML(m) }
 func (m *MeasureContext) Funcs() template.FuncMap {
 	return map[string]any{
+		"intRange": func(start, end, step int) []int {
+			return numbers.Range(start, end, step)
+		},
 		"contains": func(set []string, elem string) bool {
 			return mapset.NewThreadUnsafeSet(set...).Contains(elem)
 		},
@@ -85,6 +89,12 @@ func (m *MeasureContext) Funcs() template.FuncMap {
 		"inc": func(i int) int {
 			return i + 1
 		},
+		"dec": func(i int) int {
+			return i - 1
+		},
+		"div": func(a, b int) int {
+			return a / b
+		},
 		"ord": func(num int) string {
 			return numbers.OrdinalOnly(num)
 		},
@@ -103,6 +113,26 @@ func (m *MeasureContext) Funcs() template.FuncMap {
 		},
 		"lastIndex": func(a any) int {
 			return reflect.ValueOf(a).Len() - 1
+		},
+		"trunc": func(s string, max int) string {
+			lastSpaceIx := -1
+			sLen := 0
+			for i, r := range s {
+				if unicode.IsSpace(r) {
+					lastSpaceIx = i
+				}
+				sLen++
+				if sLen >= max {
+					if lastSpaceIx != -1 {
+						return s[:lastSpaceIx] + "..."
+					}
+					// If here, string is longer than max, but has no spaces
+				}
+			}
+			return s
+		},
+		"float": func(f float64) string {
+			return strconv.FormatFloat(f, 'G', 12, 64)
 		},
 	}
 }

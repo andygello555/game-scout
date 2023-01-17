@@ -90,23 +90,20 @@
         }
 
         .left-right {
-            display: -webkit-flex;
             display: -webkit-box;
             display: flex;
+
             -webkit-box-pack: justify;
-            -webkit-justify-content: space-between;
             justify-content: space-between;
-            -webkit-align-items: center;
+
+            -webkit-box-align: center;
             align-items: center;
+
             width: 100%;
         }
 
-        /*.left-right div:first-child {*/
-        /*    inline-size: max-content;*/
-        /*}*/
-
         .left-right div:last-child {
-            margin-left: auto;
+            text-align: right;
         }
 
         .link-button:link, .link-button:visited {
@@ -132,7 +129,7 @@
         /* Remove extra left and right margins, due to padding in columns */
         .row {
             margin: 0 -5px 5px;
-            width: 95%;
+            width: 99%;
         }
 
         /* Clear floats after the columns */
@@ -148,6 +145,7 @@
             padding: 8px;
             text-align: left;
             background-color: #f1f1f1;
+            border-radius: 10px;
         }
 
         #toc_container {
@@ -193,9 +191,6 @@
             position: relative;
         }
         
-        .highlight-container {
-            /*display: inline-block;*/
-        }
         .highlight-container::before {
             content: " ";
             display: block;
@@ -209,6 +204,47 @@
             left: -1px;
             border-radius: 20px;
             padding: 10px 3px 3px 10px;
+        }
+
+        .styled-table {
+            border-radius: 10px 10px 10px 10px;
+            border-collapse: collapse;
+            font-size: 0.9em;
+            font-family: sans-serif;
+            background: white;
+            width: 100%;
+        }
+
+        .styled-table thead tr {
+            background-color: #E2F45B;
+            color: black;
+            text-align: left;
+        }
+
+        .styled-table th,
+        .styled-table td {
+            padding: 12px 15px;
+            word-break: break-word;
+        }
+
+        .styled-table th:first-of-type {
+            border-top-left-radius: 10px;
+        }
+
+        .styled-table th:last-of-type {
+            border-top-right-radius: 10px;
+        }
+
+        .styled-table tr:last-of-type td:first-of-type {
+            border-bottom-left-radius: 10px;
+        }
+
+        .styled-table tr:last-of-type td:last-of-type {
+            border-bottom-right-radius: 10px;
+        }
+
+        .styled-table tbody tr:nth-of-type(even) {
+            background-color: #f3f3f3;
         }
     </style>
 </head>
@@ -249,13 +285,13 @@
                                                         <li>
                                                             {{ $developer := .Developer }}
                                                             <a href="#dev_{{ $developer.Username }}">
-                                                                <span class="highlight-container"><span class="highlight">@{{ $developer.Username }}</span></span>
+                                                                <span class="highlight-container"><span class="highlight"><strong>@{{ $developer.Username }}</strong></span></span>
                                                             </a>
                                                             {{ if gt (len .Games) 0 }}
                                                             <ol>
                                                                 {{ range .Games }}
                                                                 <li><a href="#dev_{{ $developer.Username }}_game_{{ .ID }}">
-                                                                    <span class="highlight-container"><span class="highlight">{{ if .Name.IsValid }}"{{ .Name.String }}"{{ else }}{{ .Website.String }}{{ end }}: {{ .Storefront.String }} game for @{{ $developer.Username }}</span></span>
+                                                                    <span class="highlight-container"><span class="highlight">{{ if .Name.IsValid }}<strong>"{{ .Name.String }}"</strong>{{ else }}{{ .Website.String }}{{ end }}: {{ .Storefront.String }} game for @{{ $developer.Username }}</span></span>
                                                                 </a></li>
                                                                 {{ end }}
                                                             </ol>
@@ -273,7 +309,7 @@
                                                     <ol>
                                                         {{ range .TopSteamApps }}
                                                         <li><a href="#steamApp_{{ .ID }}">
-                                                            <span class="highlight-container"><span class="highlight">{{ .Name }} ({{ .ID }})</span></span>
+                                                            <span class="highlight-container"><span class="highlight"><strong>{{ .Name }}</strong> ({{ .ID }})</span></span>
                                                         </a></li>
                                                         {{ end }}
                                                     </ol>
@@ -285,10 +321,27 @@
                                                         <span class="highlight-container"><span class="highlight">Last chance saloon</span></span>
                                                     </a>
                                                     <ol>
-                                                        {{ range .DevelopersBeingDeleted }}
-                                                        <li><a href="#deleted_dev_{{ .Developer.ID }}">
-                                                            <span class="highlight-container"><span class="highlight">@{{ .Developer.Username }}</span></span>
-                                                        </a></li>
+                                                        {{ $deletedDevelopers := .DevelopersBeingDeleted }}
+                                                        {{ $deletedDevelopersNo := len .DevelopersBeingDeleted }}
+                                                        {{ $ranges := intRange 0 $deletedDevelopersNo 100 }}
+                                                        {{ $lenRanges := len $ranges }}
+                                                        {{ if gt $deletedDevelopersNo 1 }}
+                                                            {{ range $i, $start := $ranges }}
+                                                                {{ $start := inc $start }}
+                                                                {{ $end := $deletedDevelopersNo }}
+                                                                {{ if lt $i (dec $lenRanges) }}
+                                                                    {{ $end = index $ranges (inc $i) }}
+                                                                {{ else if gt $lenRanges 1 }}
+                                                                    {{ break }}
+                                                                {{ end }}
+                                                                <li><a href="#deleted_devs_{{ $start }}_to_{{ $end }}">
+                                                                    <span class="highlight-container"><span class="highlight">Deleted developers <strong>{{ $start }}&hellip;{{ $end }}</strong></span></span>
+                                                                </a></li>
+                                                            {{ end }}
+                                                        {{ else }}
+                                                            <li><a href="#deleted_devs_1_to_1">
+                                                                <span class="highlight-container"><span class="highlight">Deleted developer <strong>@{{ (index $deletedDevelopers 0).Developer.Username }}</strong></span></span>
+                                                            </a></li>
                                                         {{ end }}
                                                     </ol>
                                                 </li>
@@ -343,8 +396,17 @@
                                                                 <div class="row">
                                                                     <div class="column">
                                                                         <div class="card left-right">
-                                                                            <div>Number of tweets captured</div>
-                                                                            <div><strong>{{ $firstSnapshot.Tweets }}</strong></div>
+                                                                            <div style="flex-basis: fit-content">Tweets captured</div>
+                                                                            <div style="flex-basis: fit-content">
+                                                                                {{ if gt (len $firstSnapshot.TweetIDs) 0 }}
+                                                                                    {{ range $tweetNo, $tweet := $firstSnapshot.TweetIDs }}
+                                                                                        <a href="https://twitter.com/anyuser/status/{{ $tweet }}">Tweet {{ inc $tweetNo }}{{ if lt $tweetNo (dec (len $firstSnapshot.TweetIDs)) }},{{ end }}</a>
+                                                                                    {{ end }}
+                                                                                    <strong>{{ len $firstSnapshot.TweetIDs }} total</strong>
+                                                                                {{ else }}
+                                                                                    <strong>{{ $firstSnapshot.Tweets }} total</strong>
+                                                                                {{ end }}
+                                                                            </div>
                                                                         </div>
                                                                     </div>
                                                                 </div>
@@ -380,7 +442,7 @@
                                                                     <div class="column">
                                                                         <div class="card left-right">
                                                                             <div>Total weighted score for each game</div>
-                                                                            <div><strong>{{ $firstSnapshot.GameWeightedScoresSum }}</strong></div>
+                                                                            <div><strong>{{ float $firstSnapshot.GameWeightedScoresSum }}</strong></div>
                                                                         </div>
                                                                     </div>
                                                                 </div>
@@ -388,7 +450,7 @@
                                                                     <div class="column">
                                                                         <div class="card left-right">
                                                                             <div>Weighted score for this snapshot</div>
-                                                                            <div><strong>{{ $firstSnapshot.WeightedScore }}</strong></div>
+                                                                            <div><strong>{{ float $firstSnapshot.WeightedScore }}</strong></div>
                                                                         </div>
                                                                     </div>
                                                                 </div>
@@ -411,8 +473,17 @@
                                                                 <div class="row">
                                                                     <div class="column">
                                                                         <div class="card left-right">
-                                                                            <div>Number of tweets captured</div>
-                                                                            <div><strong>{{ $lastSnapshot.Tweets }}</strong></div>
+                                                                            <div style="flex-basis: fit-content">Tweets captured</div>
+                                                                            <div style="flex-basis: fit-content">
+                                                                                {{ if gt (len $lastSnapshot.TweetIDs) 0 }}
+                                                                                    {{ range $tweetNo, $tweet := $lastSnapshot.TweetIDs }}
+                                                                                        <a href="https://twitter.com/anyuser/status/{{ $tweet }}">Tweet {{ inc $tweetNo }}{{ if lt $tweetNo (dec (len $lastSnapshot.TweetIDs)) }},{{ end }}</a>
+                                                                                    {{ end }}
+                                                                                    <strong>{{ len $lastSnapshot.TweetIDs }} total</strong>
+                                                                                {{ else }}
+                                                                                    <strong>{{ $lastSnapshot.Tweets }} total</strong>
+                                                                                {{ end }}
+                                                                            </div>
                                                                         </div>
                                                                     </div>
                                                                 </div>
@@ -448,7 +519,7 @@
                                                                     <div class="column">
                                                                         <div class="card left-right">
                                                                             <div>Total weighted score for each game</div>
-                                                                            <div><strong>{{ $lastSnapshot.GameWeightedScoresSum }}</strong></div>
+                                                                            <div><strong>{{ float $lastSnapshot.GameWeightedScoresSum }}</strong></div>
                                                                         </div>
                                                                     </div>
                                                                 </div>
@@ -456,7 +527,7 @@
                                                                     <div class="column">
                                                                         <div class="card left-right">
                                                                             <div>Weighted score for this snapshot</div>
-                                                                            <div><strong>{{ $lastSnapshot.WeightedScore }}</strong></div>
+                                                                            <div><strong>{{ float $lastSnapshot.WeightedScore }}</strong></div>
                                                                         </div>
                                                                     </div>
                                                                 </div>
@@ -467,7 +538,7 @@
                                                     <div style="display: inline-block; align-items: center; width: 500px">
                                                         <p>
                                                             The current trend gradient for @{{ $trendingDev.Developer.Username }}'s snapshot
-                                                            weighted scores is {{ index $trendingDev.Trend.GetCoeffs 1 }}
+                                                            weighted scores is {{ float (index $trendingDev.Trend.GetCoeffs 1) }}
                                                             (shown in the graph below), which places it {{ inc $place }}
                                                             <sup>{{ ord (inc $place) }}</sup> out of all
                                                             {{ $enabledDevelopers }} enabled developer{{ if gt $enabledDevelopers 1 }}s{{ end }} we are currently
@@ -636,7 +707,7 @@
                                                                         <div class="column">
                                                                             <div class="card left-right">
                                                                                 <div>User tag score</div>
-                                                                                <div><strong>{{ .TagScore.Float64 }}</strong></div>
+                                                                                <div><strong>{{ float .TagScore.Float64 }}</strong></div>
                                                                             </div>
                                                                         </div>
                                                                     </div>
@@ -644,7 +715,7 @@
                                                                         <div class="column">
                                                                             <div class="card left-right">
                                                                                 <div>Weighted score</div>
-                                                                                <div><strong>{{ .WeightedScore.Float64 }}</strong></div>
+                                                                                <div><strong>{{ float .WeightedScore.Float64 }}</strong></div>
                                                                             </div>
                                                                         </div>
                                                                     </div>
@@ -831,7 +902,7 @@
                                                         <div class="column">
                                                             <div class="card left-right">
                                                                 <div>Weighted score</div>
-                                                                <div><strong>{{ .WeightedScore.Float64 }}</strong></div>
+                                                                <div><strong>{{ float .WeightedScore.Float64 }}</strong></div>
                                                             </div>
                                                         </div>
                                                     </div>
@@ -849,46 +920,84 @@
                                             <small>Deleted developers</small>
                                         </div>
 
-                                        {{ range $place, $deletedDeveloper := .DevelopersBeingDeleted }}
-                                        <table style="border-collapse: collapse; table-layout: fixed; width: 100%; margin: 25px 0; font-family: sans-serif; min-width: 400px; box-shadow: 0 0 20px rgba(0,0,0,0.37); border-radius: 12px" align="center" width="100%" border="0" cellspacing="0" cellpadding="0">
-                                            <thead>
-                                            <tr style="background-color: black; color: white; border-radius: 10px; text-align: center">
-                                                <th style="padding: 12px 15px; border-radius: 10px">
-                                                    <div class="left-right">
-                                                        <div style="display: -webkit-flex; display: flex; width: 50%">
-                                                            <h3 id="deleted_dev_{{ $deletedDeveloper.Developer.ID }}">@{{ $deletedDeveloper.Developer.Username }}</h3>
-                                                        </div>
-                                                        <div style="align-content: center; -webkit-align-content: center">
-                                                            <a href="#top" style="zoom: 0.05; display: -webkit-box">&nbsp;<div class="up-arrow"></div></a>
-                                                        </div>
-                                                    </div>
-                                                </th>
-                                            </tr>
-                                            </thead>
-                                            <tbody>
-                                            <tr style="text-align: center">
-                                                <td style="word-wrap: anywhere; overflow-wrap: anywhere; padding: 12px 15px; border-bottom-left-radius: 5px; border-bottom-right-radius: 5px">
-                                                    {{ $firstSnapshot := index $deletedDeveloper.Snapshots 0 }}
-                                                    {{ $lastSnapshot := index $deletedDeveloper.Snapshots (lastIndex $deletedDeveloper.Snapshots) }}
-                                                    <div class="row">
-                                                        <div class="column">
-                                                            <div class="card left-right">
-                                                                <div>First snapshot weighted score</div>
-                                                                <div><strong>{{ $firstSnapshot.WeightedScore }}</strong></div>
+                                        {{ $deletedDevelopers := .DevelopersBeingDeleted }}
+                                        {{ $deletedDevelopersNo := len .DevelopersBeingDeleted }}
+                                        {{ $ranges := intRange 0 $deletedDevelopersNo 100 }}
+                                        {{ $lenRanges := len $ranges }}
+                                        {{ range $i, $start := $ranges }}
+                                            {{ $start := inc $start }}
+                                            {{ $end := $deletedDevelopersNo }}
+                                            {{ if lt $i (dec $lenRanges) }}
+                                                {{ $end = index $ranges (inc $i) }}
+                                            {{ else if gt $lenRanges 1 }}
+                                                {{ break }}
+                                            {{ end }}
+                                            <table style="border-collapse: collapse; table-layout: fixed; width: 100%; margin: 25px 0; font-family: sans-serif; min-width: 400px; box-shadow: 0 0 20px rgba(0,0,0,0.37); border-radius: 12px" align="center" width="100%" border="0" cellspacing="0" cellpadding="0">
+                                                <thead>
+                                                <tr style="background-color: black; color: white; border-radius: 10px; text-align: center">
+                                                    <th style="padding: 12px 15px; border-radius: 10px">
+                                                        <div class="left-right">
+                                                            <div style="display: -webkit-flex; display: flex; width: 50%">
+                                                                {{ if gt $deletedDevelopersNo 1 }}
+                                                                    <h3 id="deleted_devs_{{ $start }}_to_{{ $end }}">Deleted developers {{ $start }}..{{ $end }}</h3>
+                                                                {{ else }}
+                                                                    <h3 id="deleted_devs_1_to_1">Deleted developer @{{ (index $deletedDevelopers 0).Developer.Username }}</h3>
+                                                                {{ end }}
+                                                            </div>
+                                                            <div style="align-content: center; -webkit-align-content: center">
+                                                                <a href="#top" style="zoom: 0.05; display: -webkit-box">&nbsp;<div class="up-arrow"></div></a>
                                                             </div>
                                                         </div>
-                                                    </div>
-                                                    <div class="row">
-                                                        <div class="column">
-                                                            <div class="card left-right">
-                                                                <div>Last snapshot weighted score</div>
-                                                                <div><strong>{{ $lastSnapshot.WeightedScore }}</strong></div>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                </td>
-                                            </tbody>
-                                        </table>
+                                                    </th>
+                                                </tr>
+                                                </thead>
+                                                <tbody>
+                                                <tr style="text-align: center">
+                                                    <td style="word-wrap: anywhere; overflow-wrap: anywhere; padding: 12px 15px; border-bottom-left-radius: 5px; border-bottom-right-radius: 5px">
+                                                        {{ range $place, $deletedDeveloper := slice $deletedDevelopers (dec $start) $end }}
+                                                            {{ $firstSnapshot := index $deletedDeveloper.Snapshots 0 }}
+                                                            {{ $lastSnapshot := index $deletedDeveloper.Snapshots (lastIndex $deletedDeveloper.Snapshots) }}
+                                                                <div class="card" style="background-color: black; text-align: center; padding: 5px 0 0 0; margin-bottom: 7px">
+                                                                    <div style="margin-bottom: 5px; color: white">
+                                                                        <strong>
+                                                                            <a class="link-button" style="padding: 7px; background: #E2F45B" href="https://twitter.com/{{ $deletedDeveloper.Developer.Username }}">
+                                                                                @{{ $deletedDeveloper.Developer.Username }}
+                                                                            </a>
+                                                                        </strong>
+                                                                    </div>
+                                                                    <table class="styled-table">
+                                                                        <thead>
+                                                                        <tr>
+                                                                            <th>First weighted score</th>
+                                                                            <th>Last weighted score</th>
+                                                                            <th>Trend gradient</th>
+                                                                            {{ if gt (len $deletedDeveloper.Games) 0 }}
+                                                                            <th>Games</th>
+                                                                            {{ end }}
+                                                                        </tr>
+                                                                        </thead>
+                                                                        <tbody>
+                                                                        <tr>
+                                                                            <td><strong>{{ float $firstSnapshot.WeightedScore }}</strong></td>
+                                                                            <td><strong>{{ float $lastSnapshot.WeightedScore }}</strong></td>
+                                                                            <td><strong>{{ float (index $deletedDeveloper.Trend.GetCoeffs 1) }}</strong></td>
+                                                                            {{ if gt (len $deletedDeveloper.Games) 0 }}
+                                                                            <td>
+                                                                                <div>
+                                                                                    {{ range $gameNo, $game := $deletedDeveloper.Games }}
+                                                                                    <a href="{{ $game.Website.String }}">{{ trunc $game.Name.String 15 }}{{ if lt $gameNo (dec (len $deletedDeveloper.Games)) }},{{ end }}</a>
+                                                                                    {{ end }}
+                                                                                </div>
+                                                                            </td>
+                                                                            {{ end }}
+                                                                        </tr>
+                                                                        </tbody>
+                                                                    </table>
+                                                                </div>
+                                                        {{ end }}
+                                                    </td>
+                                                </tbody>
+                                            </table>
                                         {{ end }}
                                         {{ end }}
                                     </td>

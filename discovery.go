@@ -58,6 +58,7 @@ func TransformTweet(
 	}
 
 	developer.ID = tweet.Author.ID
+	developerSnap.TweetIDs = []string{tweet.Tweet.ID}
 	developerSnap.DeveloperID = developer.ID
 	developer.Name = tweet.Author.Name
 	developer.Username = tweet.Author.UserName

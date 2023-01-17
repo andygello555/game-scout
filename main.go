@@ -750,7 +750,7 @@ func main() {
 
 					if c.Bool("measure") || c.Bool("measureDelete") || c.Bool("deletedDevelopers") {
 						if measureContext.TrendingDevs[developerNo], err = developer.TrendingDev(db.DB); err != nil {
-							return err
+							return cli.NewExitError(err.Error(), 1)
 						}
 
 						// Also add the TrendingDev to the DevelopersBeingDeleted slice if measureDelete is given

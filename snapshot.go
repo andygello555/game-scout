@@ -5,6 +5,7 @@ import (
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
 	myTwitter "github.com/andygello555/game-scout/twitter"
+	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/pkg/errors"
 	"sort"
@@ -33,6 +34,7 @@ func SnapshotPhase(state *ScoutState) (err error) {
 		aggregatedSnap := &models.DeveloperSnapshot{
 			DeveloperID:                  id,
 			Tweets:                       int32(len(userTweetTimes)),
+			TweetIDs:                     []string{},
 			TweetTimeRange:               models.NullDurationFromPtr(nil),
 			LastTweetTime:                userTweetTimes[0].UTC(),
 			AverageDurationBetweenTweets: models.NullDurationFromPtr(nil),
@@ -66,8 +68,15 @@ func SnapshotPhase(state *ScoutState) (err error) {
 			aggregatedSnap.AverageDurationBetweenTweets = models.NullDurationFromPtr(&averageDurationBetween)
 		}
 
-		// We then aggregate the tweet/user public metrics for each tweet as well as context annotations.
+		// We then aggregate the Tweet IDs, tweet/user public metrics, and context annotations for each snapshot
 		for _, snapshot := range snapshots {
+			// Because we want tweet IDs to be unique, we will do a union of the TweetIDs of the aggregated snap and the
+			// current snap, then convert back to a slice.
+			aggregatedSnap.TweetIDs = mapset.NewThreadUnsafeSet[string](
+				aggregatedSnap.TweetIDs...,
+			).Union(
+				mapset.NewThreadUnsafeSet[string](snapshot.TweetIDs...),
+			).ToSlice()
 			aggregatedSnap.TweetsPublicMetrics.Impressions += snapshot.TweetsPublicMetrics.Impressions
 			aggregatedSnap.TweetsPublicMetrics.URLLinkClicks += snapshot.TweetsPublicMetrics.URLLinkClicks
 			aggregatedSnap.TweetsPublicMetrics.UserProfileClicks += snapshot.TweetsPublicMetrics.UserProfileClicks

@@ -160,7 +160,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 			}
 		} else {
 			log.WARNING.Printf(
-				"ScoutState.Debug is set, so we are skipping incrementing times_highlighted on Developer %s (%s)",
+				"ScoutState.Debug is set, so we are skipping incrementing times_highlighted on Developer %v",
 				topDeveloper.Developer,
 			)
 		}

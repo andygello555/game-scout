@@ -8,6 +8,7 @@ import (
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -36,6 +37,9 @@ type DeveloperSnapshot struct {
 	Developer   *Developer `gorm:"constraint:OnDelete:CASCADE;"`
 	// Tweets is the number of tweets that could be scraped for this Developer for this DeveloperSnapshot.
 	Tweets int32
+	// TweetIDs is the IDs of the Tweets captured by this DeveloperSnapshot. Using these, we can generate links for each
+	// Tweet.
+	TweetIDs pq.StringArray `gorm:"type:varchar(64)[];default:'{}'"`
 	// TweetTimeRange is the time.Duration between the Developer's earliest tweet (that was scraped) and their latest
 	// tweet (that was scraped). This is set to nil when only one tweet was scraped.
 	TweetTimeRange NullDuration
