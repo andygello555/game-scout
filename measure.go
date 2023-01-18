@@ -78,6 +78,9 @@ func trendFinder(jobs <-chan *models.Developer, results chan<- *trendFinderResul
 
 func MeasurePhase(state *ScoutState) (err error) {
 	measureContext := email.MeasureContext{
+		// TODO: Replace the start and end times with the actual start and end times.
+		Start:                  time.Now(),
+		End:                    time.Now(),
 		TrendingDevs:           make([]*models.TrendingDev, 0),
 		DevelopersBeingDeleted: *state.GetIterableCachedField(DeletedDevelopersType).(*DeletedDevelopers),
 		Config:                 globalConfig.Email,

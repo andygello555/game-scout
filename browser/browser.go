@@ -256,16 +256,45 @@ type Browser struct {
 	Playwright *playwright.Playwright
 	Browser    playwright.Browser
 	Pages      []playwright.Page
+	Type       BrowserType
 }
 
-// NewBrowser creates a new playwright.Playwright, playwright.Browser, and a playwright.Page and wraps these up in a new
-// Browser instance.
-func NewBrowser(headless bool) (browser *Browser, err error) {
-	browser = &Browser{}
+type BrowserType int
+
+const (
+	Firefox BrowserType = iota
+	Chromium
+	WebKit
+)
+
+const defaultBrowser = Firefox
+
+// Launch will launch an instance of the given BrowserType.
+func (bt BrowserType) Launch(browser *Browser, options ...playwright.BrowserTypeLaunchOptions) (playwright.Browser, error) {
+	switch bt {
+	case Firefox:
+		return browser.Playwright.Firefox.Launch(options...)
+	case Chromium:
+		return browser.Playwright.Chromium.Launch(options...)
+	case WebKit:
+		return browser.Playwright.WebKit.Launch(options...)
+	default:
+		return nil, nil
+	}
+}
+
+// Browser will create a Browser (the same as NewBrowser and NewBrowserOfType) by starting an instance of the given
+// BrowserType.
+func (bt BrowserType) Browser(headless bool) (*Browser, error) {
+	return NewBrowserOfType(bt, headless)
+}
+
+func NewBrowserOfType(bt BrowserType, headless bool) (browser *Browser, err error) {
+	browser = &Browser{Type: bt}
 	if browser.Playwright, err = playwright.Run(); err != nil {
 		return browser, errors.Wrap(err, "browser could not be created as playwright could not be started")
 	}
-	if browser.Browser, err = browser.Playwright.Firefox.Launch(playwright.BrowserTypeLaunchOptions{
+	if browser.Browser, err = browser.Type.Launch(browser, playwright.BrowserTypeLaunchOptions{
 		Headless: &headless,
 	}); err != nil {
 		return browser, errors.Wrap(err, "browser could not be created as Firefox could not be launched")
@@ -282,6 +311,13 @@ func NewBrowser(headless bool) (browser *Browser, err error) {
 		return browser, errors.Wrap(err, "browser could not be created")
 	}
 	return browser, nil
+}
+
+// NewBrowser creates a new playwright.Playwright, playwright.Browser, and a playwright.Page and wraps these up in a new
+// Browser instance. The browser that is launched will be Firefox be default. To launch a different browser use
+// BrowserType.Browser or NewBrowserOfType.
+func NewBrowser(headless bool) (browser *Browser, err error) {
+	return NewBrowserOfType(defaultBrowser, headless)
 }
 
 // NewPage creates a new page in the Browser.

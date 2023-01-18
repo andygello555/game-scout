@@ -665,6 +665,8 @@ func main() {
 			Usage: "subcommand for viewing resources related to a developer in the DB",
 			Action: func(c *cli.Context) (err error) {
 				measureContext := email.MeasureContext{
+					Start:                  time.Now(),
+					End:                    time.Now(),
 					TrendingDevs:           make([]*models.TrendingDev, len(c.StringSlice("id"))),
 					DevelopersBeingDeleted: make([]*models.TrendingDev, len(c.StringSlice("id"))),
 					Config:                 globalConfig.Email,
@@ -845,6 +847,8 @@ func main() {
 			},
 			Action: func(c *cli.Context) (err error) {
 				measureContext := email.MeasureContext{
+					Start:        time.Now(),
+					End:          time.Now(),
 					TopSteamApps: make([]*models.SteamApp, len(c.IntSlice("id"))),
 					Config:       globalConfig.Email,
 				}

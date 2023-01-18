@@ -5,8 +5,6 @@ import (
 	"embed"
 	"encoding/gob"
 	"fmt"
-	"github.com/RichardKnop/machinery/v1/log"
-	"github.com/SebastiaanKlippert/go-wkhtmltopdf"
 	"github.com/andygello555/game-scout/browser"
 	"github.com/andygello555/game-scout/db/models"
 	myErrors "github.com/andygello555/game-scout/errors"
@@ -43,6 +41,8 @@ type Context interface {
 
 // MeasureContext is a Context that contains the data required to fill out the Measure HTML template.
 type MeasureContext struct {
+	Start                  time.Time
+	End                    time.Time
 	TrendingDevs           []*models.TrendingDev
 	TopSteamApps           []*models.SteamApp
 	DevelopersBeingDeleted []*models.TrendingDev
@@ -65,6 +65,9 @@ func (m *MeasureContext) Funcs() template.FuncMap {
 			loc, _ := time.LoadLocation("Europe/London")
 			t = t.In(loc)
 			return numbers.Ordinal(t.Day()) + t.Format(" January 2006 at 3pm")
+		},
+		"datePretty": func(t time.Time) string {
+			return t.Format("02/01/2006")
 		},
 		"percentage": func(f null.Float64) string {
 			perc := f.Float64
@@ -327,27 +330,10 @@ func (t *Template) PDF() (output *Template) {
 		return
 	}
 
-	// Initialise a wkhtmltopdf generator
-	pdf, err := wkhtmltopdf.NewPDFGenerator()
-	if err != nil {
-		output.Error = errors.Wrapf(err, "could not create PDF generator for %s", output.Path.Name())
-		return
-	}
-
-	// read the HTML page as a PDF page
-	page := wkhtmltopdf.NewPageReader(bytes.NewReader(output.Buffer.Bytes()))
-
-	// add the page to your generator
-	pdf.AddPage(page)
-
-	// manipulate page attributes as needed
-	pdf.MarginLeft.Set(0)
-	pdf.MarginRight.Set(0)
-	pdf.MarginBottom.Set(0)
-	pdf.MarginTop.Set(0)
-	pdf.Dpi.Set(PDFDPI)
-
-	var file *os.File
+	var (
+		file *os.File
+		err  error
+	)
 	if file, err = os.CreateTemp("", "*.html"); err != nil {
 		output.Error = errors.Wrapf(err, "could not create temporary file for HTML buffer")
 		return
@@ -365,7 +351,7 @@ func (t *Template) PDF() (output *Template) {
 	}
 
 	var b *browser.Browser
-	if b, err = browser.NewBrowser(true); err != nil {
+	if b, err = browser.Chromium.Browser(true); err != nil {
 		output.Error = errors.Wrap(err, "could not open HTML file in playwright to work out page height")
 		return
 	}
@@ -411,24 +397,21 @@ func (t *Template) PDF() (output *Template) {
 		return
 	}
 
-	// Calculate the page width in MM
-	pdf.PageWidth.Set(uint(PixelsToMM * float64(pageWidth.(int))))
-	// Calculate the page height in MM
-	pdf.PageHeight.Set(uint(PixelsToMM * float64(pageHeight.(int))))
+	pageWidthString := fmt.Sprintf("%dpx", pageWidth)
+	pageHeightString := fmt.Sprintf("%dpx", pageHeight)
+	printBackground := true
 
-	// Create the PDF using the PDF generator
-	log.INFO.Printf(
-		"Generating PDF from %s HTML template: pageWidth = %v (%s px), pageHeight = %v (%s px), wkhtmltopdf = %s",
-		output.Path.Name(), pageWidth, reflect.TypeOf(pageWidth).String(),
-		pageHeight, reflect.TypeOf(pageHeight).String(), pdf.ArgString(),
-	)
-	err = pdf.Create()
-	if err != nil {
-		output.Error = errors.Wrapf(err, "could not create PDF for %s", output.Path.Name())
+	var pdfBytes []byte
+	if pdfBytes, err = b.Pages[0].PDF(playwright.PagePdfOptions{
+		PrintBackground: &printBackground,
+		Width:           &pageWidthString,
+		Height:          &pageHeightString,
+	}); err != nil {
+		output.Error = errors.Wrapf(err, "could not create PDF from filled HTML template %s", output.Path.Name())
 		return
 	}
 
-	output.Buffer = *bytes.NewBuffer(pdf.Bytes())
+	output.Buffer = *bytes.NewBuffer(pdfBytes)
 	output.ContentType = PDF
 	return
 }
