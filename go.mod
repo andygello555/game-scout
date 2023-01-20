@@ -34,6 +34,7 @@ require (
 	cloud.google.com/go/compute/metadata v0.2.1 // indirect
 	cloud.google.com/go/iam v0.7.0 // indirect
 	cloud.google.com/go/pubsub v1.10.0 // indirect
+	github.com/ainsleyclark/go-mail v1.1.1 // indirect
 	github.com/aws/aws-sdk-go v1.42.34 // indirect
 	github.com/blend/go-sdk v1.20220411.3 // indirect
 	github.com/bradfitz/gomemcache v0.0.0-20190913173617-a41fca850d0b // indirect
@@ -70,9 +71,12 @@ require (
 	github.com/klauspost/compress v1.11.7 // indirect
 	github.com/mattn/go-runewidth v0.0.14 // indirect
 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
+	github.com/mocktools/go-smtp-mock/v2 v2.0.5 // indirect
+	github.com/olekukonko/tablewriter v0.0.5 // indirect
 	github.com/rivo/uniseg v0.4.2 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
+	github.com/ssor/bom v0.0.0-20170718123548-6386211fdfcf // indirect
 	github.com/streadway/amqp v1.0.0 // indirect
 	github.com/xdg/scram v0.0.0-20180814205039-7eeb5667e42c // indirect
 	github.com/xdg/stringprep v1.0.0 // indirect
@@ -97,6 +101,7 @@ require (
 	google.golang.org/protobuf v1.28.1 // indirect
 	gopkg.in/square/go-jose.v2 v2.6.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
+	jaytaylor.com/html2text v0.0.0-20211105163654-bc68cce691ba // indirect
 )
 
 replace cloud.google.com/go/pubsub => cloud.google.com/go/pubsub v1.9.0 // bug on machinery

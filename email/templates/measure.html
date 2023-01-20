@@ -545,6 +545,7 @@
                                                         </tbody>
                                                     </table>
                                                     <div style="display: inline-block; align-items: center; width: 500px">
+                                                        {{ if ne $trendingDev.Trend nil }}
                                                         <p>
                                                             The current trend gradient for @{{ $trendingDev.Developer.Username }}'s snapshot
                                                             weighted scores is {{ float (index $trendingDev.Trend.GetCoeffs 1) }}
@@ -555,6 +556,7 @@
                                                         </p>
                                                         {{ $chart := .Trend.Chart ($config.EmailTemplateConfigFor "templates/measure.html").TemplateMaxImageWidth ($config.EmailTemplateConfigFor "templates/measure.html").TemplateMaxImageHeight }}
                                                         {{ $chart.Img "" "max-width: 100%; max-height: 100%; height: auto; border-radius: 5px" }}
+                                                        {{ end }}
                                                     </div>
 
                                                     {{ if gt (len $trendingDev.Games) 0 }}
@@ -979,7 +981,9 @@
                                                                         <tr>
                                                                             <th>First weighted score</th>
                                                                             <th>Last weighted score</th>
+                                                                            {{ if and (ne $deletedDeveloper.Trend nil) (gt (len $deletedDeveloper.Trend.GetCoeffs) 1) }}
                                                                             <th>Trend gradient</th>
+                                                                            {{ end }}
                                                                             {{ if gt (len $deletedDeveloper.Games) 0 }}
                                                                             <th>Games</th>
                                                                             {{ end }}
@@ -989,7 +993,9 @@
                                                                         <tr>
                                                                             <td><strong>{{ float $firstSnapshot.WeightedScore }}</strong></td>
                                                                             <td><strong>{{ float $lastSnapshot.WeightedScore }}</strong></td>
+                                                                            {{ if and (ne $deletedDeveloper.Trend nil) (gt (len $deletedDeveloper.Trend.GetCoeffs) 1) }}
                                                                             <td><strong>{{ float (index $deletedDeveloper.Trend.GetCoeffs 1) }}</strong></td>
+                                                                            {{ end }}
                                                                             {{ if gt (len $deletedDeveloper.Games) 0 }}
                                                                             <td>
                                                                                 <div>

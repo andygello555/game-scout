@@ -52,6 +52,8 @@ func (sc *scrapeConfig) ScrapeGetStorefront(storefront Storefront) (storefrontCo
 	return
 }
 
+func (sc *scrapeConfig) ScrapeDebug() bool { return true }
+
 var fakeConfig = &scrapeConfig{storefronts: []*storefrontConfig{
 	{
 		storefront: SteamStorefront,

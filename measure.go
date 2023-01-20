@@ -77,6 +77,7 @@ func trendFinder(jobs <-chan *models.Developer, results chan<- *trendFinderResul
 }
 
 func MeasurePhase(state *ScoutState) (err error) {
+	// TODO: Check if the email has already been sent out this week/only send it out on a certain day
 	measureContext := email.MeasureContext{
 		// TODO: Replace the start and end times with the actual start and end times.
 		Start:                  time.Now(),
@@ -202,7 +203,6 @@ func MeasurePhase(state *ScoutState) (err error) {
 		return myErrors.TemporaryWrap(false, pdf.Error, "could not construct Measure PDF")
 	}
 
-	// TODO: Remove this and replace it with email sending
 	if err = os.WriteFile(
 		fmt.Sprintf(
 			"measure_email_for_%d_developers_%s.pdf",
@@ -214,5 +214,12 @@ func MeasurePhase(state *ScoutState) (err error) {
 	); err != nil {
 		return err
 	}
+
+	start := time.Now()
+	log.INFO.Printf("Sending email...")
+	if _, err = pdf.SendSync(); err != nil {
+		log.ERROR.Printf("Could not send email: %v", err)
+	}
+	log.INFO.Printf("Finished email sending in %s", time.Now().Sub(start).String())
 	return
 }

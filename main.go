@@ -62,6 +62,14 @@ func main() {
 	}
 	log.INFO.Printf("Done setting up Twitter client in %s", time.Now().UTC().Sub(start).String())
 
+	// Set up the default email client
+	start = time.Now().UTC()
+	log.INFO.Printf("Setting up email client at %s", start.String())
+	if err := email.ClientCreate(globalConfig.Email); err != nil {
+		panic(err)
+	}
+	log.INFO.Printf("Done setting up email client in %s", time.Now().UTC().Sub(start).String())
+
 	// Register any additional tasks for machinery
 	start = time.Now().UTC()
 	log.INFO.Printf("Registering additional tasks:")
@@ -648,6 +656,11 @@ func main() {
 					Required: false,
 				},
 				cli.BoolFlag{
+					Name:     "measureSendEmail",
+					Usage:    "whether to send the email to the recipients of the Measure template defined in the TemplateConfig",
+					Required: false,
+				},
+				cli.BoolFlag{
 					Name:     "printAfter",
 					Usage:    "print the developer after all the subcommands have been run",
 					Required: false,
@@ -806,6 +819,12 @@ func main() {
 						filePerms,
 					); err != nil {
 						return cli.NewExitError(err.Error(), 1)
+					}
+
+					if c.Bool("measureSendEmail") {
+						if _, err = template.SendSync(); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
 					}
 				}
 

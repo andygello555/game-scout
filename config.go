@@ -9,8 +9,10 @@ import (
 	"github.com/andygello555/game-scout/email"
 	task "github.com/andygello555/game-scout/tasks"
 	"github.com/pkg/errors"
+	"jaytaylor.com/html2text"
 	"os"
 	"strings"
+	"time"
 )
 
 const ConfigDefaultPath = "config.json"
@@ -92,27 +94,67 @@ func (c *DBConfig) DBPhaseWriteAccess(id int) bool {
 
 // TemplateConfig contains the constants used for a specific email.TemplatePath.
 type TemplateConfig struct {
-	MaxImageWidth  int `json:"max_image_width"`
+	// MaxImageWidth is the maximum width of any converted base64 images that are going to be displayed in the
+	// email.Template.
+	MaxImageWidth int `json:"max_image_width"`
+	// MaxImageWidth is the maximum height of any converted base64 images that are going to be displayed in the
+	// email.Template.
 	MaxImageHeight int `json:"max_image_height"`
+	// DebugTo is the recipients that this email.Template will be sent to when the ScoutState debug flag is set.
+	DebugTo []string `json:"debug_to"`
+	// To is the recipients that this email.Template will be sent to when the ScoutState debug flag is NOT set.
+	To []string `json:"to"`
+	// SubjectFormat is the time format of the subject of the emails sent for this email.Template.
+	SubjectFormat string `json:"subject_format"`
+	// AttachmentNameFormat is the time format of the filename of the file that will be attached to emails sent for this
+	// email.Template. Note: this should not be suffixed with the file extension as this will be done automatically.
+	AttachmentNameFormat string `json:"attachment_name_format"`
+	// SendRetries is the number of times the email.ClientWrapper.SendAsync method should be retried. If it is negative then
+	// it will be retried forever.
+	SendRetries int `json:"send_retries"`
+	// SendBackoff is the duration that will be multiplied by the current retry number to produce a wait time that will
+	// be slept for when an error occurs whilst sending this email.Template.
+	SendBackoff string `json:"send_backoff"`
+	// HTML2TextOptions are the html2text.Options used when sending instances of this email.Template in an email.
+	HTML2TextOptions html2text.Options `json:"html2text_options"`
+	// PlainOnly indicates whether to only send the plain-text when sending instances of this email.Template in an
+	// email. If it is not set, then the HTML content will also be added.
+	PlainOnly bool `json:"plain_only"`
 }
 
 func (c *TemplateConfig) TemplateMaxImageWidth() int  { return c.MaxImageWidth }
 func (c *TemplateConfig) TemplateMaxImageHeight() int { return c.MaxImageHeight }
+func (c *TemplateConfig) TemplateDebugTo() []string   { return c.DebugTo }
+func (c *TemplateConfig) TemplateTo() []string        { return c.To }
+func (c *TemplateConfig) TemplateSubject() string {
+	return time.Now().Format(c.SubjectFormat)
+}
+func (c *TemplateConfig) TemplateAttachmentName() string {
+	return time.Now().Format(c.AttachmentNameFormat)
+}
+func (c *TemplateConfig) TemplateSendRetries() int { return c.SendRetries }
+func (c *TemplateConfig) TemplateSendBackoff() (time.Duration, error) {
+	return time.ParseDuration(c.SendBackoff)
+}
+func (c *TemplateConfig) TemplateHTML2TextOptions() html2text.Options { return c.HTML2TextOptions }
+func (c *TemplateConfig) TemplatePlainOnly() bool                     { return c.PlainOnly }
 
 // EmailConfig contains the variables we need to create our SMTP email client.
 type EmailConfig struct {
+	Debug           bool                                   `json:"debug"`
 	Host            string                                 `json:"host"`
 	Port            int                                    `json:"port"`
 	From            string                                 `json:"from"`
-	To              []string                               `json:"to"`
+	FromName        string                                 `json:"from_name"`
 	Password        string                                 `json:"password"`
 	TemplateConfigs map[email.TemplatePath]*TemplateConfig `json:"template_configs"`
 }
 
+func (c *EmailConfig) EmailDebug() bool      { return c.Debug }
 func (c *EmailConfig) EmailHost() string     { return c.Host }
 func (c *EmailConfig) EmailPort() int        { return c.Port }
 func (c *EmailConfig) EmailFrom() string     { return c.From }
-func (c *EmailConfig) EmailTo() []string     { return c.To }
+func (c *EmailConfig) EmailFromName() string { return c.FromName }
 func (c *EmailConfig) EmailPassword() string { return c.Password }
 func (c *EmailConfig) EmailTemplateConfigFor(path email.TemplatePath) email.TemplateConfig {
 	return c.TemplateConfigs[path]

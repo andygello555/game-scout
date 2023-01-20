@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/gob"
 	"fmt"
+	"github.com/ainsleyclark/go-mail/mail"
 	"github.com/andygello555/game-scout/browser"
 	"github.com/andygello555/game-scout/db/models"
 	myErrors "github.com/andygello555/game-scout/errors"
@@ -14,6 +15,7 @@ import (
 	"github.com/playwright-community/playwright-go"
 	"github.com/volatiletech/null/v9"
 	"html/template"
+	"jaytaylor.com/html2text"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -51,8 +53,8 @@ type MeasureContext struct {
 }
 
 func (m *MeasureContext) Path() TemplatePath  { return Measure }
-func (m *MeasureContext) Template() *Template { return m.Path().Template() }
-func (m *MeasureContext) HTML() *Template     { return m.Template().HTML(m) }
+func (m *MeasureContext) Template() *Template { return m.Path().Template(m) }
+func (m *MeasureContext) HTML() *Template     { return m.Template().HTML() }
 func (m *MeasureContext) Funcs() template.FuncMap {
 	return map[string]any{
 		"intRange": func(start, end, step int) []int {
@@ -175,7 +177,7 @@ func (tt TemplatePath) Context() Context {
 }
 
 // Template returns a Template that is ready to be filled using Template.HTML.
-func (tt TemplatePath) Template() *Template {
+func (tt TemplatePath) Template(context Context) *Template {
 	return &Template{
 		Path: tt,
 		Template: template.Must(
@@ -184,7 +186,9 @@ func (tt TemplatePath) Template() *Template {
 			).Funcs(
 				tt.Context().Funcs(),
 			).ParseFS(templates, tt.Path())),
+		Config:      Client.Config().EmailTemplateConfigFor(tt),
 		ContentType: NotExecuted,
+		Context:     context,
 	}
 }
 
@@ -226,6 +230,8 @@ type Template struct {
 	// Template is the parsed template.Template, loaded from the Path, which is also loaded up with the functions
 	// returned by Context.Funcs method for the Context for this Template.
 	Template *template.Template
+	// Config is the TemplateConfig for this template.
+	Config TemplateConfig
 	// Buffer is a byte buffer that contains the parsed output for the results produced by Template.HTML and
 	// Template.PDF. This is overwritten each time.
 	Buffer bytes.Buffer
@@ -233,6 +239,8 @@ type Template struct {
 	Error error
 	// ContentType is the current TemplateBufferContentType of the Buffer.
 	ContentType TemplateBufferContentType
+	// Context is the Context that this Template will/has used to generate HTML from the TemplatePath.
+	Context Context
 }
 
 // copyTemplate will copy the given Template to a new instance of Template. If the original Template has an error, it
@@ -241,9 +249,11 @@ func copyTemplate(template *Template) *Template {
 	output := &Template{
 		Path:        template.Path,
 		Template:    template.Template,
+		Config:      template.Config,
 		Buffer:      template.Buffer,
 		Error:       template.Error,
 		ContentType: template.ContentType,
+		Context:     template.Context,
 	}
 
 	if output.Error != nil {
@@ -256,7 +266,7 @@ func copyTemplate(template *Template) *Template {
 	return output
 }
 
-// HTML will call the Execute method on the Template.Template with the given Context. Template.Error is set if:
+// HTML will call the Execute method on the Template.Template with the given Template.Context. Template.Error is set if:
 //
 // • The Template already contains an error.
 //
@@ -267,7 +277,7 @@ func copyTemplate(template *Template) *Template {
 // • An error occurs whilst calling the Execute method on Template.Template.
 //
 // If Template.HTML can run without setting the Template.Error then Template.ContentType is set to HTML.
-func (t *Template) HTML(context Context) (output *Template) {
+func (t *Template) HTML() (output *Template) {
 	if output = copyTemplate(t); output.Error != nil {
 		output.Error = errors.Wrapf(output.Error, "%s template cannot be executed", output.Path.Name())
 		return
@@ -281,15 +291,15 @@ func (t *Template) HTML(context Context) (output *Template) {
 		return
 	}
 
-	if context.Path() != output.Path {
+	if output.Context.Path() != output.Path {
 		output.Error = fmt.Errorf(
 			"%s is intended for the %s Template not the %s Template",
-			reflect.TypeOf(context).Elem().String(), context.Path().Name(), output.Path.Name(),
+			reflect.TypeOf(output.Context).Elem().String(), output.Context.Path().Name(), output.Path.Name(),
 		)
 		return
 	}
 
-	if err := t.Template.Execute(&output.Buffer, context); err != nil {
+	if err := output.Template.Execute(&output.Buffer, output.Context); err != nil {
 		output.Error = errors.Wrapf(err, "could not execute template %s with the given context", t.Path.Name())
 		return
 	}
@@ -414,4 +424,82 @@ func (t *Template) PDF() (output *Template) {
 	output.Buffer = *bytes.NewBuffer(pdfBytes)
 	output.ContentType = PDF
 	return
+}
+
+// Transmission returns the filled mail.Transmission instance that can be sent using the email Client.
+//
+// • If the given Template has an error set in Template.Error then this error will be wrapped and returned.
+//
+// • If the given Template has a ContentType of HTML, then the sent email will have an HTML body, a plain-text
+// body obtained from html2text.FromString, and the HTML will be added as an attachment.
+//
+// • If the given Template has a ContentType of PDF, then the sent email will have an HTML body obtained by executing a
+// brand-new template with the Template.Context, a plain-text body obtained from html2text.FromString, and the PDF will
+// be added as an attachment.
+//
+// • If the given Template does not have a ContentType that is either HTML or PDF, then an error will be returned.
+func (t *Template) Transmission() (transmission *mail.Transmission, err error) {
+	if t.Error != nil {
+		err = errors.Wrapf(err, "cannot create transmission for %s template as it contains an error", t.Path.Name())
+		return
+	}
+
+	html := ""
+	plain := ""
+	var attachments []mail.Attachment
+	switch t.ContentType {
+	case HTML:
+		html = t.Buffer.String()
+		if plain, err = html2text.FromString(html, t.Config.TemplateHTML2TextOptions()); err != nil {
+			err = errors.Wrapf(err, "cannot convert %s template to plain text from HTML", t.Path.Name())
+			return
+		}
+		attachments = []mail.Attachment{{
+			Filename: t.Config.TemplateAttachmentName() + ".html",
+		}}
+	case PDF:
+		htmlTemplate := t.Context.HTML()
+		html = htmlTemplate.Buffer.String()
+		plain, err = html2text.FromString(html, t.Config.TemplateHTML2TextOptions())
+		if err = myErrors.MergeErrors(htmlTemplate.Error, err); err != nil {
+			err = errors.Wrapf(err, "cannot convert %s template to plain text from HTML/PDF", t.Path.Name())
+			return
+		}
+		if t.Config.TemplatePlainOnly() {
+			html = "&nbsp;"
+		}
+		attachments = []mail.Attachment{{
+			Filename: t.Config.TemplateAttachmentName() + ".pdf",
+			Bytes:    t.Buffer.Bytes(),
+		}}
+	default:
+		err = fmt.Errorf(
+			"%s template has content-type %s, to create a Transmission we need %s or %s",
+			t.Path.Name(), t.ContentType.String(), HTML.String(), PDF.String(),
+		)
+		return
+	}
+
+	recipients := t.Config.TemplateTo()
+	if Client.Config().EmailDebug() {
+		recipients = t.Config.TemplateDebugTo()
+	}
+	transmission = &mail.Transmission{
+		Recipients:  recipients,
+		Subject:     t.Config.TemplateSubject(),
+		HTML:        html,
+		PlainText:   plain,
+		Attachments: attachments,
+	}
+	return
+}
+
+// SendAsync the Template using the default ClientWrapper (Client) with ClientWrapper.SendAsync.
+func (t *Template) SendAsync() <-chan Response {
+	return Client.SendAsync(t)
+}
+
+// SendSync the Template using the default ClientWrapper (Client) with ClientWrapper.SendSync.
+func (t *Template) SendSync() (mail.Response, error) {
+	return Client.SendSync(t)
 }
