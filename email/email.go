@@ -1,6 +1,7 @@
 package email
 
 import (
+	"archive/zip"
 	"bufio"
 	"bytes"
 	"encoding/base64"
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -22,6 +24,7 @@ import (
 
 const (
 	defaultBufSize                 = 4 * 1024
+	compressionLimit               = 15 * 1000 * 1024
 	maxContentTypeDetectionBufSize = 512
 )
 
@@ -34,6 +37,27 @@ type plainWriteCloser struct{ *bufio.Writer }
 
 func newPlainWriteCloser(w io.Writer) io.WriteCloser { return &plainWriteCloser{bufio.NewWriter(w)} }
 func (wc *plainWriteCloser) Close() error            { return wc.Flush() }
+
+// zipWriteCloser is the io.WriteCloser provided by Part.Encoder for any Part that has the Part.Attachment set. When
+// created using newZipWriteCloser it will create a new base64 encoded archive that only contains a single file that will
+// be compressed. When Close is called, the archive will be closed. Thus, the pipeline is:
+//
+//	Buffer -> Compressed Buffer -> Compressed Archive -> Base64 Compressed Archive -> Part File
+type zipWriteCloser struct {
+	io.Writer
+	archive *zip.Writer
+}
+
+func newZipWriteCloser(filename string, w io.Writer) (io.WriteCloser, error) {
+	var err error
+	z := &zipWriteCloser{archive: zip.NewWriter(base64.NewEncoder(base64.StdEncoding, w))}
+	if z.Writer, err = z.archive.Create(filename); err != nil {
+		return nil, err
+	}
+	return z, nil
+}
+
+func (z *zipWriteCloser) Close() (err error) { return z.archive.Close() }
 
 // Part stores the information for a single part of an Email. When passing a Part to Email.AddPart Buffer should be set
 // so that the Part can be intermittently cached to a file.
@@ -58,12 +82,19 @@ func (p *Part) ContentTypeSlug() string {
 
 // Encoder returns an io.WriteCloser for the Part's buffer. If the Part is an Attachment, then the encoder returned will
 // be a base64 encoder, anything else will be encoded as plain-text.
-func (p *Part) Encoder() io.WriteCloser {
+func (p *Part) Encoder() (io.WriteCloser, error) {
 	_, _ = p.file.Seek(0, io.SeekStart)
+	fmt.Println(p.Filename, p.Attachment)
 	if p.Attachment {
-		return base64.NewEncoder(base64.StdEncoding, p.file)
+		if p.Buffer.Size() > compressionLimit {
+			p.ContentType = "application/zip"
+			filename := p.Filename
+			p.Filename = strings.TrimSuffix(filename, filepath.Ext(filename)) + ".zip"
+			return newZipWriteCloser(filename, p.file)
+		}
+		return base64.NewEncoder(base64.StdEncoding, p.file), nil
 	} else {
-		return newPlainWriteCloser(p.file)
+		return newPlainWriteCloser(p.file), nil
 	}
 }
 
@@ -244,9 +275,6 @@ func (e *Email) AddPart(part Part) (err error) {
 		return fmt.Errorf("cannot add a Part that has no buffer")
 	}
 
-	buffer := part.Buffer
-	contentType := part.ContentType
-
 	// If the content type is not given, we will automatically figure out the content type
 	if part.ContentType == "" {
 		_, _ = part.Buffer.Seek(0, io.SeekStart)
@@ -255,13 +283,7 @@ func (e *Email) AddPart(part Part) (err error) {
 			err = errors.Wrap(err, "could not read part buffer to byte array")
 		}
 		_, _ = part.Buffer.Seek(0, io.SeekStart)
-		contentType = http.DetectContentType(b)
-	}
-
-	part = Part{
-		ContentType: contentType,
-		Attachment:  part.Attachment,
-		Filename:    part.Filename,
+		part.ContentType = http.DetectContentType(b)
 	}
 
 	// Create a temp file for the part
@@ -273,8 +295,13 @@ func (e *Email) AddPart(part Part) (err error) {
 	}
 
 	// Write the buffer to the encoder stream in chunks
-	wc := part.Encoder()
-	reader := bufio.NewReader(buffer)
+	var wc io.WriteCloser
+	if wc, err = part.Encoder(); err != nil {
+		err = errors.Wrapf(err, "could not create an encoder for part no. %d", len(e.parts)+1)
+		return
+	}
+
+	reader := bufio.NewReader(part.Buffer)
 	nBytes, nChunks := int64(0), int64(0)
 	buf := make([]byte, 0, defaultBufSize)
 	for {
@@ -304,7 +331,8 @@ func (e *Email) AddPart(part Part) (err error) {
 		err = errors.Wrapf(err, "error occurred whilst closing writer for part %s", part.file.Name())
 		return
 	}
-	_, _ = buffer.Seek(0, io.SeekStart)
+	_, _ = part.Buffer.Seek(0, io.SeekStart)
+	part.Buffer = nil
 
 	if _, err = part.file.Seek(0, io.SeekStart); err != nil {
 		err = errors.Wrapf(
