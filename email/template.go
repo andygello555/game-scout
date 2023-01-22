@@ -1,11 +1,11 @@
 package email
 
 import (
+	"bufio"
 	"bytes"
 	"embed"
 	"encoding/gob"
 	"fmt"
-	"github.com/ainsleyclark/go-mail/mail"
 	"github.com/andygello555/game-scout/browser"
 	"github.com/andygello555/game-scout/db/models"
 	myErrors "github.com/andygello555/game-scout/errors"
@@ -15,6 +15,7 @@ import (
 	"github.com/playwright-community/playwright-go"
 	"github.com/volatiletech/null/v9"
 	"html/template"
+	"io"
 	"jaytaylor.com/html2text"
 	"os"
 	"path/filepath"
@@ -232,9 +233,9 @@ type Template struct {
 	Template *template.Template
 	// Config is the TemplateConfig for this template.
 	Config TemplateConfig
-	// Buffer is a byte buffer that contains the parsed output for the results produced by Template.HTML and
+	// Buffer is a bytes.Reader that contains the parsed output for the results produced by Template.HTML and
 	// Template.PDF. This is overwritten each time.
-	Buffer bytes.Buffer
+	Buffer bytes.Reader
 	// Error is the error returned by any of the chained methods.
 	Error error
 	// ContentType is the current TemplateBufferContentType of the Buffer.
@@ -299,10 +300,13 @@ func (t *Template) HTML() (output *Template) {
 		return
 	}
 
-	if err := output.Template.Execute(&output.Buffer, output.Context); err != nil {
+	buffer := bytes.NewBuffer([]byte{})
+	if err := output.Template.Execute(buffer, output.Context); err != nil {
 		output.Error = errors.Wrapf(err, "could not execute template %s with the given context", t.Path.Name())
 		return
 	}
+	output.Buffer = *bytes.NewReader(buffer.Bytes())
+	buffer = nil
 
 	output.ContentType = HTML
 	return
@@ -355,7 +359,8 @@ func (t *Template) PDF() (output *Template) {
 		)
 	}(file.Name())
 
-	if _, err = file.Write(output.Buffer.Bytes()); err != nil {
+	_, _ = output.Buffer.Seek(0, io.SeekStart)
+	if _, err = output.Buffer.WriteTo(bufio.NewWriter(file)); err != nil {
 		output.Error = errors.Wrap(err, "could not write HTML buffer to temporary file")
 		return
 	}
@@ -421,12 +426,28 @@ func (t *Template) PDF() (output *Template) {
 		return
 	}
 
-	output.Buffer = *bytes.NewBuffer(pdfBytes)
+	output.Buffer = *bytes.NewReader(pdfBytes)
 	output.ContentType = PDF
 	return
 }
 
-// Transmission returns the filled mail.Transmission instance that can be sent using the email Client.
+// WriteFile will write the Buffer to a file of the given filename.
+func (t *Template) WriteFile(filename string) (err error) {
+	var file *os.File
+	if file, err = os.Create(filename); err != nil {
+		return errors.Wrap(err, "could not create file to save Template buffer to")
+	}
+	defer func(file *os.File) {
+		err = myErrors.MergeErrors(err, errors.Wrap(file.Close(), "could not close file with Template.Buffer contents"))
+	}(file)
+
+	if _, err = t.Buffer.WriteTo(file); err != nil {
+		return errors.Wrap(err, "could not write Template.Buffer to file")
+	}
+	return
+}
+
+// Email returns the filled Email instance that can be sent using the email Client.
 //
 // • If the given Template has an error set in Template.Error then this error will be wrapped and returned.
 //
@@ -438,45 +459,9 @@ func (t *Template) PDF() (output *Template) {
 // be added as an attachment.
 //
 // • If the given Template does not have a ContentType that is either HTML or PDF, then an error will be returned.
-func (t *Template) Transmission() (transmission *mail.Transmission, err error) {
+func (t *Template) Email() (email *Email, err error) {
 	if t.Error != nil {
 		err = errors.Wrapf(err, "cannot create transmission for %s template as it contains an error", t.Path.Name())
-		return
-	}
-
-	html := ""
-	plain := ""
-	var attachments []mail.Attachment
-	switch t.ContentType {
-	case HTML:
-		html = t.Buffer.String()
-		if plain, err = html2text.FromString(html, t.Config.TemplateHTML2TextOptions()); err != nil {
-			err = errors.Wrapf(err, "cannot convert %s template to plain text from HTML", t.Path.Name())
-			return
-		}
-		attachments = []mail.Attachment{{
-			Filename: t.Config.TemplateAttachmentName() + ".html",
-		}}
-	case PDF:
-		htmlTemplate := t.Context.HTML()
-		html = htmlTemplate.Buffer.String()
-		plain, err = html2text.FromString(html, t.Config.TemplateHTML2TextOptions())
-		if err = myErrors.MergeErrors(htmlTemplate.Error, err); err != nil {
-			err = errors.Wrapf(err, "cannot convert %s template to plain text from HTML/PDF", t.Path.Name())
-			return
-		}
-		if t.Config.TemplatePlainOnly() {
-			html = "&nbsp;"
-		}
-		attachments = []mail.Attachment{{
-			Filename: t.Config.TemplateAttachmentName() + ".pdf",
-			Bytes:    t.Buffer.Bytes(),
-		}}
-	default:
-		err = fmt.Errorf(
-			"%s template has content-type %s, to create a Transmission we need %s or %s",
-			t.Path.Name(), t.ContentType.String(), HTML.String(), PDF.String(),
-		)
 		return
 	}
 
@@ -484,22 +469,69 @@ func (t *Template) Transmission() (transmission *mail.Transmission, err error) {
 	if Client.Config().EmailDebug() {
 		recipients = t.Config.TemplateDebugTo()
 	}
-	transmission = &mail.Transmission{
-		Recipients:  recipients,
-		Subject:     t.Config.TemplateSubject(),
-		HTML:        html,
-		PlainText:   plain,
-		Attachments: attachments,
+
+	if email, err = NewEmail(); err != nil {
+		err = errors.Wrap(err, "could not create Email")
+	}
+	email.FromName = Client.Config().EmailFromName()
+	email.FromAddress = Client.Config().EmailFrom()
+	email.Recipients = recipients
+	email.Subject = t.Config.TemplateSubject()
+
+	var (
+		plain            string
+		htmlBuffer       *bytes.Reader
+		attachmentBuffer *bytes.Reader
+		attachmentName   string
+	)
+	parts := make([]Part, 0)
+	switch t.ContentType {
+	case HTML:
+		htmlBuffer = &t.Buffer
+		attachmentBuffer = &t.Buffer
+		attachmentName = t.Config.TemplateAttachmentName() + ".html"
+		if plain, err = html2text.FromReader(&t.Buffer, t.Config.TemplateHTML2TextOptions()); err != nil {
+			err = errors.Wrapf(err, "cannot convert %s template to plain text from HTML", t.Path.Name())
+			return
+		}
+	case PDF:
+		htmlTemplate := t.Context.HTML()
+		htmlBuffer = &htmlTemplate.Buffer
+		attachmentBuffer = &t.Buffer
+		attachmentName = t.Config.TemplateAttachmentName() + ".pdf"
+		if plain, err = html2text.FromReader(&htmlTemplate.Buffer, t.Config.TemplateHTML2TextOptions()); err != nil {
+			err = errors.Wrapf(err, "cannot convert %s template to plain text from HTML/PDF", t.Path.Name())
+			return
+		}
+	default:
+		err = fmt.Errorf(
+			"%s template has content-type %s, to create a Email we need %s or %s",
+			t.Path.Name(), t.ContentType.String(), HTML.String(), PDF.String(),
+		)
+		return
+	}
+
+	parts = append(parts,
+		Part{Buffer: bytes.NewReader([]byte(plain))},
+		Part{Buffer: attachmentBuffer, Attachment: true, Filename: attachmentName},
+	)
+	if !t.Config.TemplatePlainOnly() {
+		parts = append(parts, Part{Buffer: htmlBuffer})
+	}
+
+	if err = email.AddParts(parts...); err != nil {
+		err = myErrors.MergeErrors(err, email.Close())
+		return
 	}
 	return
 }
 
-// SendAsync the Template using the default ClientWrapper (Client) with ClientWrapper.SendAsync.
+// SendAsync the Template using the default TemplateMailer (Client) with ClientWrapper.SendAsync.
 func (t *Template) SendAsync() <-chan Response {
 	return Client.SendAsync(t)
 }
 
-// SendSync the Template using the default ClientWrapper (Client) with ClientWrapper.SendSync.
-func (t *Template) SendSync() (mail.Response, error) {
+// SendSync the Template using the default TemplateMailer (Client) with ClientWrapper.SendSync.
+func (t *Template) SendSync() Response {
 	return Client.SendSync(t)
 }

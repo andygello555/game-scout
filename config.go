@@ -153,6 +153,7 @@ type EmailConfig struct {
 func (c *EmailConfig) EmailDebug() bool      { return c.Debug }
 func (c *EmailConfig) EmailHost() string     { return c.Host }
 func (c *EmailConfig) EmailPort() int        { return c.Port }
+func (c *EmailConfig) EmailAddress() string  { return fmt.Sprintf("%s:%d", c.Host, c.Port) }
 func (c *EmailConfig) EmailFrom() string     { return c.From }
 func (c *EmailConfig) EmailFromName() string { return c.FromName }
 func (c *EmailConfig) EmailPassword() string { return c.Password }

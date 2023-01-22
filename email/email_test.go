@@ -3,15 +3,14 @@ package email
 import (
 	"bytes"
 	"fmt"
-	"github.com/ainsleyclark/go-mail/mail"
 	"github.com/andygello555/game-scout/db/models"
+	"github.com/andygello555/game-scout/errors"
 	"github.com/g8rswimmer/go-twitter/v2"
 	smtpmock "github.com/mocktools/go-smtp-mock/v2"
+	"io"
 	"jaytaylor.com/html2text"
-	"mime/multipart"
-	"net/http"
 	"net/smtp"
-	"strconv"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +59,7 @@ type emailConfig struct {
 func (c *emailConfig) EmailDebug() bool      { return c.Debug }
 func (c *emailConfig) EmailHost() string     { return c.Host }
 func (c *emailConfig) EmailPort() int        { return c.Port }
+func (c *emailConfig) EmailAddress() string  { return fmt.Sprintf("%s:%d", c.Host, c.Port) }
 func (c *emailConfig) EmailFrom() string     { return c.From }
 func (c *emailConfig) EmailFromName() string { return c.FromName }
 func (c *emailConfig) EmailPassword() string { return c.Password }
@@ -86,7 +86,7 @@ var config = &emailConfig{
 				OmitLinks: true,
 				TextOnly:  true,
 			},
-			PlainOnly: true,
+			PlainOnly: false,
 		},
 	},
 }
@@ -195,76 +195,22 @@ Weighted score for this snapshot
 
 type testClient struct {
 	config    Config
-	send      func(t *mail.Transmission) (mail.Response, error)
-	sendAsync func(template *Template) <-chan Response
-	sendSync  func(template *Template) (mail.Response, error)
+	send      func(email *Email) error
+	sendAsync func(template *Template) <-chan error
+	sendSync  func(template *Template) error
 }
 
-func (tc *testClient) Config() Config                                   { return tc.config }
-func (tc *testClient) Send(t *mail.Transmission) (mail.Response, error) { return tc.send(t) }
-func (tc *testClient) SendAsync(template *Template) <-chan Response     { return tc.sendAsync(template) }
-func (tc *testClient) SendSync(template *Template) (mail.Response, error) {
-	return tc.sendSync(template)
-}
-
-func bytesFromTransmission(t *mail.Transmission) []byte {
-	buf := bytes.NewBuffer(nil)
-
-	for k, v := range t.Headers {
-		buf.WriteString(fmt.Sprintf("%s: %s\n", k, v))
-	}
-
-	buf.WriteString("MIME-Version: 1.0\n")
-	writer := multipart.NewWriter(buf)
-	boundary := writer.Boundary()
-
-	if t.HasAttachments() {
-		buf.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=%s\r\n", boundary))
-	} else {
-		buf.WriteString("Content-Type: text/html; charset=UTF-8\r\n")
-	}
-
-	buf.WriteString(fmt.Sprintf("Subject: %s\n", t.Subject))
-	buf.WriteString(fmt.Sprintf("To: %s\n", strings.Join(t.Recipients, ",")))
-
-	if t.HasCC() {
-		buf.WriteString(fmt.Sprintf("CC: %s\n", strings.Join(t.CC, ",")))
-	}
-
-	if t.PlainText != "" {
-		buf.WriteString(fmt.Sprintf("--%s\r\n", boundary))
-		buf.WriteString("Content-Transfer-Encoding: quoted-printable\r\n")
-		buf.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
-		buf.WriteString(fmt.Sprintf("\r\n%s\r\n", strings.TrimSpace(t.PlainText)))
-	}
-
-	if t.HTML != "" {
-		buf.WriteString(fmt.Sprintf("--%s\r\n", boundary))
-		buf.WriteString("Content-Transfer-Encoding: quoted-printable\r\n")
-		buf.WriteString("Content-Type: text/html; charset=UTF-8\r\n")
-		buf.WriteString(fmt.Sprintf("\r\n%s\r\n", t.HTML))
-	}
-
-	if t.HasAttachments() {
-		for _, v := range t.Attachments {
-			buf.WriteString(fmt.Sprintf("--%s\r\n", boundary))
-			buf.WriteString(fmt.Sprintf("Content-Type: %s\n", v.Mime()))
-			buf.WriteString("Content-Transfer-Encoding: base64\n")
-			buf.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=%s\n", v.Filename))
-			buf.WriteString(fmt.Sprintf("\r\n--%s", v.B64()))
-		}
-		buf.WriteString("--")
-	}
-
-	return buf.Bytes()
-}
+func (tc *testClient) Auth() smtp.Auth                              { return nil }
+func (tc *testClient) Config() Config                               { return tc.config }
+func (tc *testClient) Send(email *Email) error                      { return send(tc, email) }
+func (tc *testClient) SendAsync(template *Template) <-chan Response { return sendAsync(tc, template) }
+func (tc *testClient) SendSync(template *Template) Response         { return sendSync(tc, template) }
 
 func fakeClientServer(t *testing.T) (server *smtpmock.Server, close func()) {
 	server = smtpmock.New(smtpmock.ConfigurationAttr{
 		LogToStdout:       testing.Verbose(),
 		LogServerActivity: testing.Verbose(),
 	})
-	mail.Debug = testing.Verbose()
 
 	// To start server use Start() method
 	if err := server.Start(); err != nil {
@@ -280,28 +226,8 @@ func fakeClientServer(t *testing.T) (server *smtpmock.Server, close func()) {
 	// for case when portNumber wasn't specified
 	config.Host, config.Port = "127.0.0.1", server.PortNumber()
 
-	// Create an email client that doesn't provide any auth when sending emails.
-	client := &testClient{
-		config: config,
-		send: func(t *mail.Transmission) (mail.Response, error) {
-			err := t.Validate()
-			if err != nil {
-				return mail.Response{}, err
-			}
-
-			err = smtp.SendMail(config.Host+":"+strconv.Itoa(config.Port), nil, config.From, t.Recipients, bytesFromTransmission(t))
-			if err != nil {
-				return mail.Response{}, err
-			}
-
-			return mail.Response{
-				StatusCode: http.StatusOK,
-				Message:    "Email sent successfully",
-			}, nil
-		},
-	}
-	client.sendAsync = func(template *Template) <-chan Response { return sendAsync(client, template) }
-	client.sendSync = func(template *Template) (mail.Response, error) { return sendSync(client, template) }
+	// Create an email client that doesn't provide any auth.
+	client := &testClient{config: config}
 	Client = client
 	return
 }
@@ -324,7 +250,7 @@ func TestMeasureContext_Template(t *testing.T) {
 			}
 		} else {
 			var plain string
-			if plain, err = html2text.FromString(template.Buffer.String(), template.Config.TemplateHTML2TextOptions()); err != nil {
+			if plain, err = html2text.FromReader(&template.Buffer, template.Config.TemplateHTML2TextOptions()); err != nil {
 				t.Errorf(
 					"Unexpected error occurred whilst generating plain-text from %s template: %v",
 					test.context.Path().Name(), err,
@@ -334,19 +260,23 @@ func TestMeasureContext_Template(t *testing.T) {
 					t.Errorf("Expected plain-text does not match actual plain-text")
 				}
 			}
+			_, _ = template.Buffer.Seek(0, io.SeekStart)
 		}
 	}
 }
 
-func checkResponseError(t *testing.T, testNo int, test exampleContext, err error) {
-	if err != nil {
+func checkResponseError(t *testing.T, testNo int, test exampleContext, resp Response) {
+	if resp.Error != nil {
 		if test.err != nil {
-			if test.err.Error() != err.Error() {
-				t.Errorf("Expected error: %v for test no. %d, but got: %v", test.err, testNo, err)
+			if test.err.Error() != resp.Error.Error() {
+				t.Errorf("Expected error: %v for test no. %d, but got: %v", test.err, testNo, resp.Error)
 			}
 		} else {
-			t.Errorf("Expected no error for test no. %d, but got: %v", testNo, err)
+			t.Errorf("Expected no error for test no. %d, but got: %v", testNo, resp.Error)
 		}
+	}
+	if testing.Verbose() {
+		fmt.Println(resp.Email.Profiling.String())
 	}
 }
 
@@ -359,12 +289,19 @@ func checkMessageRequest(t *testing.T, testNo int, test exampleContext, expected
 		)
 	} else {
 		for msgNo, message := range messages {
+			if testing.Verbose() {
+				fmt.Printf("Message no. %d content:\n", msgNo+1)
+				fmt.Printf("%q\n", message.MsgRequest())
+				fmt.Println()
+			}
+
 			if !strings.Contains(strings.ReplaceAll(message.MsgRequest(), "\r", ""), test.expectedPlain) {
 				t.Errorf(
 					"The request for msg no. %d for test no. %d does not contain the expected plain-text",
 					msgNo+1, testNo,
 				)
 			}
+
 			if message.MsgResponse() != "250 Received" {
 				t.Errorf(
 					"The response for msg no. %d for test no. %d is not \"250 Received\" it is %s",
@@ -396,12 +333,12 @@ func TestTemplate_SendAsync(t *testing.T) {
 
 		template := test.context.HTML()
 		resp := sendAsyncTemplate(template)
-		checkResponseError(t, testNo, test, resp.Error)
+		checkResponseError(t, testNo, test, resp)
 		checkMessageRequest(t, testNo, test, 1, server)
 
 		template = template.PDF()
 		resp = sendAsyncTemplate(template)
-		checkResponseError(t, testNo, test, resp.Error)
+		checkResponseError(t, testNo, test, resp)
 		checkMessageRequest(t, testNo, test, 2, server)
 	}
 }
@@ -414,13 +351,71 @@ func TestTemplate_SendSync(t *testing.T) {
 		testNo++
 
 		template := test.context.HTML()
-		_, err := template.SendSync()
-		checkResponseError(t, testNo, test, err)
+		resp := template.SendSync()
+		checkResponseError(t, testNo, test, resp)
 		checkMessageRequest(t, testNo, test, 1, server)
 
 		template = template.PDF()
-		_, err = template.SendSync()
-		checkResponseError(t, testNo, test, err)
+		resp = template.SendSync()
+		checkResponseError(t, testNo, test, resp)
 		checkMessageRequest(t, testNo, test, 2, server)
 	}
+}
+
+func ExampleNewEmail() {
+	var (
+		email *Email
+		err   error
+	)
+
+	if email, err = NewEmail(); err != nil {
+		fmt.Println(err)
+	}
+	email.Recipients = []string{"dest@dest.com"}
+	email.Subject = "Hello world!"
+	email.FromName = "Test"
+	email.FromAddress = "test@test.com"
+	defer email.Close()
+
+	if err = errors.MergeErrors(
+		email.AddPart(Part{Buffer: bytes.NewReader([]byte("Hello world!"))}),
+		email.AddPart(Part{Buffer: bytes.NewReader([]byte("<h1>Hello world!</h1>"))}),
+		email.AddPart(Part{
+			Buffer:      bytes.NewReader([]byte("a,b,c\n1,2,3")),
+			ContentType: "text/csv; charset=utf-8",
+			Attachment:  true,
+			Filename:    "test.csv",
+		}),
+	); err != nil {
+		fmt.Println(err)
+	}
+
+	if err = email.Write(); err != nil {
+		fmt.Println(err)
+	}
+
+	// Need to remove the boundary IDs and DOS newlines, so we can match the example output successfully
+	boundaryIDsRemoved := regexp.MustCompile(`(?m)(--|; boundary=)[a-z0-9]+((--)?\r\n)`).ReplaceAllString(email.Read().String(), "${1}BOUNDARY${2}")
+	fmt.Println(strings.ReplaceAll(boundaryIDsRemoved, "\r\n", "\n"))
+	// Output:
+	// MIME-Version: 1.0
+	// Content-Type: multipart/alternative; boundary=BOUNDARY
+	// From: Test <test@test.com>
+	// To: dest@dest.com
+	// Subject: Hello world!
+	// --BOUNDARY
+	// Content-Type: text/plain; charset=utf-8
+	//
+	// Hello world!
+	// --BOUNDARY
+	// Content-Type: text/html; charset=utf-8
+	//
+	// <h1>Hello world!</h1>
+	// --BOUNDARY
+	// Content-Disposition: attachment; filename=test.csv
+	// Content-Transfer-Encoding: base64
+	// Content-Type: text/csv; charset=utf-8
+	//
+	// YSxiLGMKMSwyLDM=
+	// --BOUNDARY--
 }

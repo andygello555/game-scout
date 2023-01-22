@@ -793,15 +793,12 @@ func main() {
 						return cli.NewExitError(template.Error.Error(), 1)
 					}
 
-					if err = os.WriteFile(
-						fmt.Sprintf(
-							"measure_email_for_%s_%s.html",
-							strings.Join(c.StringSlice("id"), "_"),
-							time.Now().UTC().Format("2006-01-02"),
-						),
-						template.Buffer.Bytes(),
-						filePerms,
-					); err != nil {
+					filename := fmt.Sprintf("measure_email_for_%s_%s",
+						strings.Join(c.StringSlice("id"), "_"),
+						time.Now().UTC().Format("2006-01-02"),
+					)
+
+					if err = template.WriteFile(filename + ".html"); err != nil {
 						return cli.NewExitError(err.Error(), 1)
 					}
 
@@ -809,22 +806,16 @@ func main() {
 						return cli.NewExitError(template.Error.Error(), 1)
 					}
 
-					if err = os.WriteFile(
-						fmt.Sprintf(
-							"measure_email_for_%s_%s.pdf",
-							strings.Join(c.StringSlice("id"), "_"),
-							time.Now().UTC().Format("2006-01-02"),
-						),
-						template.Buffer.Bytes(),
-						filePerms,
-					); err != nil {
+					if err = template.WriteFile(filename + ".pdf"); err != nil {
 						return cli.NewExitError(err.Error(), 1)
 					}
 
 					if c.Bool("measureSendEmail") {
-						if _, err = template.SendSync(); err != nil {
+						var resp email.Response
+						if resp = template.SendSync(); err != nil {
 							return cli.NewExitError(err.Error(), 1)
 						}
+						fmt.Println(resp.Email.Profiling.String())
 					}
 				}
 
@@ -917,7 +908,8 @@ func main() {
 						),
 						time.Now().UTC().Format("2006-01-02"),
 					)
-					if err = os.WriteFile(filename+".html", template.Buffer.Bytes(), filePerms); err != nil {
+
+					if err = template.WriteFile(filename + ".html"); err != nil {
 						return cli.NewExitError(err.Error(), 1)
 					}
 
@@ -925,7 +917,7 @@ func main() {
 						return cli.NewExitError(template.Error.Error(), 1)
 					}
 
-					if err = os.WriteFile(filename+".pdf", template.Buffer.Bytes(), filePerms); err != nil {
+					if err = template.WriteFile(filename + ".pdf"); err != nil {
 						return cli.NewExitError(err.Error(), 1)
 					}
 				}

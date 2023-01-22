@@ -6,7 +6,6 @@ require (
 	github.com/Netflix/go-expect v0.0.0-20220104043353-73e0943537d2
 	github.com/RichardKnop/logging v0.0.0-20190827224416-1a693bdd4fae
 	github.com/RichardKnop/machinery v1.10.6
-	github.com/SebastiaanKlippert/go-wkhtmltopdf v1.8.2
 	github.com/anaskhan96/soup v1.2.5
 	github.com/andygello555/gotils/v2 v2.1.0
 	github.com/deckarep/golang-set/v2 v2.1.0
@@ -15,6 +14,7 @@ require (
 	github.com/gorilla/websocket v1.5.0
 	github.com/hjson/hjson-go/v4 v4.2.0
 	github.com/lib/pq v1.10.2
+	github.com/mocktools/go-smtp-mock/v2 v2.0.5
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/pkg/errors v0.9.1
 	github.com/playwright-community/playwright-go v0.2000.1
@@ -23,9 +23,9 @@ require (
 	github.com/urfave/cli v1.22.10
 	github.com/volatiletech/null/v9 v9.0.0
 	github.com/wcharczuk/go-chart v2.0.1+incompatible
-	golang.org/x/exp v0.0.0-20230111222715-75897c7a292a
 	gorm.io/driver/postgres v1.4.4
 	gorm.io/gorm v1.24.0
+	jaytaylor.com/html2text v0.0.0-20211105163654-bc68cce691ba
 )
 
 require (
@@ -34,7 +34,6 @@ require (
 	cloud.google.com/go/compute/metadata v0.2.1 // indirect
 	cloud.google.com/go/iam v0.7.0 // indirect
 	cloud.google.com/go/pubsub v1.10.0 // indirect
-	github.com/ainsleyclark/go-mail v1.1.1 // indirect
 	github.com/aws/aws-sdk-go v1.42.34 // indirect
 	github.com/blend/go-sdk v1.20220411.3 // indirect
 	github.com/bradfitz/gomemcache v0.0.0-20190913173617-a41fca850d0b // indirect
@@ -69,12 +68,13 @@ require (
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/kelseyhightower/envconfig v1.4.0 // indirect
 	github.com/klauspost/compress v1.11.7 // indirect
+	github.com/kr/pretty v0.3.0 // indirect
 	github.com/mattn/go-runewidth v0.0.14 // indirect
 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
-	github.com/mocktools/go-smtp-mock/v2 v2.0.5 // indirect
 	github.com/olekukonko/tablewriter v0.0.5 // indirect
 	github.com/rivo/uniseg v0.4.2 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
+	github.com/rogpeppe/go-internal v1.8.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/ssor/bom v0.0.0-20170718123548-6386211fdfcf // indirect
 	github.com/streadway/amqp v1.0.0 // indirect
@@ -86,6 +86,7 @@ require (
 	go.opentelemetry.io/otel/metric v0.17.0 // indirect
 	go.opentelemetry.io/otel/trace v0.17.0 // indirect
 	golang.org/x/crypto v0.0.0-20221012134737-56aed061732a // indirect
+	golang.org/x/exp v0.0.0-20230111222715-75897c7a292a // indirect
 	golang.org/x/image v0.0.0-20220302094943-723b81ca9867 // indirect
 	golang.org/x/net v0.0.0-20221014081412-f15817d10f9b // indirect
 	golang.org/x/oauth2 v0.0.0-20221014153046-6fdb5e3db783 // indirect
@@ -99,9 +100,9 @@ require (
 	google.golang.org/genproto v0.0.0-20221201164419-0e50fba7f41c // indirect
 	google.golang.org/grpc v1.50.1 // indirect
 	google.golang.org/protobuf v1.28.1 // indirect
+	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/square/go-jose.v2 v2.6.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	jaytaylor.com/html2text v0.0.0-20211105163654-bc68cce691ba // indirect
 )
 
 replace cloud.google.com/go/pubsub => cloud.google.com/go/pubsub v1.9.0 // bug on machinery

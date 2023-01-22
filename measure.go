@@ -11,7 +11,6 @@ import (
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"math"
-	"os"
 	"time"
 )
 
@@ -203,23 +202,19 @@ func MeasurePhase(state *ScoutState) (err error) {
 		return myErrors.TemporaryWrap(false, pdf.Error, "could not construct Measure PDF")
 	}
 
-	if err = os.WriteFile(
-		fmt.Sprintf(
-			"measure_email_for_%d_developers_%s.pdf",
-			len(enabledDevelopers),
-			time.Now().UTC().Format("2006-01-02"),
-		),
-		pdf.Buffer.Bytes(),
-		filePerms,
-	); err != nil {
+	if err = pdf.WriteFile(fmt.Sprintf(
+		"measure_email_for_%d_developers_%s.pdf",
+		len(enabledDevelopers),
+		time.Now().UTC().Format("2006-01-02"),
+	)); err != nil {
 		return err
 	}
 
-	start := time.Now()
 	log.INFO.Printf("Sending email...")
-	if _, err = pdf.SendSync(); err != nil {
+	var resp email.Response
+	if resp = pdf.SendSync(); resp.Error != nil {
 		log.ERROR.Printf("Could not send email: %v", err)
 	}
-	log.INFO.Printf("Finished email sending in %s", time.Now().Sub(start).String())
+	log.INFO.Println(resp.Email.Profiling.String())
 	return
 }
