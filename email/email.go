@@ -84,7 +84,6 @@ func (p *Part) ContentTypeSlug() string {
 // be a base64 encoder, anything else will be encoded as plain-text.
 func (p *Part) Encoder() (io.WriteCloser, error) {
 	_, _ = p.file.Seek(0, io.SeekStart)
-	fmt.Println(p.Filename, p.Attachment)
 	if p.Attachment {
 		if p.Buffer.Size() > compressionLimit {
 			p.ContentType = "application/zip"
