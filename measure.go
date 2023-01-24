@@ -76,11 +76,26 @@ func trendFinder(jobs <-chan *models.Developer, results chan<- *trendFinderResul
 }
 
 func MeasurePhase(state *ScoutState) (err error) {
-	// TODO: Check if the email has already been sent out this week/only send it out on a certain day
+	startAny, _ := state.GetCachedField(StateType).Get("Start")
+	start := startAny.(time.Time)
+	start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
+	debugAny, _ := state.GetCachedField(StateType).Get("Debug")
+	debug := debugAny.(bool)
+
+	// If the weekday of the start of the scrape does not match the weekday that Measure emails are sent out on and
+	// debug is not set, then the MeasurePhase does not need to be run.
+	if !debug && globalConfig.Email.EmailTemplateConfigFor(email.Measure).TemplateSendDay() != start.Weekday() {
+		log.WARNING.Printf(
+			"Measure Phase does not need to be run as Scout was started on %s, which was/is not a %s",
+			start.Format("Monday 2 January"),
+			globalConfig.Email.EmailTemplateConfigFor(email.Measure).TemplateSendDay().String(),
+		)
+		return nil
+	}
+
 	measureContext := email.MeasureContext{
-		// TODO: Replace the start and end times with the actual start and end times.
-		Start:                  time.Now(),
-		End:                    time.Now(),
+		Start:                  start.Add(time.Hour * 24 * 7 * -1),
+		End:                    start,
 		TrendingDevs:           make([]*models.TrendingDev, 0),
 		DevelopersBeingDeleted: *state.GetIterableCachedField(DeletedDevelopersType).(*DeletedDevelopers),
 		Config:                 globalConfig.Email,
@@ -156,7 +171,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 			"%d: Adding Developer %v with trend %.10f to email context...",
 			i+1, topDeveloper.Developer, topDeveloper.Trend.GetCoeffs()[1],
 		)
-		if debug, _ := state.GetCachedField(StateType).Get("Debug"); !debug.(bool) {
+		if !debug {
 			// Update the number of times this developer has been highlighted
 			if err = db.DB.Model(topDeveloper.Developer).Update("times_highlighted", gorm.Expr("times_highlighted + 1")).Error; err != nil {
 				log.ERROR.Printf("Could not increment TimesHighlighted for Developer %v: %v", topDeveloper.Developer, err)
@@ -183,7 +198,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 	}
 	measureContext.TopSteamApps = steamApps
 
-	if debug, _ := state.GetCachedField(StateType).Get("Debug"); !debug.(bool) {
+	if !debug {
 		for _, steamApp := range steamApps {
 			if err = db.DB.Model(steamApp).Update("times_highlighted", gorm.Expr("times_highlighted + 1")).Error; err != nil {
 				log.ERROR.Printf("Could not increment TimesHighlighted for %s (%d): %v", steamApp.Name, steamApp.ID, err)

@@ -120,6 +120,9 @@ type TemplateConfig struct {
 	// PlainOnly indicates whether to only send the plain-text when sending instances of this email.Template in an
 	// email. If it is not set, then the HTML content will also be added.
 	PlainOnly bool `json:"plain_only"`
+	// SendDay is the time.Weekday that instances of this email.Template are sent. This is ignored if the debug flag is
+	// set in ScoutState.
+	SendDay time.Weekday `json:"send_day"`
 }
 
 func (c *TemplateConfig) TemplateMaxImageWidth() int  { return c.MaxImageWidth }
@@ -138,6 +141,7 @@ func (c *TemplateConfig) TemplateSendBackoff() (time.Duration, error) {
 }
 func (c *TemplateConfig) TemplateHTML2TextOptions() html2text.Options { return c.HTML2TextOptions }
 func (c *TemplateConfig) TemplatePlainOnly() bool                     { return c.PlainOnly }
+func (c *TemplateConfig) TemplateSendDay() time.Weekday               { return c.SendDay }
 
 // EmailConfig contains the variables we need to create our SMTP email client.
 type EmailConfig struct {

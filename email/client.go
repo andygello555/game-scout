@@ -33,6 +33,7 @@ type TemplateConfig interface {
 	TemplateAttachmentName() string
 	TemplateHTML2TextOptions() html2text.Options
 	TemplatePlainOnly() bool
+	TemplateSendDay() time.Weekday
 }
 
 type Config interface {

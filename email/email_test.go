@@ -27,6 +27,7 @@ type templateConfig struct {
 	SendBackoff          string            `json:"send_backoff"`
 	HTML2TextOptions     html2text.Options `json:"html2text_options"`
 	PlainOnly            bool              `json:"plain_only"`
+	SendDay              time.Weekday      `json:"send_day"`
 }
 
 func (c *templateConfig) TemplateMaxImageWidth() int  { return c.MaxImageWidth }
@@ -45,6 +46,7 @@ func (c *templateConfig) TemplateSendBackoff() (time.Duration, error) {
 }
 func (c *templateConfig) TemplateHTML2TextOptions() html2text.Options { return c.HTML2TextOptions }
 func (c *templateConfig) TemplatePlainOnly() bool                     { return c.PlainOnly }
+func (c *templateConfig) TemplateSendDay() time.Weekday               { return c.SendDay }
 
 type emailConfig struct {
 	Debug           bool                             `json:"debug"`
@@ -87,6 +89,7 @@ var config = &emailConfig{
 				TextOnly:  true,
 			},
 			PlainOnly: false,
+			SendDay:   time.Monday,
 		},
 	},
 }
