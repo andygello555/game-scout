@@ -28,6 +28,10 @@ func (rw *PhaseRWAccessConfig) ID() int { return int(rw.Phase) }
 func (rw *PhaseRWAccessConfig) R() bool { return rw.Read }
 func (rw *PhaseRWAccessConfig) W() bool { return rw.Write }
 
+func (rw *PhaseRWAccessConfig) String() string {
+	return fmt.Sprintf("{Phase: %v, Read: %v, Write: %v}", rw.Phase, rw.Read, rw.Write)
+}
+
 // DBConfig contains the config variables for the DB to connect to via Gorm.
 type DBConfig struct {
 	Host     string `json:"host"`
@@ -92,6 +96,13 @@ func (c *DBConfig) DBPhaseWriteAccess(id int) bool {
 	return write
 }
 
+func (c *DBConfig) String() string {
+	return fmt.Sprintf(
+		"{Host: %v, User: %v, Password: %v, Name: %v, Port: %v, SSLMode: %v, Timezone: %v, PhaseRWAccess: %v, DefaultPhaseRWAccess: %v}",
+		c.Host, c.User, c.Password, c.Name, c.Port, c.SSLMode, c.Timezone, c.PhaseRWAccess, c.DefaultPhaseRWAccess,
+	)
+}
+
 // TemplateConfig contains the constants used for a specific email.TemplatePath.
 type TemplateConfig struct {
 	// MaxImageWidth is the maximum width of any converted base64 images that are going to be displayed in the
@@ -143,6 +154,13 @@ func (c *TemplateConfig) TemplateHTML2TextOptions() html2text.Options { return c
 func (c *TemplateConfig) TemplatePlainOnly() bool                     { return c.PlainOnly }
 func (c *TemplateConfig) TemplateSendDay() time.Weekday               { return c.SendDay }
 
+func (c *TemplateConfig) String() string {
+	return fmt.Sprintf(
+		"{MaxImageWidth: %v, MaxImageHeight: %v, DebugTo: %v, To: %v, SubjectFormat: %v, AttachmentNameFormat: %v, SendRetries: %v, SendBackoff: %v, HTML2TextOptions: %v, PlainOnly: %v, SendDay: %v}",
+		c.MaxImageWidth, c.MaxImageHeight, c.DebugTo, c.To, c.SubjectFormat, c.AttachmentNameFormat, c.SendRetries, c.SendBackoff, c.HTML2TextOptions, c.PlainOnly, c.SendDay,
+	)
+}
+
 // EmailConfig contains the variables we need to create our SMTP email client.
 type EmailConfig struct {
 	Debug           bool                                   `json:"debug"`
@@ -165,6 +183,13 @@ func (c *EmailConfig) EmailTemplateConfigFor(path email.TemplatePath) email.Temp
 	return c.TemplateConfigs[path]
 }
 
+func (c *EmailConfig) String() string {
+	return fmt.Sprintf(
+		"{Debug: %v, Host: %v, Port: %v, From: %v, FromName: %v, Password: %v, TemplateConfigs: %v}",
+		c.Debug, c.Host, c.Port, c.From, c.FromName, c.Password, c.TemplateConfigs,
+	)
+}
+
 type RedisConfig struct {
 	MaxIdle                int `json:"max_idle"`
 	IdleTimeout            int `json:"idle_timeout"`
@@ -183,6 +208,13 @@ func (c *RedisConfig) RedisConnectTimeout() int         { return c.ConnectTimeou
 func (c *RedisConfig) RedisNormalTasksPollPeriod() int  { return c.NormalTasksPollPeriod }
 func (c *RedisConfig) RedisDelayedTasksPollPeriod() int { return c.DelayedTasksPollPeriod }
 
+func (c *RedisConfig) String() string {
+	return fmt.Sprintf(
+		"{MaxIdle: %v, IdleTimeout: %v, ReadTimeout: %v, WriteTimeout: %v, ConnectTimeout: %v, NormalTasksPollPeriod: %v, DelayedTasksPollPeriod: %v}",
+		c.MaxIdle, c.IdleTimeout, c.ReadTimeout, c.WriteTimeout, c.ConnectTimeout, c.NormalTasksPollPeriod, c.DelayedTasksPollPeriod,
+	)
+}
+
 type TaskConfig struct {
 	DefaultQueue    string       `json:"default_queue"`
 	ResultsExpireIn int          `json:"results_expire_in"`
@@ -196,6 +228,13 @@ func (c *TaskConfig) TasksResultsExpireIn() int    { return c.ResultsExpireIn }
 func (c *TaskConfig) TasksBroker() string          { return c.Broker }
 func (c *TaskConfig) TasksResultBackend() string   { return c.ResultBackend }
 func (c *TaskConfig) TasksRedis() task.RedisConfig { return c.Redis }
+
+func (c *TaskConfig) String() string {
+	return fmt.Sprintf(
+		"{DefaultQueue: %v, ResultsExpireIn: %v, Broker: %v, ResultBackend: %v, Redis: %v}",
+		c.DefaultQueue, c.ResultsExpireIn, c.Broker, c.ResultBackend, c.Redis,
+	)
+}
 
 type TwitterConfig struct {
 	APIKey              string   `json:"api_key"`
@@ -215,6 +254,13 @@ func (c *TwitterConfig) TwitterUsername() string     { return c.Username }
 func (c *TwitterConfig) TwitterPassword() string     { return c.Password }
 func (c *TwitterConfig) TwitterHashtags() []string   { return c.Hashtags }
 func (c *TwitterConfig) TwitterHeadless() bool       { return c.Headless }
+
+func (c *TwitterConfig) String() string {
+	return fmt.Sprintf(
+		"{APIKey: %v, APIKeySecret: %v, BearerToken: %v, Username: %v, Password: %v, Hashtags: %v, BlacklistedHashtags: %v, Headless: %v}",
+		c.APIKey, c.APIKeySecret, c.BearerToken, c.Username, c.Password, c.Hashtags, c.BlacklistedHashtags, c.Headless,
+	)
+}
 
 // TwitterQuery constructs a query from the Hashtags array and the BlacklistedHashtags array by first prefixing each
 // hashtag with a hash ("#") and each blacklisted hashtag with "-#", then joining them with the " OR " separator.
@@ -248,6 +294,13 @@ func (tc *TagConfig) TagDefaultValue() float64      { return tc.DefaultValue }
 func (tc *TagConfig) TagUpvotesThreshold() float64  { return tc.UpvotesThreshold }
 func (tc *TagConfig) TagValues() map[string]float64 { return tc.Values }
 
+func (tc *TagConfig) String() string {
+	return fmt.Sprintf(
+		"{DefaultValue: %v, UpvotesThreshold: %v, Values: %v}",
+		tc.DefaultValue, tc.UpvotesThreshold, tc.Values,
+	)
+}
+
 type StorefrontConfig struct {
 	// Storefront is the models.Storefront that this StorefrontConfig applies to.
 	Storefront models.Storefront `json:"storefront"`
@@ -257,6 +310,10 @@ type StorefrontConfig struct {
 
 func (sfc *StorefrontConfig) StorefrontStorefront() models.Storefront { return sfc.Storefront }
 func (sfc *StorefrontConfig) StorefrontTags() models.TagConfig        { return sfc.Tags }
+
+func (sfc *StorefrontConfig) String() string {
+	return fmt.Sprintf("{Storefront: %v, Tags: %v}", sfc.Storefront, sfc.Tags)
+}
 
 type ScrapeConfig struct {
 	// Debug is the value for the State.Debug field.
@@ -289,6 +346,10 @@ func (sc *ScrapeConfig) ScrapeGetStorefront(storefront models.Storefront) (store
 	return
 }
 
+func (sc *ScrapeConfig) String() string {
+	return fmt.Sprintf("{Debug: %v, Storefronts: %v}", sc.Debug, sc.Storefronts)
+}
+
 // SteamWebPipesConfig stores the configuration for the SteamWebPipes co-process that's started when the machinery workers
 // are started. The SteamWebPipes binary is a slightly modified version of this project: https://github.com/xPaw/SteamWebPipes.
 type SteamWebPipesConfig struct {
@@ -296,6 +357,13 @@ type SteamWebPipesConfig struct {
 	Location                 string `json:"Location"`
 	DatabaseConnectionString string `json:"DatabaseConnectionString"`
 	X509Certificate          string `json:"X509Certificate"`
+}
+
+func (c *SteamWebPipesConfig) String() string {
+	return fmt.Sprintf(
+		"{BinaryLocation: %v, Location: %v, DatabaseConnectionString: %v, X509Certificate: %v}",
+		c.BinaryLocation, c.Location, c.DatabaseConnectionString, c.X509Certificate,
+	)
 }
 
 // Config contains the sub-configs for the various parts of the game-scout system. Such as the DBConfig.

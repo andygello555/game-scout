@@ -581,6 +581,10 @@ func main() {
 					Name:  "view",
 					Usage: "view the entire config as JSON",
 				},
+				cli.BoolFlag{
+					Name:  "viewGO",
+					Usage: "view the entire config as a GO struct",
+				},
 			},
 			Usage: "subcommand for viewing/manipulating the currently loaded config.json",
 			Action: func(c *cli.Context) (err error) {
@@ -590,6 +594,9 @@ func main() {
 						return cli.NewExitError(err.Error(), 1)
 					}
 					fmt.Println(string(jsonData))
+				}
+				if c.Bool("viewGO") {
+					fmt.Printf("%+v\n", globalConfig)
 				}
 				return
 			},
