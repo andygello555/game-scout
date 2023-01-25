@@ -157,6 +157,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 				result.Developer, result.err,
 			)
 		} else {
+			state.GetCachedField(StateType).SetOrAdd("Result", "MeasureStats", "SampledTrendingDevelopers", models.SetOrAddInc.Func())
 			heap.Push(&topDevelopers, result)
 		}
 	}
@@ -230,6 +231,8 @@ func MeasurePhase(state *ScoutState) (err error) {
 	if resp = pdf.SendSync(); resp.Error != nil {
 		log.ERROR.Printf("Could not send email: %v", err)
 	}
+	state.GetCachedField(StateType).SetOrAdd("Result", "MeasureStats", "EmailSendTimeTaken", resp.Email.Profiling.Total())
+	state.GetCachedField(StateType).SetOrAdd("Result", "MeasureStats", "EmailSize", resp.Email.Size())
 	log.INFO.Println(resp.Email.Profiling.String())
 	return
 }

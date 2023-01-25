@@ -31,6 +31,12 @@ import (
 // The deleted developers are stored within the DeletedDevelopers cached field of the given ScoutState, along with all
 // their snapshots and games, so that they can be mentioned in the Measure Phase.
 func DeletePhase(state *ScoutState) (err error) {
+	scoutResultAny, _ := state.GetCachedField(StateType).Get("Result")
+	if err = scoutResultAny.(*models.ScoutResult).DeleteStats.Before(db.DB); err != nil {
+		log.ERROR.Printf("Could not set Before fields for ScoutResult.DeleteStats: %v", err)
+		err = nil
+	}
+
 	// First we find the total number of disabled developers and how many of those need to be deleted
 	var totalDisabledDevelopers int64
 	if err = db.DB.Model(&models.Developer{}).Where("disabled").Count(&totalDisabledDevelopers).Error; err != nil {
@@ -228,6 +234,7 @@ func DeletePhase(state *ScoutState) (err error) {
 					)
 					break
 				}
+				state.GetCachedField(StateType).SetOrAdd("Result", "DeleteStats", "TotalSampledDevelopers", models.SetOrAddInc.Func())
 			} else {
 				// This should never happen, as the sample is sorted by weighted_score and offset and limit to create
 				// distinct batches.
@@ -334,6 +341,7 @@ func DeletePhase(state *ScoutState) (err error) {
 				)
 			} else {
 				log.INFO.Printf("Deleted Developer %v", deletedDev.Developer)
+				state.GetCachedField(StateType).SetOrAdd("Result", "DeleteStats", "DeletedDevelopers", models.SetOrAddInc.Func())
 				actuallyDeletedDevs++
 			}
 			iter.Next()
@@ -344,6 +352,11 @@ func DeletePhase(state *ScoutState) (err error) {
 		)
 	} else {
 		log.WARNING.Printf("There are no developers to delete...")
+	}
+
+	if err = scoutResultAny.(*models.ScoutResult).DeleteStats.After(db.DB); err != nil {
+		log.ERROR.Printf("Could not set After fields for ScoutResult.DeleteStats: %v", err)
+		err = nil
 	}
 	return
 }

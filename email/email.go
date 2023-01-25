@@ -28,6 +28,8 @@ const (
 	maxContentTypeDetectionBufSize = 512
 )
 
+var inTest = false
+
 var (
 	nonAlphanumericRegex = regexp.MustCompile(`[^a-zA-Z0-9 ]+`)
 )
@@ -155,22 +157,27 @@ func (prof *Profiling) start(key profilingKey) func() {
 	}
 }
 
-// String returns the all the profiles that have been created within Profiling in the time-taken order.
-func (prof *Profiling) String() string {
-	type orderedProfile struct {
-		key           profilingKey
-		durations     []time.Duration
-		totalDuration time.Duration
-	}
+// orderedProfile represents an element within the set of ordered profiles. An array of these is returned by the
+// Profiling.ordered method.
+type orderedProfile struct {
+	key           profilingKey
+	durations     []time.Duration
+	totalDuration time.Duration
+	calledTimes   int
+}
 
+// ordered returns the profiles within Profiling ordered by total duration taken for a profilingKey from shorted to
+// longest. It also returns the total duration spent profiling for this Profiling.
+func (prof *Profiling) ordered() (totalDuration time.Duration, profiles []orderedProfile) {
 	i := 0
-	profiles := make([]orderedProfile, len(*prof))
-	totalDuration := time.Duration(0)
+	profiles = make([]orderedProfile, len(*prof))
+	totalDuration = time.Duration(0)
 	for key, durations := range *prof {
 		profile := orderedProfile{
 			key:           key,
 			durations:     durations,
 			totalDuration: time.Duration(0),
+			calledTimes:   len(durations),
 		}
 		for _, duration := range durations {
 			profile.totalDuration += duration
@@ -180,18 +187,47 @@ func (prof *Profiling) String() string {
 		i++
 	}
 
-	sort.Slice(profiles, func(i, j int) bool {
+	less := func(i, j int) bool {
 		return profiles[i].totalDuration < profiles[j].totalDuration
-	})
+	}
+	if inTest {
+		less = func(i, j int) bool {
+			return profiles[i].key.string() < profiles[j].key.string()
+		}
+	}
+	sort.Slice(profiles, less)
+	return
+}
+
+// Total returns the total time we spent profiling an Email.
+func (prof *Profiling) Total() time.Duration {
+	totalDuration, _ := prof.ordered()
+	return totalDuration
+}
+
+// String returns the all the profiles that have been created within Profiling in the time-taken order.
+func (prof *Profiling) String() string {
+	totalDuration, profiles := prof.ordered()
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Total duration: %s\n", totalDuration.String()))
+	if !inTest {
+		b.WriteString(fmt.Sprintf("Total duration: %s\n", totalDuration.String()))
+	} else {
+		b.WriteString("Total duration: X\n")
+	}
 	for j, profile := range profiles {
-		b.WriteString(fmt.Sprintf(
-			"%d: %s overall time %s (%.2f%%)",
-			j+1, profile.key.string(), profile.totalDuration.String(),
-			float64(profile.totalDuration)/float64(totalDuration)*100.0,
-		))
+		if !inTest {
+			b.WriteString(fmt.Sprintf(
+				"%d: %s was called %d time(s) with an overall time of %s (%.2f%%)",
+				j+1, profile.key.string(), profile.calledTimes, profile.totalDuration.String(),
+				float64(profile.totalDuration)/float64(totalDuration)*100.0,
+			))
+		} else {
+			b.WriteString(fmt.Sprintf(
+				"%d: %s was called %d time(s) with an overall time of X (XX.XX%%)",
+				j+1, profile.key.string(), profile.calledTimes,
+			))
+		}
 		if j < len(profiles)-1 {
 			b.WriteString("\n")
 		}
@@ -216,10 +252,17 @@ func (prof *Profiling) String() string {
 //
 // Note: the last three steps should all be performed by the TemplateMailer.Send method anyway.
 type Email struct {
-	parts   []Part
-	file    *os.File
+	// parts are all the Part within the Email. They can be added using AddPart and AddParts.
+	parts []Part
+	// file is the os.File pointer to the finished Email body that will be written as a MIME Multipart file.
+	file *os.File
+	// finalSize is the size of file in bytes after Write has been called.
+	finalSize int64
+	// written is whether the Email has been written to file yet using Write.
 	written bool
-	closed  bool
+	// closed is whether the Email's temporary file, and all parts temporary files have been closed and removed using
+	// Close.
+	closed bool
 	// Profiling is the Profiling instance used to measure the time-of-completion for all actions related to the Email.
 	Profiling Profiling
 	// FromAddress is the email address of the sender.
@@ -235,7 +278,7 @@ type Email struct {
 // NewEmail creates a new Email instance and creates a temporary file to hold the finished multipart request.
 func NewEmail() (email *Email, err error) {
 	email = &Email{parts: make([]Part, 0), Profiling: make(Profiling)}
-	defer email.Profiling.start(ProfilingNew)
+	defer email.Profiling.start(ProfilingNew)()
 	if email.file, err = os.CreateTemp("", "*_email"); err != nil {
 		err = errors.Wrap(err, "could not create temp file for email")
 	}
@@ -269,7 +312,7 @@ func (e *Email) From() string { return fmt.Sprintf("%s <%s>", e.FromName, e.From
 // AddPart will add a Part with a Part.Buffer to the Email. This will encode the Part to its required encoding and cache
 // the Part intermittently to the disk.
 func (e *Email) AddPart(part Part) (err error) {
-	defer e.Profiling.start(ProfilingAddPart)
+	defer e.Profiling.start(ProfilingAddPart)()
 	if part.Buffer == nil {
 		return fmt.Errorf("cannot add a Part that has no buffer")
 	}
@@ -344,10 +387,21 @@ func (e *Email) AddPart(part Part) (err error) {
 	return
 }
 
+// AddParts will call AddPart for all provided Part.
+func (e *Email) AddParts(parts ...Part) (err error) {
+	for partNo, part := range parts {
+		if err = e.AddPart(part); err != nil {
+			err = errors.Wrapf(err, "could not add part no. %d", partNo+1)
+			return
+		}
+	}
+	return
+}
+
 // Write will construct the final Email from all the cached parts. This final multipart request will also be cached to
 // disk in a temporary file.
 func (e *Email) Write() (err error) {
-	defer e.Profiling.start(ProfilingWrite)
+	defer e.Profiling.start(ProfilingWrite)()
 	if !e.written {
 		writer := bufio.NewWriter(e.file)
 		fprintfWrap := func(format string, a ...any) (err error) {
@@ -356,10 +410,16 @@ func (e *Email) Write() (err error) {
 		}
 
 		mw := multipart.NewWriter(writer)
+		boundary := mw.Boundary()
+		// For testing purposes we replace all the boundaries with the string "BOUNDARY"
+		if inTest {
+			boundary = "BOUNDARY"
+			_ = mw.SetBoundary(boundary)
+		}
 
 		if err = myErrors.MergeErrors(
 			fprintfWrap("MIME-Version: 1.0\r\n"),
-			fprintfWrap("Content-Type: multipart/alternative; boundary=%s\r\n", mw.Boundary()),
+			fprintfWrap("Content-Type: multipart/alternative; boundary=%s\r\n", boundary),
 			fprintfWrap("From: %s\r\n", e.From()),
 			fprintfWrap("To: %s\r\n", strings.Join(e.Recipients, ",")),
 			fprintfWrap("Subject: %s\r\n", e.Subject),
@@ -397,17 +457,8 @@ func (e *Email) Write() (err error) {
 			return
 		}
 		e.written = true
-	}
-	return
-}
-
-// AddParts will call AddPart for all provided Part.
-func (e *Email) AddParts(parts ...Part) (err error) {
-	for partNo, part := range parts {
-		if err = e.AddPart(part); err != nil {
-			err = errors.Wrapf(err, "could not add part no. %d", partNo+1)
-			return
-		}
+		stat, _ := e.file.Stat()
+		e.finalSize = stat.Size()
 	}
 	return
 }
@@ -438,9 +489,10 @@ func (e *Email) Read() *bytes.Buffer {
 	return nil
 }
 
-// WriteTo will write the Email to the given io.Writer in chunks, as to not load all the Email into memory.
+// WriteTo will write the Email to the given io.Writer in chunks, as to not load all the Email into memory. Write still
+// needs to be called before this.
 func (e *Email) WriteTo(w io.Writer) (n int64, err error) {
-	defer e.Profiling.start(ProfilingWriteTo)
+	defer e.Profiling.start(ProfilingWriteTo)()
 	var chunk int64
 	reader := e.ReadBuffered()
 	buf := make([]byte, 0, defaultBufSize)
@@ -475,13 +527,17 @@ func (e *Email) WriteTo(w io.Writer) (n int64, err error) {
 
 // Close will close and remove all the temp files created by the Email.
 func (e *Email) Close() (err error) {
-	defer e.Profiling.start(ProfilingClose)
+	defer e.Profiling.start(ProfilingClose)()
 	if !e.closed {
 		e.closed = true
 		return e.closeTempFiles()
 	}
 	return fmt.Errorf("email is already closed")
 }
+
+// Size is the size of the final Email in bytes. This is equal to the size of the temporary file used to store the email
+// within.
+func (e *Email) Size() int64 { return e.finalSize }
 
 // validateLine checks to see if a line has CR or LF as per RFC 5321
 func validateLine(line string) error {

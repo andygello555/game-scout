@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/RichardKnop/machinery/v1/log"
+	"github.com/andygello555/game-scout/db"
 	myErrors "github.com/andygello555/game-scout/errors"
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	"github.com/pkg/errors"
@@ -96,6 +97,8 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 	} else {
 		// If no state has been loaded, then we'll assume that the previous run of Scout was successful and set up
 		// ScoutState as usual
+		state.GetCachedField(StateType).SetOrAdd("Start", time.Now().UTC())
+		state.GetCachedField(StateType).SetOrAdd("Result", "Started", time.Now().UTC())
 		state.GetCachedField(StateType).SetOrAdd("Phase", Discovery)
 		state.GetCachedField(StateType).SetOrAdd("BatchSize", batchSize)
 		state.GetCachedField(StateType).SetOrAdd("DiscoveryTweets", discoveryTweets)
@@ -108,13 +111,18 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 		return phase.(Phase)
 	}
 
-	state.GetCachedField(StateType).SetOrAdd("Start", time.Now().UTC())
 	// Loop over all the Phases and Run each one until the done phase
 	for phase := getPhase(); phase != Done; phase = getPhase() {
 		if err = phase.Run(state); err != nil {
 			return err
 		}
 	}
+
+	scoutResultAny, _ := state.GetCachedField(StateType).Get("Result")
+	if err = db.DB.Create(scoutResultAny).Error; err != nil {
+		return errors.Wrap(err, "could not create ScoutResult")
+	}
+	log.INFO.Println("Saved ScoutResult")
 
 	state.GetCachedField(StateType).SetOrAdd("Finished", time.Now().UTC())
 	start, _ := state.GetCachedField(StateType).Get("Start")

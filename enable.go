@@ -15,6 +15,12 @@ import (
 // are currently disabled, but were not disabled in the DisablePhase. The way we find the top-performing developers is by
 // finding the trend for each.
 func EnablePhase(state *ScoutState) (err error) {
+	scoutResultAny, _ := state.GetCachedField(StateType).Get("Result")
+	if err = scoutResultAny.(*models.ScoutResult).EnableStats.Before(db.DB); err != nil {
+		log.ERROR.Printf("Could not set Before fields for ScoutResult.EnableStats: %v", err)
+		err = nil
+	}
+
 	// Fetch the IDs of the developers that were disabled in the DisablePhase.
 	disabledDevelopersAny, _ := state.GetCachedField(StateType).Get("DisabledDevelopers")
 	disabledDevelopers := disabledDevelopersAny.([]string)
@@ -129,6 +135,7 @@ func EnablePhase(state *ScoutState) (err error) {
 					)
 					break
 				}
+				state.GetCachedField(StateType).SetOrAdd("Result", "EnableStats", "TotalSampledDevelopers", models.SetOrAddInc.Func())
 			} else {
 				// This should never happen, as the sample is sorted by weighted_score and offset and limit to create
 				// distinct batches.
@@ -175,6 +182,11 @@ func EnablePhase(state *ScoutState) (err error) {
 			err = errors.Wrapf(err, "could not re-enable %d developers", len(developersToEnableArr))
 			return
 		}
+	}
+
+	if err = scoutResultAny.(*models.ScoutResult).EnableStats.After(db.DB); err != nil {
+		log.ERROR.Printf("Could not set After fields for ScoutResult.EnableStats: %v", err)
+		err = nil
 	}
 	return
 }

@@ -82,6 +82,21 @@ func main() {
 		log.INFO.Printf("\tRegistering task no. %d: \"%s\"", i+1, t.name)
 		task.RegisterTask(t.name, t.fun)
 	}
+	log.INFO.Printf("Done setting up additional tasks in %s", time.Now().UTC().Sub(start).String())
+
+	start = time.Now().UTC()
+	log.INFO.Printf("Registering additional periodic tasks:")
+	for i, t := range []struct {
+		spec string
+		name string
+		args []any
+	}{
+		{"0 10 * * *", "scout", []any{100, 30250}},
+	} {
+		log.INFO.Printf("\tRegistering periodic task no. %d: \"%s\" for %q with args: %v", i+1, t.name, t.spec, t.args)
+		task.RegisterPeriodicTask(t.spec, t.name, t.args...)
+	}
+	log.INFO.Printf("Done setting up additional periodic tasks in %s", time.Now().UTC().Sub(start).String())
 
 	// Set the CLI app commands
 	cliApp.Commands = []cli.Command{

@@ -15,15 +15,19 @@ import (
 // SnapshotPhase aggregates the DeveloperSnapshots and UserTweetTimes into a single models.DeveloperSnapshot for each
 // models.Developer and saves each aggregated snapshot to the DB.
 func SnapshotPhase(state *ScoutState) (err error) {
+	state.GetCachedField(StateType).SetOrAdd("Result", "SnapshotStats", "Games", int64(state.GetIterableCachedField(GameIDsType).Len()))
 	dsIter := state.GetIterableCachedField(DeveloperSnapshotsType).Iter()
 	for dsIter.Continue() {
 		idAny := dsIter.Key()
 		snapshotsAny, _ := state.GetIterableCachedField(DeveloperSnapshotsType).Get(idAny)
 		userTweetTimesAny, _ := state.GetIterableCachedField(UserTweetTimesType).Get(idAny)
+		state.GetCachedField(StateType).SetOrAdd("Result", "SnapshotStats", "Developers", models.SetOrAddInc.Func())
 
 		id := idAny.(string)
 		snapshots := snapshotsAny.([]*models.DeveloperSnapshot)
 		userTweetTimes := userTweetTimesAny.([]time.Time)
+		state.GetCachedField(StateType).SetOrAdd("Result", "SnapshotStats", "TotalSnapshots", models.SetOrAddAdd.Func(int64(len(snapshots))))
+		state.GetCachedField(StateType).SetOrAdd("Result", "SnapshotStats", "TweetsConsumed", models.SetOrAddAdd.Func(int64(len(userTweetTimes))))
 
 		// Find the developer so that we can set the TimesHighlighted field appropriately
 		developer := models.Developer{}
@@ -96,6 +100,7 @@ func SnapshotPhase(state *ScoutState) (err error) {
 		if err = db.DB.Create(aggregatedSnap).Error; err != nil {
 			return errors.Wrapf(err, "could not save aggregation of %d DeveloperSnapshots for dev. %s", len(snapshots), id)
 		}
+		state.GetCachedField(StateType).SetOrAdd("Result", "SnapshotStats", "SnapshotsCreated", models.SetOrAddInc.Func())
 		log.INFO.Printf("\tSaved DeveloperSnapshot aggregation for %s which is comprised of %d partial snapshots", id, len(snapshots))
 		dsIter.Next()
 	}

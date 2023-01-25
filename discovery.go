@@ -195,29 +195,58 @@ func DiscoveryBatch(
 	}
 	close(jobs)
 
+	phase := func() Phase {
+		phaseAny, _ := state.GetCachedField(StateType).Get("Phase")
+		return phaseAny.(Phase)
+	}
+
+	resultKey := func() string {
+		return fmt.Sprintf("%sStats", phase().String())
+	}
+
+	resultAddDevOrGame := func(created bool) bool {
+		switch phase() {
+		case Discovery:
+			return created
+		case Update:
+			return !created
+		default:
+			return false
+		}
+	}
+
 	// Dequeue the results and save them
 	for i := 0; i < len(dictionary); i++ {
 		result := <-results
 		if result.err == nil {
+			var (
+				created bool
+				gameErr error
+			)
+
 			log.INFO.Printf("%stransformed tweet no. %d successfully", logPrefix, result.tweetNo)
 			state.GetIterableCachedField(UserTweetTimesType).SetOrAdd(result.developer.ID, result.tweetCreatedAt)
+			state.GetCachedField(StateType).SetOrAdd("Result", resultKey(), "TweetsConsumed", models.SetOrAddInc.Func())
 
 			// At this point we only save the developer and the game. We still need to aggregate all the possible
 			// developerSnapshots
 			if _, ok := state.GetIterableCachedField(DeveloperSnapshotsType).Get(result.developer.ID); !ok {
 				// Create/update the developer if a developer snapshot for it hasn't been added yet
 				log.INFO.Printf("%sthis is the first time we have seen Developer %v", logPrefix, result.developer)
-				_, err = db.Upsert(result.developer)
+				if created, err = db.Upsert(result.developer); resultAddDevOrGame(created) {
+					state.GetCachedField(StateType).SetOrAdd("Result", resultKey(), "Developers", models.SetOrAddInc.Func())
+				}
 			}
 
 			// Create the game
-			var (
-				created bool
-				gameErr error
-			)
 			if created, gameErr = db.Upsert(result.game); created {
 				gameIDs.Add(result.game.ID)
 			}
+
+			if resultAddDevOrGame(created) && phase() == Discovery {
+				state.GetCachedField(StateType).SetOrAdd("Result", resultKey(), "Games", models.SetOrAddInc.Func())
+			}
+
 			err = myErrors.MergeErrors(err, gameErr)
 			if err != nil {
 				return gameIDs, myErrors.TemporaryWrap(false, err, "could not insert either Developer or Game into DB")
@@ -225,6 +254,7 @@ func DiscoveryBatch(
 
 			// Add the developerSnap to the developerSnapshots
 			state.GetIterableCachedField(DeveloperSnapshotsType).SetOrAdd(result.developer.ID, result.developerSnap)
+			state.GetCachedField(StateType).SetOrAdd("Result", resultKey(), "TotalSnapshots", models.SetOrAddInc.Func())
 			log.INFO.Printf("%sadded DeveloperSnapshot to mapping", logPrefix)
 		} else {
 			log.WARNING.Printf("%scouldn't transform tweet no. %d: %s. Skipping...", logPrefix, result.tweetNo, err.Error())

@@ -29,6 +29,11 @@ func DisablePhase(state *ScoutState) (err error) {
 	//     ORDER BY ds2.weighted_score
 	//     LIMIT <TOTAL NON DISABLED DEVELOPERS> - maxNonDisabledDevelopers
 	// );
+	scoutResultAny, _ := state.GetCachedField(StateType).Get("Result")
+	if err = scoutResultAny.(*models.ScoutResult).DisableStats.Before(db.DB); err != nil {
+		log.ERROR.Printf("Could not set Before fields for ScoutResult.DisableStats: %v", err)
+		err = nil
+	}
 
 	var enabledDeveloperCount int64
 	if err = db.DB.Model(&models.Developer{}).Where("NOT disabled").Count(&enabledDeveloperCount).Error; err == nil {
@@ -79,6 +84,11 @@ func DisablePhase(state *ScoutState) (err error) {
 		}
 	} else {
 		log.ERROR.Printf("Could not count the number of disabled Developers: %v. Skipping Disable phase...", err.Error())
+	}
+
+	if err = scoutResultAny.(*models.ScoutResult).DisableStats.After(db.DB); err != nil {
+		log.ERROR.Printf("Could not set After fields for ScoutResult.DisableStats: %v", err)
+		err = nil
 	}
 	return
 }

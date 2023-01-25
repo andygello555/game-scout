@@ -15,6 +15,7 @@ import (
 	"github.com/pkg/errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -724,7 +725,6 @@ func (p Phase) Run(state *ScoutState) (err error) {
 		}
 	}
 
-	state.GetCachedField(StateType).SetOrAdd("Start", time.Now().UTC())
 	phase, _ := state.GetCachedField(StateType).Get("Phase")
 	if phase.(Phase) != p {
 		return fmt.Errorf(
@@ -856,6 +856,10 @@ func PhaseFromString(s string) Phase {
 		return Snapshot
 	case "disable":
 		return Disable
+	case "enable":
+		return Enable
+	case "delete":
+		return Delete
 	case "measure":
 		return Measure
 	case "done":
@@ -880,6 +884,8 @@ type State struct {
 	// Phase is the current phase that the Scout procedure is in. If ScoutState is loaded from disk this is the Phase
 	// that the Scout procedure entered before stopping.
 	Phase Phase
+	// Result is the ScoutResult that will be saved once the Scout procedure reaches the Done Phase.
+	Result *models.ScoutResult
 	// BatchSize is the size of the batches that should be used in a variety of different situations.
 	BatchSize int
 	// DiscoveryTweets is the total number of tweets that the DiscoveryPhase will fetch in batches of BatchSize.
@@ -946,6 +952,21 @@ func (s *State) SetOrAdd(args ...any) {
 	switch key {
 	case "Phase":
 		s.Phase = args[1].(Phase)
+	case "Result":
+		path := slices.Comprehension(args[1:len(args)-1], func(idx int, value any, arr []any) string { return value.(string) })
+		currentVal := reflect.ValueOf(s.Result)
+		for i, pathKey := range path {
+			currentVal = currentVal.Elem().FieldByName(pathKey)
+			if i == len(path)-1 {
+				setVal := reflect.ValueOf(args[len(args)-1])
+				if setVal.Type().Kind() == reflect.Func {
+					returnVars := setVal.Call([]reflect.Value{currentVal})
+					currentVal.Set(returnVars[0])
+				} else {
+					currentVal.Set(setVal)
+				}
+			}
+		}
 	case "BatchSize":
 		s.BatchSize = args[1].(int)
 	case "DiscoveryTweets":
@@ -980,6 +1001,8 @@ func (s *State) Get(key any) (any, bool) {
 	switch key {
 	case "Phase":
 		return s.Phase, true
+	case "Result":
+		return s.Result, true
 	case "BatchSize":
 		return s.BatchSize, true
 	case "DiscoveryTweets":
@@ -1036,6 +1059,15 @@ func (cft CachedFieldType) Make() CachedField {
 		return &dd
 	case StateType:
 		return &State{
+			Result: &models.ScoutResult{
+				DiscoveryStats: &models.DiscoveryUpdateSnapshotStats{},
+				UpdateStats:    &models.DiscoveryUpdateSnapshotStats{},
+				SnapshotStats:  &models.DiscoveryUpdateSnapshotStats{},
+				DisableStats:   &models.DisableEnableDeleteStats{},
+				EnableStats:    &models.DisableEnableDeleteStats{},
+				DeleteStats:    &models.DisableEnableDeleteStats{},
+				MeasureStats:   &models.MeasureStats{},
+			},
 			UpdatedDevelopers:  make([]string, 0),
 			DisabledDevelopers: make([]string, 0),
 			EnabledDevelopers:  make([]string, 0),

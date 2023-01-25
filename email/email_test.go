@@ -10,7 +10,6 @@ import (
 	"io"
 	"jaytaylor.com/html2text"
 	"net/smtp"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -366,6 +365,10 @@ func TestTemplate_SendSync(t *testing.T) {
 }
 
 func ExampleNewEmail() {
+	inTest = true
+	defer func() {
+		inTest = false
+	}()
 	var (
 		email *Email
 		err   error
@@ -397,10 +400,16 @@ func ExampleNewEmail() {
 		fmt.Println(err)
 	}
 
-	// Need to remove the boundary IDs and DOS newlines, so we can match the example output successfully
-	boundaryIDsRemoved := regexp.MustCompile(`(?m)(--|; boundary=)[a-z0-9]+((--)?\r\n)`).ReplaceAllString(email.Read().String(), "${1}BOUNDARY${2}")
-	fmt.Println(strings.ReplaceAll(boundaryIDsRemoved, "\r\n", "\n"))
+	fmt.Printf("Final email size: %d\n", email.Size())
+	fmt.Println(email.Profiling.String())
+
+	fmt.Println(strings.ReplaceAll(email.Read().String(), "\r\n", "\n"))
 	// Output:
+	// Final email size: 463
+	// Total duration: X
+	// 1: ADD_PART was called 3 time(s) with an overall time of X (XX.XX%)
+	// 2: NEW was called 1 time(s) with an overall time of X (XX.XX%)
+	// 3: WRITE was called 1 time(s) with an overall time of X (XX.XX%)
 	// MIME-Version: 1.0
 	// Content-Type: multipart/alternative; boundary=BOUNDARY
 	// From: Test <test@test.com>

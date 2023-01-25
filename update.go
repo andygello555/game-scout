@@ -59,6 +59,7 @@ func UpdateDeveloper(
 	// continue onto fetching the set of tweets.
 	for _, game := range games {
 		gameIDs.Add(game.ID)
+		state.GetCachedField(StateType).SetOrAdd("Result", "UpdateStats", "Games", models.SetOrAddInc.Func())
 		go func(game *models.Game) {
 			log.INFO.Printf(
 				"Queued update for Game \"%s\" (%s) for Developer %v",
@@ -537,6 +538,7 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 				// happens we can always continue the UpdatePhase and ignore the developers that we have already
 				// updated.
 				state.GetCachedField(StateType).SetOrAdd("UpdatedDevelopers", result.developer.ID)
+				state.GetCachedField(StateType).SetOrAdd("Result", "UpdateStats", "Developers", models.SetOrAddInc.Func())
 
 				// Save the ScoutState after batchSize number of successful results have been consumed
 				resultBatchCount++

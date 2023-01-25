@@ -677,6 +677,25 @@ func ExampleStateLoadOrCreate() {
 		return
 	}
 	// Add some items to be cached
+	resultAny, _ := state.GetCachedField(StateType).Get("Result")
+	if err = resultAny.(*models.ScoutResult).DisableStats.Before(db.DB); err != nil {
+		fmt.Printf("Error occurred: %v\n", err)
+	}
+
+	if err = db.DB.Create(&models.Developer{
+		ID:       "1234",
+		Name:     "Enabled Developer",
+		Username: "enabled",
+	}).Error; err != nil {
+		fmt.Printf("Error occurred: %v\n", err)
+	}
+
+	if err = resultAny.(*models.ScoutResult).DisableStats.After(db.DB); err != nil {
+		fmt.Printf("Error occurred: %v\n", err)
+	}
+	state.GetCachedField(StateType).SetOrAdd("Result", "Started", time.Now())
+	state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "Developers", models.SetOrAddInc.Func())
+	state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "Games", models.SetOrAddAdd.Func(int64(2)))
 	state.GetCachedField(UserTweetTimesType).SetOrAdd("1234", time.Now().UTC(), "12345", time.Now().UTC())
 	state.GetCachedField(DeveloperSnapshotsType).SetOrAdd("1234", &models.DeveloperSnapshot{DeveloperID: "1234"})
 	state.GetCachedField(GameIDsType).SetOrAdd(uuid.New(), uuid.New(), uuid.New())
@@ -709,6 +728,10 @@ func ExampleStateLoadOrCreate() {
 		fmt.Printf("Could not create ScoutState: %v\n", err)
 		return
 	}
+	resultAny, _ = state.GetCachedField(StateType).Get("Result")
+	result := resultAny.(*models.ScoutResult)
+	fmt.Println("state.Result.DiscoveryStats:", result.DiscoveryStats)
+	fmt.Printf("state.Result.DisableStats: %+v\n", result.DisableStats)
 	fmt.Println("userTweetTimes:", state.GetIterableCachedField(UserTweetTimesType).Len())
 	fmt.Println("developerSnapshots:", state.GetIterableCachedField(DeveloperSnapshotsType).Len())
 	fmt.Println("gameIDs:", state.GetIterableCachedField(GameIDsType).Len())
@@ -721,6 +744,8 @@ func ExampleStateLoadOrCreate() {
 	fmt.Println("phase:", phase)
 	state.Delete()
 	// Output:
+	// state.Result.DiscoveryStats: &{1 2 0 0 0}
+	// state.Result.DisableStats: &{EnabledDevelopersBefore:0 DisabledDevelopersBefore:0 EnabledDevelopersAfter:1 DisabledDevelopersAfter:0 DeletedDevelopers:0 TotalSampledDevelopers:0}
 	// userTweetTimes: 2
 	// developerSnapshots: 1
 	// gameIDs: 3
