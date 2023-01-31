@@ -9,6 +9,7 @@
 **/obj/
 **/bin/
 SteamWebPipes
+game-scout
 
 # Test binary, built with `go test -c`
 *.test
