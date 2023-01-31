@@ -89,7 +89,7 @@ func (sf Storefront) ScrapeURL() browser.ScrapeURL {
 	case SteamStorefront:
 		return browser.SteamAppPage
 	case ItchIOStorefront:
-		return ""
+		return browser.ItchIOGamePage
 	default:
 		return ""
 	}

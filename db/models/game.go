@@ -376,6 +376,8 @@ func (g *GameWrapper) StorefrontScraper(storefront Storefront) GameModelStorefro
 	switch storefront {
 	case SteamStorefront:
 		return &GameSteamStorefront{Game: g.Game}
+	case ItchIOStorefront:
+		return &GameItchIOStorefront{Game: g.Game}
 	default:
 		return UnscrapableError[string](storefront)
 	}
@@ -755,4 +757,46 @@ func (g *GameSteamStorefront) AfterScrape(args ...any) {
 	standardisedURL := SteamStorefront.ScrapeURL().Fill(args...)
 	g.Game.Storefront = SteamStorefront
 	g.Game.Website = null.StringFrom(standardisedURL)
+}
+
+type GameItchIOStorefront GameWrapper
+
+func (g *GameItchIOStorefront) Args(url string) []any {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (g *GameItchIOStorefront) GetStorefront() Storefront {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (g *GameItchIOStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (g *GameItchIOStorefront) ScrapeReviews(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (g *GameItchIOStorefront) ScrapeTags(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (g *GameItchIOStorefront) ScrapeCommunity(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (g *GameItchIOStorefront) ScrapeExtra(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (g *GameItchIOStorefront) AfterScrape(args ...any) {
+	//TODO implement me
+	panic("implement me")
 }

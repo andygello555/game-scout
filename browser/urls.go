@@ -11,8 +11,155 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
+
+type verb string
+
+const (
+	// stringVerb: the uninterpreted bytes of the string or slice
+	stringVerb verb = "s"
+	// boolVerb: the word true or false
+	boolVerb verb = "t"
+	// base2Verb: base 2
+	base2Verb verb = "b"
+	// charVerb: the character represented by the corresponding Unicode code point
+	charVerb verb = "c"
+	// base8Verb: base 8
+	base8Verb verb = "o"
+	// base8PrefixVerb: base 8 with 0o prefix
+	base8PrefixVerb verb = "O"
+	// base10Verb: base 10
+	base10Verb verb = "d"
+	// unicodeVerb: Unicode format: U+1234; same as "U+%04X"
+	unicodeVerb verb = "U"
+	// scientificNotationLowerVerb: scientific notation, e.g. -1.234456e+78
+	scientificNotationLowerVerb verb = "e"
+	// scientificNotationUpperVerb: scientific notation, e.g. -1.234456E+78
+	scientificNotationUpperVerb verb = "E"
+	// floatVerb: decimal point but no exponent, e.g. 123.456
+	floatVerb verb = "f"
+	// floatSynonymVerb: synonym for %f
+	floatSynonymVerb verb = "F"
+	// floatHexLowerVerb: hexadecimal notation (with decimal power of two exponent), e.g. -0x1.23abcp+20
+	floatHexLowerVerb verb = "x"
+	// floatHexUpperVerb: upper-case hexadecimal notation, e.g. -0X1.23ABCP+20
+	floatHexUpperVerb verb = "X"
+)
+
+type verbRegexPattern string
+
+const (
+	// stringVerbRegexPattern: the uninterpreted bytes of the string or slice
+	stringVerbRegexPattern verbRegexPattern = `([a-zA-Z0-9-._~]+)`
+	// boolVerbRegexPattern: the word true or false
+	boolVerbRegexPattern verbRegexPattern = `(true|false)`
+	// base2VerbRegexPattern: base 2
+	base2VerbRegexPattern verbRegexPattern = `([01]+)`
+	// charVerbRegexPattern: the character represented by the corresponding Unicode code point
+	charVerbRegexPattern verbRegexPattern = `(.)`
+	// base8VerbRegexPattern: base 8
+	base8VerbRegexPattern verbRegexPattern = `([0-7]+)`
+	// base8PrefixVerbRegexPattern: base 8 with 0o prefix
+	base8PrefixVerbRegexPattern verbRegexPattern = `(0o[0-7]+)`
+	// base10VerbRegexPattern: base 10
+	base10VerbRegexPattern verbRegexPattern = `(\d+)`
+	// unicodeVerbRegexPattern: Unicode format: U+1234; same as "U+%04X"
+	unicodeVerbRegexPattern verbRegexPattern = `(U\+[0-9]+)`
+	// scientificNotationLowerVerbRegexPattern: scientific notation, e.g. -1.234456e+78
+	scientificNotationLowerVerbRegexPattern verbRegexPattern = `([+-]?[0-9]+\.[0-9]+e\+[0-9]+)`
+	// scientificNotationUpperVerbRegexPattern: scientific notation, e.g. -1.234456E+78
+	scientificNotationUpperVerbRegexPattern verbRegexPattern = `([+-]?[0-9]+\.[0-9]+E\+[0-9]+)`
+	// floatVerbRegexPattern: decimal point but no exponent, e.g. 123.456
+	floatVerbRegexPattern verbRegexPattern = `([+-]?[0-9]+\.[0-9]+)`
+	// floatSynonymVerbRegexPattern: synonym for %f
+	floatSynonymVerbRegexPattern verbRegexPattern = `([+-]?[0-9]+\.[0-9]+)`
+	// floatHexLowerVerbRegexPattern: hexadecimal notation (with decimal power of two exponent), e.g. -0x1.23abcp+20
+	floatHexLowerVerbRegexPattern verbRegexPattern = `([+-]?0x[a-f0-9]+\.[0-9]+p\+[a-f0-9]+)`
+	// floatHexUpperVerbRegexPattern: upper-case hexadecimal notation, e.g. -0X1.23ABCP+20
+	floatHexUpperVerbRegexPattern verbRegexPattern = `([+-]?0x[A-F0-9]+\.[0-9]+P\+[A-F0-9]+)`
+)
+
+// verbToRegexMapping is a mapping of verbs used in string interpolation within the fmt package and the regular
+// expressions that match them. If a particular verb does not exist in this mapping, then there are two possible reasons
+// for this:
+//
+// • The verb can be converted straight to a regex character set, e.g. d -> (\d+).
+//
+// • The verb cannot exist within a URL without being percent-sign encoded, e.g. %q would result in the double quotes
+// being encoded to URL.
+var verbToRegexMapping = map[string]string{
+	string(stringVerb):                  string(stringVerbRegexPattern),
+	string(boolVerb):                    string(boolVerbRegexPattern),
+	string(base2Verb):                   string(base2VerbRegexPattern),
+	string(charVerb):                    string(charVerbRegexPattern),
+	string(base8Verb):                   string(base8VerbRegexPattern),
+	string(base8PrefixVerb):             string(base8PrefixVerbRegexPattern),
+	string(unicodeVerb):                 string(unicodeVerbRegexPattern),
+	string(scientificNotationLowerVerb): string(scientificNotationLowerVerbRegexPattern),
+	string(scientificNotationUpperVerb): string(scientificNotationUpperVerbRegexPattern),
+	string(floatVerb):                   string(floatVerbRegexPattern),
+	string(floatSynonymVerb):            string(floatSynonymVerbRegexPattern),
+	string(floatHexLowerVerb):           string(floatHexLowerVerbRegexPattern),
+	string(floatHexUpperVerb):           string(floatHexUpperVerbRegexPattern),
+}
+
+// regexParserFunc is the signature for functions that is used in regexParsers.
+type regexParserFunc func(s string) (any, error)
+
+// regexParsers is a mapping of regular expression patterns to the function that can parse strings that match those
+// patterns.
+var regexParsers = map[string]regexParserFunc{
+	// the word true or false
+	string(boolVerbRegexPattern): func(s string) (any, error) {
+		return strconv.ParseBool(s)
+	},
+	// base 2
+	string(base2VerbRegexPattern): func(s string) (any, error) {
+		return strconv.ParseInt(s, 2, 64)
+	},
+	// the character represented by the corresponding Unicode code point
+	string(charVerbRegexPattern): func(s string) (any, error) {
+		return s[0], nil
+	},
+	// base 8
+	string(base8VerbRegexPattern): func(s string) (any, error) {
+		return strconv.ParseInt(s, 8, 64)
+	},
+	// base 8 with 0o prefix
+	string(base8PrefixVerbRegexPattern): func(s string) (any, error) {
+		return strconv.ParseInt(s, 8, 64)
+	},
+	// base 10
+	string(base10VerbRegexPattern): func(s string) (any, error) {
+		return strconv.ParseInt(s, 10, 64)
+	},
+	// Unicode format: U+1234; same as "U+%04X"
+	string(unicodeVerbRegexPattern): func(s string) (any, error) {
+		return nil, nil
+	},
+	// scientific notation, e.g. -1.234456e+78
+	string(scientificNotationLowerVerbRegexPattern): func(s string) (any, error) {
+		return strconv.ParseFloat(s, 64)
+	},
+	// scientific notation, e.g. -1.234456E+78
+	string(scientificNotationUpperVerbRegexPattern): func(s string) (any, error) {
+		return strconv.ParseFloat(s, 64)
+	},
+	// decimal point but no exponent, e.g. 123.456
+	string(floatVerbRegexPattern): func(s string) (any, error) {
+		return strconv.ParseFloat(s, 64)
+	},
+	// hexadecimal notation (with decimal power of two exponent), e.g. -0x1.23abcp+20
+	string(floatHexLowerVerbRegexPattern): func(s string) (any, error) {
+		return strconv.ParseFloat(s, 64)
+	},
+	// upper-case hexadecimal notation, e.g. -0X1.23ABCP+20
+	string(floatHexUpperVerbRegexPattern): func(s string) (any, error) {
+		return strconv.ParseFloat(s, 64)
+	},
+}
 
 // ScrapeURL represents a page on Steam. It is usually a format string has string interpolation applied to it before
 // fetching. The protocol should be given as a string verb at the beginning of the URL.
@@ -32,6 +179,8 @@ const (
 	// SteamSpyAppDetails is the URL for the app details API from Steamspy. Can fetch the details, in JSON, for the
 	// given appid.
 	SteamSpyAppDetails ScrapeURL = "%s://steamspy.com/api.php?request=appdetails&appid=%d"
+	// ItchIOGamePage is the game page for a given developer and game-title combo.
+	ItchIOGamePage ScrapeURL = "%s://%s.itch.io/%s"
 )
 
 // Name returns the name of the ScrapeURL.
@@ -71,7 +220,14 @@ func (su ScrapeURL) Fill(args ...any) string {
 // counterparts.
 func (su ScrapeURL) Regex() *regexp.Regexp {
 	protocolString := regexp.MustCompile("%!([a-zA-Z])\\(MISSING\\)").ReplaceAllString(fmt.Sprintf(string(su), "https?"), "%$1")
-	return regexp.MustCompile(regexp.MustCompile("%([a-zA-Z])").ReplaceAllString(protocolString, "(\\$1+)"))
+	return regexp.MustCompile(regexp.MustCompile("%([a-zA-Z])").ReplaceAllStringFunc(protocolString, func(s string) string {
+		var ok bool
+		charSet := strings.ReplaceAll(s, "%", "")
+		if s, ok = verbToRegexMapping[charSet]; !ok {
+			s = fmt.Sprintf(`(\%s+)`, charSet)
+		}
+		return s
+	}))
 }
 
 // Match the given URL with a ScrapeURL to check if they are the same format.
@@ -84,9 +240,12 @@ func (su ScrapeURL) Match(url string) bool {
 // matched URL.
 func (su ScrapeURL) ExtractArgs(url string) (args []any) {
 	pattern := su.Regex()
-	metaPattern := regexp.MustCompile(`\(\\([a-zA-Z])\+\)`)
+	metaPattern := regexp.MustCompile(`(?m)(\([^()]+?\))`)
 	groups := pattern.FindStringSubmatch(url)[1:]
-	groupPatterns := metaPattern.FindStringSubmatch(pattern.String())[1:]
+	groupPatterns := make([]string, 0)
+	for _, groupMatches := range metaPattern.FindAllStringSubmatch(pattern.String(), -1) {
+		groupPatterns = append(groupPatterns, groupMatches[1:][0])
+	}
 	if len(groups) != len(groupPatterns) {
 		panic(fmt.Errorf(
 			"the number of groups matched by %s doesn't match the number of groups found in the pattern (%d vs %d)",
@@ -95,12 +254,14 @@ func (su ScrapeURL) ExtractArgs(url string) (args []any) {
 	}
 	args = make([]any, len(groups))
 	for i, group := range groups {
-		groupSet := groupPatterns[i]
-		switch groupSet {
-		case "d":
-			args[i], _ = strconv.ParseInt(group, 10, 64)
-		default:
-			panic(fmt.Errorf("cannot parse character set \"%s\"", groupSet))
+		groupPattern := groupPatterns[i]
+		if parseFunc, ok := regexParsers[groupPattern]; ok {
+			var err error
+			if args[i], err = parseFunc(group); err != nil {
+				panic(errors.Wrapf(err, "could not parse string %q using parser for %q", group, groupPattern))
+			}
+		} else {
+			args[i] = group
 		}
 	}
 	return args
