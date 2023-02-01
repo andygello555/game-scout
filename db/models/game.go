@@ -762,18 +762,15 @@ func (g *GameSteamStorefront) AfterScrape(args ...any) {
 type GameItchIOStorefront GameWrapper
 
 func (g *GameItchIOStorefront) Args(url string) []any {
-	//TODO implement me
-	panic("implement me")
+	return browser.ItchIOGamePage.ExtractArgs(url)
 }
-
-func (g *GameItchIOStorefront) GetStorefront() Storefront {
-	//TODO implement me
-	panic("implement me")
-}
+func (g *GameItchIOStorefront) GetStorefront() Storefront { return ItchIOStorefront }
 
 func (g *GameItchIOStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
-	//TODO implement me
-	panic("implement me")
+	developer, gameSlug := args[0], args[1]
+	return browser.ItchIOGamePage.RetrySoup(maxTries, minDelay, func(doc *soup.Root, resp *http.Response) (err error) {
+		return
+	})
 }
 
 func (g *GameItchIOStorefront) ScrapeReviews(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
