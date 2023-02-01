@@ -635,6 +635,61 @@ func main() {
 			},
 		},
 		{
+			Name:  "template",
+			Usage: "test template creation and sending",
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:     "template",
+					Usage:    "the template to fill",
+					Required: true,
+				},
+				cli.BoolFlag{
+					Name:  "send",
+					Usage: "send the email to its required recipients",
+				},
+				cli.BoolFlag{
+					Name:  "loadState",
+					Usage: "load the most recent state from disk",
+				},
+			},
+			Action: func(c *cli.Context) (err error) {
+				templatePath := email.TemplatePathFromName(c.String("template"))
+				state := StateInMemory()
+				if c.Bool("loadState") {
+					if state, err = StateLoadOrCreate(false); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+				}
+
+				var context email.Context
+				switch templatePath {
+				case email.Measure:
+					context = &email.MeasureContext{
+						Start: time.Now(),
+						End:   time.Now(),
+					}
+				case email.Started:
+					context = &StartedContext{state}
+				case email.Error:
+					break
+				}
+
+				var executed *email.Template
+				if executed = context.Execute(); executed.Error != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+
+				if c.Bool("send") {
+					if resp := executed.SendSync(); resp.Error != nil {
+						return cli.NewExitError(err.Error(), 1)
+					} else {
+						fmt.Println(resp.Email.Profiling.String())
+					}
+				}
+				return
+			},
+		},
+		{
 			Name: "developer",
 			Flags: []cli.Flag{
 				cli.StringSliceFlag{
@@ -811,7 +866,7 @@ func main() {
 
 				if c.Bool("measure") {
 					var template *email.Template
-					if template = measureContext.HTML(); template.Error != nil {
+					if template = measureContext.Execute(); template.Error != nil {
 						return cli.NewExitError(template.Error.Error(), 1)
 					}
 
@@ -913,7 +968,7 @@ func main() {
 
 				if c.Bool("measure") {
 					var template *email.Template
-					if template = measureContext.HTML(); template.Error != nil {
+					if template = measureContext.Execute(); template.Error != nil {
 						return cli.NewExitError(template.Error.Error(), 1)
 					}
 

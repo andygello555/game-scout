@@ -7,140 +7,21 @@ import (
 	"encoding/gob"
 	"fmt"
 	"github.com/andygello555/game-scout/browser"
-	"github.com/andygello555/game-scout/db/models"
 	myErrors "github.com/andygello555/game-scout/errors"
-	"github.com/andygello555/gotils/v2/numbers"
-	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/pkg/errors"
 	"github.com/playwright-community/playwright-go"
-	"github.com/volatiletech/null/v9"
 	"html/template"
 	"io"
 	"jaytaylor.com/html2text"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
-	"time"
-	"unicode"
+	"strings"
+	textTemplate "text/template"
 )
 
 func init() {
 	gob.Register(MeasureContext{})
-}
-
-// Context will be implemented by structures that are used to fill out a Template in Template.HTML.
-type Context interface {
-	// Path returns the TemplatePath that this Context is for.
-	Path() TemplatePath
-	// Template returns an un-executed Template that this Context can be used for.
-	Template() *Template
-	// Funcs returns the functions that should be bound to the template.Template before parsing the HTML template in
-	// located in at the TemplatePath.
-	Funcs() template.FuncMap
-	// HTML acts as a wrapper for Template.HTML.
-	HTML() *Template
-}
-
-// MeasureContext is a Context that contains the data required to fill out the Measure HTML template.
-type MeasureContext struct {
-	Start                  time.Time
-	End                    time.Time
-	TrendingDevs           []*models.TrendingDev
-	TopSteamApps           []*models.SteamApp
-	DevelopersBeingDeleted []*models.TrendingDev
-	EnabledDevelopers      int64
-	Config                 Config
-}
-
-func (m *MeasureContext) Path() TemplatePath  { return Measure }
-func (m *MeasureContext) Template() *Template { return m.Path().Template(m) }
-func (m *MeasureContext) HTML() *Template     { return m.Template().HTML() }
-func (m *MeasureContext) Funcs() template.FuncMap {
-	return map[string]any{
-		"intRange": func(start, end, step int) []int {
-			return numbers.Range(start, end, step)
-		},
-		"contains": func(set []string, elem string) bool {
-			return mapset.NewThreadUnsafeSet(set...).Contains(elem)
-		},
-		"timePretty": func(t time.Time) string {
-			loc, _ := time.LoadLocation("Europe/London")
-			t = t.In(loc)
-			return numbers.Ordinal(t.Day()) + t.Format(" January 2006 at 3pm")
-		},
-		"datePretty": func(t time.Time) string {
-			return t.Format("02/01/2006")
-		},
-		"percentage": func(f null.Float64) string {
-			perc := f.Float64
-			if !f.IsValid() {
-				perc = 1.0
-			}
-			return fmt.Sprintf("%.2f%%", perc*100.0)
-		},
-		"percentageF64": func(f float64) string {
-			return fmt.Sprintf("%.2f%%", f*100.0)
-		},
-		"cap": func(s string) string {
-			r := []rune(s)
-			return string(append([]rune{unicode.ToUpper(r[0])}, r[1:]...))
-		},
-		"yesno": func(b bool) string {
-			return map[bool]string{
-				true:  "yes",
-				false: "no",
-			}[b]
-		},
-		"inc": func(i int) int {
-			return i + 1
-		},
-		"dec": func(i int) int {
-			return i - 1
-		},
-		"div": func(a, b int) int {
-			return a / b
-		},
-		"ord": func(num int) string {
-			return numbers.OrdinalOnly(num)
-		},
-		"date": func(date time.Time) time.Time {
-			year, month, day := date.Date()
-			return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
-		},
-		"duration": func(duration models.NullDuration) time.Duration {
-			return time.Duration(duration.Int64)
-		},
-		"timeSub": func(t1 time.Time, t2 time.Time) time.Duration {
-			return t1.Sub(t2)
-		},
-		"days": func(d time.Duration) int {
-			return int(d.Hours() / 24)
-		},
-		"lastIndex": func(a any) int {
-			return reflect.ValueOf(a).Len() - 1
-		},
-		"trunc": func(s string, max int) string {
-			lastSpaceIx := -1
-			sLen := 0
-			for i, r := range s {
-				if unicode.IsSpace(r) {
-					lastSpaceIx = i
-				}
-				sLen++
-				if sLen >= max {
-					if lastSpaceIx != -1 {
-						return s[:lastSpaceIx] + "..."
-					}
-					// If here, string is longer than max, but has no spaces
-				}
-			}
-			return s
-		},
-		"float": func(f float64) string {
-			return strconv.FormatFloat(f, 'G', 12, 64)
-		},
-	}
 }
 
 //go:embed templates/*
@@ -155,41 +36,35 @@ type TemplatePath string
 
 const (
 	Measure TemplatePath = templateDir + "measure.html"
+	Started TemplatePath = templateDir + "started.txt"
+	Error   TemplatePath = templateDir + "error.txt"
 )
+
+// TemplatePathFromName returns the TemplatePath of the given name.
+func TemplatePathFromName(name string) TemplatePath {
+	switch strings.ToLower(name) {
+	case "measure":
+		return Measure
+	case "started":
+		return Started
+	case "error":
+		return Error
+	default:
+		panic(fmt.Errorf("there is no template with name %q", name))
+	}
+}
 
 // Name returns the name of the TemplatePath that is synonymous to the name of the enum constant.
 func (tt TemplatePath) Name() string {
 	switch tt {
 	case Measure:
 		return "Measure"
+	case Started:
+		return "Started"
+	case Error:
+		return "Error"
 	default:
 		return "Unknown"
-	}
-}
-
-// Context returns an empty Context that can be used for a Template of TemplatePath.
-func (tt TemplatePath) Context() Context {
-	switch tt {
-	case Measure:
-		return &MeasureContext{}
-	default:
-		return nil
-	}
-}
-
-// Template returns a Template that is ready to be filled using Template.HTML.
-func (tt TemplatePath) Template(context Context) *Template {
-	return &Template{
-		Path: tt,
-		Template: template.Must(
-			template.New(
-				filepath.Base(tt.Path()),
-			).Funcs(
-				tt.Context().Funcs(),
-			).ParseFS(templates, tt.Path())),
-		Config:      Client.Config().EmailTemplateConfigFor(tt),
-		ContentType: NotExecuted,
-		Context:     context,
 	}
 }
 
@@ -203,7 +78,10 @@ const (
 	// NotExecuted is the TemplateBufferContentType that is initially given to a Template constructed by
 	// TemplatePath.Template.
 	NotExecuted TemplateBufferContentType = iota
-	// HTML is set after the Template.HTML method is called successfully.
+	// Text is set after the Template.Execute method is called successfully on a Text Template. Text templates cannot be
+	// converted to HTML or PDF.
+	Text
+	// HTML is set after the Template.Execute method is called successfully on an HTML Template.
 	HTML
 	// PDF is set after the Template.PDF method is called successfully.
 	PDF
@@ -214,6 +92,8 @@ func (ct TemplateBufferContentType) String() string {
 	switch ct {
 	case NotExecuted:
 		return "Not Executed"
+	case Text:
+		return "Text"
 	case HTML:
 		return "HTML"
 	case PDF:
@@ -223,24 +103,100 @@ func (ct TemplateBufferContentType) String() string {
 	}
 }
 
+// parsedTemplate serves as a wrapper for a parsed template.Template or a parsed textTemplate.Template.
+type parsedTemplate struct {
+	htmlTemplate *template.Template
+	textTemplate *textTemplate.Template
+}
+
+func NewParsedTemplate(contentType TemplateBufferContentType, context Context) parsedTemplate {
+	switch contentType {
+	case HTML:
+		return parsedTemplate{
+			htmlTemplate: template.Must(
+				template.New(
+					filepath.Base(context.Path().Path()),
+				).Funcs(
+					context.Funcs(),
+				).ParseFS(
+					templates,
+					context.Path().Path(),
+				),
+			),
+		}
+	case Text:
+		return parsedTemplate{
+			textTemplate: textTemplate.Must(
+				textTemplate.New(
+					filepath.Base(context.Path().Path()),
+				).Funcs(
+					context.Funcs(),
+				).ParseFS(
+					templates,
+					context.Path().Path(),
+				),
+			),
+		}
+	default:
+		return parsedTemplate{}
+	}
+}
+
+// Template returns an instantiated Template using the given Context.
+func (p parsedTemplate) Template(context Context) *Template {
+	return &Template{
+		Path:        context.Path(),
+		Template:    p,
+		Config:      Client.Config().EmailTemplateConfigFor(context.Path()),
+		ContentType: NotExecuted,
+		Context:     context,
+	}
+}
+
+// ExecutedContentType returns the TemplateBufferContentType that the Template.ContentType should be set to after
+// Execute has been called.
+func (p parsedTemplate) ExecutedContentType() TemplateBufferContentType {
+	switch {
+	case p.htmlTemplate != nil:
+		return HTML
+	case p.textTemplate != nil:
+		return Text
+	default:
+		return NotExecuted
+	}
+}
+
+// Execute will call the execute method on the set parsed template. If no template is set, then an appropriate error
+// will be returned.
+func (p parsedTemplate) Execute(writer io.Writer, data any) error {
+	switch p.ExecutedContentType() {
+	case HTML:
+		return p.htmlTemplate.Execute(writer, data)
+	case Text:
+		return p.textTemplate.Execute(writer, data)
+	default:
+		return fmt.Errorf("parsedTemplate has neither htmlTemplate, or textTemplate set so cannot be executed")
+	}
+}
+
 // Template is a chainable structure that represents an instantiated HTML template that is read from the given Path.
 // It is worth noting that the chainable methods return copies of the original Template.
 type Template struct {
 	// Path is the TemplatePath where the Template was loaded from.
 	Path TemplatePath
-	// Template is the parsed template.Template, loaded from the Path, which is also loaded up with the functions
-	// returned by Context.Funcs method for the Context for this Template.
-	Template *template.Template
+	// Template is the parsed template.Template or textTemplate.Template, loaded from the Path, which is also loaded up
+	// with the functions returned by Context.Funcs method for the Context for this Template.
+	Template parsedTemplate
 	// Config is the TemplateConfig for this template.
 	Config TemplateConfig
-	// Buffer is a bytes.Reader that contains the parsed output for the results produced by Template.HTML and
+	// Buffer is a bytes.Reader that contains the parsed output for the results produced by Template.Execute and
 	// Template.PDF. This is overwritten each time.
 	Buffer bytes.Reader
 	// Error is the error returned by any of the chained methods.
 	Error error
 	// ContentType is the current TemplateBufferContentType of the Buffer.
 	ContentType TemplateBufferContentType
-	// Context is the Context that this Template will/has used to generate HTML from the TemplatePath.
+	// Context is the Context that this Template will/has used to generate HTML or Text from the TemplatePath.
 	Context Context
 }
 
@@ -248,8 +204,11 @@ type Template struct {
 // will wrap the error and overwrite it in the copied instance.
 func copyTemplate(template *Template) *Template {
 	output := &Template{
-		Path:        template.Path,
-		Template:    template.Template,
+		Path: template.Path,
+		Template: parsedTemplate{
+			htmlTemplate: template.Template.htmlTemplate,
+			textTemplate: template.Template.textTemplate,
+		},
 		Config:      template.Config,
 		Buffer:      template.Buffer,
 		Error:       template.Error,
@@ -267,7 +226,25 @@ func copyTemplate(template *Template) *Template {
 	return output
 }
 
-// HTML will call the Execute method on the Template.Template with the given Template.Context. Template.Error is set if:
+func (t *Template) checkExecutable() {
+	if t.ContentType != NotExecuted {
+		t.Error = fmt.Errorf(
+			"%s template has content-type %s, to execute this template we need %s",
+			t.Path.Name(), t.ContentType.String(), NotExecuted.String(),
+		)
+		return
+	}
+
+	if t.Context.Path() != t.Path {
+		t.Error = fmt.Errorf(
+			"%s is intended for the %s Template not the %s Template",
+			reflect.TypeOf(t.Context).Elem().String(), t.Context.Path().Name(), t.Path.Name(),
+		)
+		return
+	}
+}
+
+// Execute will call Template.Template.Execute with the given Template.Context. Template.Error is set if:
 //
 // • The Template already contains an error.
 //
@@ -277,26 +254,15 @@ func copyTemplate(template *Template) *Template {
 //
 // • An error occurs whilst calling the Execute method on Template.Template.
 //
-// If Template.HTML can run without setting the Template.Error then Template.ContentType is set to HTML.
-func (t *Template) HTML() (output *Template) {
+// If Template.Execute can run without setting the Template.Error then Template.ContentType is set to HTML or Text
+// depending on the TemplateBufferContentType returned by Template.Template.ExecutedContentType.
+func (t *Template) Execute() (output *Template) {
 	if output = copyTemplate(t); output.Error != nil {
 		output.Error = errors.Wrapf(output.Error, "%s template cannot be executed", output.Path.Name())
 		return
 	}
 
-	if output.ContentType != NotExecuted {
-		output.Error = fmt.Errorf(
-			"%s template has content-type %s, to execute this template we need %s",
-			output.Path.Name(), output.ContentType.String(), NotExecuted.String(),
-		)
-		return
-	}
-
-	if output.Context.Path() != output.Path {
-		output.Error = fmt.Errorf(
-			"%s is intended for the %s Template not the %s Template",
-			reflect.TypeOf(output.Context).Elem().String(), output.Context.Path().Name(), output.Path.Name(),
-		)
+	if output.checkExecutable(); output.Error != nil {
 		return
 	}
 
@@ -308,7 +274,7 @@ func (t *Template) HTML() (output *Template) {
 	output.Buffer = *bytes.NewReader(buffer.Bytes())
 	buffer = nil
 
-	output.ContentType = HTML
+	output.ContentType = output.Template.ExecutedContentType()
 	return
 }
 
@@ -451,6 +417,8 @@ func (t *Template) WriteFile(filename string) (err error) {
 //
 // • If the given Template has an error set in Template.Error then this error will be wrapped and returned.
 //
+// • If the given Template has a ContentType of Text, then the sent email will have a plain-text body.
+//
 // • If the given Template has a ContentType of HTML, then the sent email will have an HTML body, a plain-text
 // body obtained from html2text.FromString, and the HTML will be added as an attachment.
 //
@@ -458,7 +426,9 @@ func (t *Template) WriteFile(filename string) (err error) {
 // brand-new template with the Template.Context, a plain-text body obtained from html2text.FromString, and the PDF will
 // be added as an attachment.
 //
-// • If the given Template does not have a ContentType that is either HTML or PDF, then an error will be returned.
+// • If the given Template does not have a ContentType that is either Text, HTML or PDF, then an error will be returned.
+//
+// Any additional Part returned by Context.AdditionalParts will also be added.
 func (t *Template) Email() (email *Email, err error) {
 	if t.Error != nil {
 		err = errors.Wrapf(err, "cannot create transmission for %s template as it contains an error", t.Path.Name())
@@ -484,8 +454,14 @@ func (t *Template) Email() (email *Email, err error) {
 		attachmentBuffer *bytes.Reader
 		attachmentName   string
 	)
-	parts := make([]Part, 0)
 	switch t.ContentType {
+	case Text:
+		plainBuffer := new(strings.Builder)
+		if _, err = io.Copy(plainBuffer, &t.Buffer); err != nil {
+			err = errors.Wrapf(err, "cannot copy bytes.Reader for %s template to strings.Builder", t.Path.Name())
+			return
+		}
+		plain = plainBuffer.String()
 	case HTML:
 		htmlBuffer = &t.Buffer
 		attachmentBuffer = &t.Buffer
@@ -495,7 +471,7 @@ func (t *Template) Email() (email *Email, err error) {
 			return
 		}
 	case PDF:
-		htmlTemplate := t.Context.HTML()
+		htmlTemplate := t.Context.Execute()
 		htmlBuffer = &htmlTemplate.Buffer
 		attachmentBuffer = &t.Buffer
 		attachmentName = t.Config.TemplateAttachmentName() + ".pdf"
@@ -511,15 +487,27 @@ func (t *Template) Email() (email *Email, err error) {
 		return
 	}
 
-	parts = append(parts,
-		Part{Buffer: bytes.NewReader([]byte(plain))},
-		Part{Buffer: attachmentBuffer, Attachment: true, Filename: attachmentName},
-	)
-	if !t.Config.TemplatePlainOnly() {
-		parts = append(parts, Part{Buffer: htmlBuffer})
+	errs := make([]error, 0)
+	// Add plain-text part
+	errs = append(errs, email.AddPart(Part{Buffer: bytes.NewReader([]byte(plain))}))
+
+	// Add attachment if there is one
+	if attachmentBuffer != nil {
+		errs = append(errs, email.AddPart(Part{Buffer: attachmentBuffer, Attachment: true, Filename: attachmentName}))
 	}
 
-	if err = email.AddParts(parts...); err != nil {
+	// Add HTML buffer if plain only option is not set for this template
+	if !t.Config.TemplatePlainOnly() {
+		errs = append(errs, email.AddPart(Part{Buffer: htmlBuffer}))
+	}
+
+	// Add any additional parts
+	if additionalParts := t.Context.AdditionalParts(); len(additionalParts) > 0 {
+		errs = append(errs, email.AddParts(additionalParts...))
+	}
+
+	// Merge all the errors. If this returns a non-nil error then we will Close the email
+	if err = myErrors.MergeErrors(errs...); err != nil {
 		err = myErrors.MergeErrors(err, email.Close())
 		return
 	}
@@ -534,4 +522,23 @@ func (t *Template) SendAsync() <-chan Response {
 // SendSync the Template using the default TemplateMailer (Client) with ClientWrapper.SendSync.
 func (t *Template) SendSync() Response {
 	return Client.SendSync(t)
+}
+
+// SendAsyncAndConsume will send the Template using the default TemplateMailer (Client) with Template.SendAsync and
+// will consume the response using the given function. If a Response is never returned from Template.SendAsync, then the
+// consumer function will never be run.
+func (t *Template) SendAsyncAndConsume(consumer func(resp Response)) {
+	result := t.SendAsync()
+	go func() {
+		var resp Response
+	breakBusy:
+		for {
+			select {
+			case resp = <-result:
+				consumer(resp)
+				break breakBusy
+			}
+		}
+		return
+	}()
 }

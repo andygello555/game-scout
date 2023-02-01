@@ -1,18 +1,22 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/db/models"
+	"github.com/andygello555/game-scout/email"
 	myErrors "github.com/andygello555/game-scout/errors"
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	"github.com/andygello555/gotils/v2/slices"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
+	"html/template"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -29,29 +33,66 @@ const (
 	filePerms      = 0666
 )
 
-// PathsToBytes acts as a lookup for paths to files on the disk to the bytes read from said files. This can represent both
-// a read or a write process.
-type PathsToBytes struct {
-	inner map[string][]byte
-	// BaseDir is the path to the directory that all paths within the PathsToBytes will be relative to. This can be an
-	// absolute path or a relative path. All paths within the lookup will have this directory as a prefix.
-	BaseDir string
+type PathsToBytesInterface interface {
+	BaseDir() string
+	Path(filename string) string
+	AddPathBytes(path string, data []byte)
+	AddFilenameBytes(filename string, data []byte)
+	Len() int
 }
 
-// NewPathsToBytes creates a new PathsToBytes for the given directory.
-func NewPathsToBytes(baseDir string) *PathsToBytes {
-	return &PathsToBytes{
+func pathDefault(ftb PathsToBytesInterface, filename string) string {
+	return filepath.Join(ftb.BaseDir(), filename)
+}
+
+func addFilenameBytesDefault(ftb PathsToBytesInterface, filename string, data []byte) {
+	ftb.AddPathBytes(ftb.Path(filename), data)
+}
+
+type PathsToBytesReader interface {
+	PathsToBytesInterface
+	LoadBaseDir() (err error)
+	ReadPath(path string) (err error)
+	BytesForFilename(filename string) ([]byte, error)
+	BytesForDirectory(directory string) *PathsToBytesDirectory
+}
+
+type PathsToBytesWriter interface {
+	PathsToBytesInterface
+	Write() (err error)
+}
+
+type PathsToBytesReadWriter interface {
+	PathsToBytesReader
+	PathsToBytesWriter
+}
+
+// PathsToBytesDirectory acts as a lookup for paths to files on the disk to the bytes read from said files. This can
+// represent both a read or a write process.
+type PathsToBytesDirectory struct {
+	inner map[string][]byte
+	// baseDir is the path to the directory that all paths within the PathsToBytesDirectory will be relative to. This
+	// can be an absolute path or a relative path. All paths within the lookup will have this directory as a prefix.
+	baseDir string
+}
+
+// NewPathsToBytes creates a new PathsToBytesDirectory for the given directory.
+func NewPathsToBytes(baseDir string) *PathsToBytesDirectory {
+	return &PathsToBytesDirectory{
 		inner:   make(map[string][]byte),
-		BaseDir: baseDir,
+		baseDir: baseDir,
 	}
 }
 
+// BaseDir is a getter for the base directory.
+func (ftb *PathsToBytesDirectory) BaseDir() string { return ftb.baseDir }
+
 // LoadBaseDir will recursively load all the files within the BaseDir into the lookup.
-func (ftb *PathsToBytes) LoadBaseDir() (err error) {
+func (ftb *PathsToBytesDirectory) LoadBaseDir() (err error) {
 	if err = filepath.Walk(
-		ftb.BaseDir,
+		ftb.baseDir,
 		func(path string, info os.FileInfo, err error) error {
-			log.INFO.Printf("PathsToBytes has visited %s (file = %t)", path, !info.IsDir())
+			log.INFO.Printf("PathsToBytesDirectory has visited %s (file = %t)", path, !info.IsDir())
 			if err != nil {
 				return err
 			}
@@ -63,16 +104,16 @@ func (ftb *PathsToBytes) LoadBaseDir() (err error) {
 			return nil
 		},
 	); err != nil {
-		err = errors.Wrapf(err, "could not read directory \"%s\" into PathsToBytes", ftb.BaseDir)
+		err = errors.Wrapf(err, "could not read directory \"%s\" into PathsToBytesDirectory", ftb.baseDir)
 	}
 	return
 }
 
 // ReadPath will read the file at the given path into the lookup.
-func (ftb *PathsToBytes) ReadPath(path string) (err error) {
+func (ftb *PathsToBytesDirectory) ReadPath(path string) (err error) {
 	var data []byte
 	if data, err = os.ReadFile(path); err != nil {
-		err = errors.Wrapf(err, "cannot read file \"%s\" into PathsToBytes", path)
+		err = errors.Wrapf(err, "cannot read file \"%s\" into PathsToBytesDirectory", path)
 		return
 	}
 	ftb.AddPathBytes(path, data)
@@ -80,25 +121,25 @@ func (ftb *PathsToBytes) ReadPath(path string) (err error) {
 }
 
 // Path returns the BaseDir joined with the given filename, or in other words a path that is relative to the BaseDir.
-func (ftb *PathsToBytes) Path(filename string) string {
-	return filepath.Join(ftb.BaseDir, filename)
+func (ftb *PathsToBytesDirectory) Path(filename string) string {
+	return pathDefault(ftb, filename)
 }
 
 // AddPathBytes will create a lookup entry for bytes read from a given path. The path is relative to BaseDir.
-func (ftb *PathsToBytes) AddPathBytes(path string, data []byte) {
+func (ftb *PathsToBytesDirectory) AddPathBytes(path string, data []byte) {
 	ftb.inner[path] = data
 }
 
 // AddFilenameBytes will create a lookup entry for bytes read from a given filename. This filename will first be normalised
 // to a path that is relative to the BaseDir, and then AddPathBytes will be called.
-func (ftb *PathsToBytes) AddFilenameBytes(filename string, data []byte) {
-	ftb.AddPathBytes(ftb.Path(filename), data)
+func (ftb *PathsToBytesDirectory) AddFilenameBytes(filename string, data []byte) {
+	addFilenameBytesDefault(ftb, filename, data)
 }
 
 // Write will write all the paths in the lookup to the disk.
-func (ftb *PathsToBytes) Write() (err error) {
+func (ftb *PathsToBytesDirectory) Write() (err error) {
 	start := time.Now().UTC()
-	log.INFO.Printf("PathsToBytes is writing %d files to disk", len(ftb.inner))
+	log.INFO.Printf("PathsToBytesDirectory is writing %d files to disk", len(ftb.inner))
 	for filename, data := range ftb.inner {
 		log.INFO.Printf("\tWriting %d bytes to file %s", len(data), filename)
 		// Create the parent directories for this file
@@ -110,12 +151,12 @@ func (ftb *PathsToBytes) Write() (err error) {
 
 		// Create the file descriptor
 		if err = os.WriteFile(filename, data, filePerms); err != nil {
-			err = errors.Wrapf(err, "could not write bytes to file \"%s\" in PathsToBytes", filename)
+			err = errors.Wrapf(err, "could not write bytes to file \"%s\" in PathsToBytesDirectory", filename)
 			return
 		}
 	}
 	log.INFO.Printf(
-		"PathsToBytes has finished writing %d files to disk in %s",
+		"PathsToBytesDirectory has finished writing %d files to disk in %s",
 		len(ftb.inner), time.Now().UTC().Sub(start).String(),
 	)
 	return
@@ -123,21 +164,21 @@ func (ftb *PathsToBytes) Write() (err error) {
 
 // BytesForFilename looks up the given filename in the lookup, after converting the filename to a path relative to the
 // BaseDir.
-func (ftb *PathsToBytes) BytesForFilename(filename string) ([]byte, error) {
+func (ftb *PathsToBytesDirectory) BytesForFilename(filename string) ([]byte, error) {
 	filename = ftb.Path(filename)
 	if data, ok := ftb.inner[filename]; ok {
 		return data, nil
 	} else {
-		return data, fmt.Errorf("%s does not exist in PathsToBytes", filename)
+		return data, fmt.Errorf("%s does not exist in PathsToBytesDirectory", filename)
 	}
 }
 
 // BytesForDirectory lookups up files that have the given directory as a prefix. This is done after converting the
 // directory name to a path relative to the BaseDir.
-func (ftb *PathsToBytes) BytesForDirectory(directory string) *PathsToBytes {
+func (ftb *PathsToBytesDirectory) BytesForDirectory(directory string) *PathsToBytesDirectory {
 	ftbOut := NewPathsToBytes(ftb.Path(directory))
 	for path, data := range ftb.inner {
-		if strings.HasPrefix(path, ftbOut.BaseDir) {
+		if strings.HasPrefix(path, ftbOut.baseDir) {
 			ftbOut.AddPathBytes(path, data)
 		}
 	}
@@ -145,11 +186,11 @@ func (ftb *PathsToBytes) BytesForDirectory(directory string) *PathsToBytes {
 }
 
 // Len returns the number of files in the lookup.
-func (ftb *PathsToBytes) Len() int {
+func (ftb *PathsToBytesDirectory) Len() int {
 	return len(ftb.inner)
 }
 
-// CachedField represents a field in ScoutState that can be cached on-disk using the PathsToBytes lookup.
+// CachedField represents a field in ScoutState that can be cached on-disk using the PathsToBytesDirectory lookup.
 type CachedField interface {
 	// BaseDir is the parent directory that the cached field will be stored in when serialised and written to disk.
 	BaseDir() string
@@ -157,14 +198,14 @@ type CachedField interface {
 	// serialised. This path should have the BaseDir as a prefix. The given arguments can be used within the path
 	// returned by the procedure in any way that is necessary.
 	Path(paths ...string) string
-	// Serialise will serialise the CachedField instance to bytes and add the resulting files to the PathsToBytes lookup.
-	// In this case PathsToBytes is write-only. If the instance is going to be serialised to a directory structure then
-	// remember to add placeholder/metadata files in the root of each directory so that the directories are created by
-	// PathsToBytes and the structure can be deserialised.
-	Serialise(pathsToBytes *PathsToBytes) error
+	// Serialise will serialise the CachedField instance to bytes and add the resulting files to the PathsToBytesWriter.
+	// In this case PathsToBytesDirectory only needs to be write-only. If the instance is going to be serialised to a directory
+	// structure then remember to add placeholder/metadata files in the root of each directory so that the directories
+	// are created by PathsToBytesWriter and the structure can be deserialised.
+	Serialise(pathsToBytes PathsToBytesWriter) error
 	// Deserialise will deserialise the bytes pertaining to this CachedField by looking up the necessary files from the
-	// given PathsToBytes instance. In this case, PathsToBytes is read-only.
-	Deserialise(pathsToBytes *PathsToBytes) error
+	// given PathsToBytesReader instance. In this case, PathsToBytesDirectory only needs to be read-only.
+	Deserialise(pathsToBytes PathsToBytesReader) error
 	// SetOrAdd will set specific keys/fields in the CachedField to the given arguments. The given arguments can be used
 	// in any way the user deems appropriate. For instance, for a cached field that is a map[string]any, the arguments
 	// can be key-value pairs.
@@ -228,7 +269,7 @@ func (utt *UserTweetTimes) BaseDir() string { return "" }
 
 func (utt *UserTweetTimes) Path(paths ...string) string { return "userTweetTimes.json" }
 
-func (utt *UserTweetTimes) Serialise(pathsToBytes *PathsToBytes) (err error) {
+func (utt *UserTweetTimes) Serialise(pathsToBytes PathsToBytesWriter) (err error) {
 	var data []byte
 	if data, err = json.Marshal(&utt); err != nil {
 		err = errors.Wrap(err, "cannot serialise UserTweetTimes")
@@ -238,7 +279,7 @@ func (utt *UserTweetTimes) Serialise(pathsToBytes *PathsToBytes) (err error) {
 	return
 }
 
-func (utt *UserTweetTimes) Deserialise(pathsToBytes *PathsToBytes) (err error) {
+func (utt *UserTweetTimes) Deserialise(pathsToBytes PathsToBytesReader) (err error) {
 	var data []byte
 	if data, err = pathsToBytes.BytesForFilename(utt.Path()); err != nil {
 		err = errors.Wrap(err, "UserTweetTimes does not exist in cache")
@@ -308,7 +349,7 @@ func (ds *DeveloperSnapshots) Path(paths ...string) string {
 	return filepath.Join(ds.BaseDir(), strings.Join(paths, "_")+binExtension)
 }
 
-func (ds *DeveloperSnapshots) Serialise(pathsToBytes *PathsToBytes) (err error) {
+func (ds *DeveloperSnapshots) Serialise(pathsToBytes PathsToBytesWriter) (err error) {
 	// We create an info file so that BaseDir is always created
 	pathsToBytes.AddFilenameBytes(
 		filepath.Join(ds.BaseDir(), "meta.json"),
@@ -330,7 +371,7 @@ func (ds *DeveloperSnapshots) Serialise(pathsToBytes *PathsToBytes) (err error) 
 	return
 }
 
-func (ds *DeveloperSnapshots) Deserialise(pathsToBytes *PathsToBytes) (err error) {
+func (ds *DeveloperSnapshots) Deserialise(pathsToBytes PathsToBytesReader) (err error) {
 	dsFtb := pathsToBytes.BytesForDirectory(ds.BaseDir())
 	for filename, data := range dsFtb.inner {
 		if filepath.Base(filename) != "meta.json" {
@@ -408,7 +449,7 @@ func (ids *GameIDs) BaseDir() string { return "" }
 
 func (ids *GameIDs) Path(paths ...string) string { return "gameIDs.json" }
 
-func (ids *GameIDs) Serialise(pathsToBytes *PathsToBytes) (err error) {
+func (ids *GameIDs) Serialise(pathsToBytes PathsToBytesWriter) (err error) {
 	var data []byte
 	if data, err = json.Marshal(&ids); err != nil {
 		err = errors.Wrap(err, "cannot serialise GameIDs")
@@ -418,7 +459,7 @@ func (ids *GameIDs) Serialise(pathsToBytes *PathsToBytes) (err error) {
 	return
 }
 
-func (ids *GameIDs) Deserialise(pathsToBytes *PathsToBytes) (err error) {
+func (ids *GameIDs) Deserialise(pathsToBytes PathsToBytesReader) (err error) {
 	var data []byte
 	if data, err = pathsToBytes.BytesForFilename(ids.Path()); err != nil {
 		err = errors.Wrap(err, "GameIDs does not exist in cache")
@@ -475,7 +516,7 @@ func (d *DeletedDevelopers) Path(paths ...string) string {
 	return filepath.Join(d.BaseDir(), strings.Join(paths, "_")+binExtension)
 }
 
-func (d *DeletedDevelopers) Serialise(pathsToBytes *PathsToBytes) (err error) {
+func (d *DeletedDevelopers) Serialise(pathsToBytes PathsToBytesWriter) (err error) {
 	// We create an info file so that BaseDir is always created
 	pathsToBytes.AddFilenameBytes(
 		filepath.Join(d.BaseDir(), "meta.json"),
@@ -537,7 +578,7 @@ func deletedDevelopersDecodeValue[T interface {
 	return
 }
 
-func (d *DeletedDevelopers) Deserialise(pathsToBytes *PathsToBytes) (err error) {
+func (d *DeletedDevelopers) Deserialise(pathsToBytes PathsToBytesReader) (err error) {
 	dFtb := pathsToBytes.BytesForDirectory(d.BaseDir())
 	deletedDeveloperMap := make(map[string]*models.TrendingDev)
 	for filename, data := range dFtb.inner {
@@ -924,7 +965,7 @@ func (s *State) BaseDir() string { return "" }
 
 func (s *State) Path(paths ...string) string { return "state.json" }
 
-func (s *State) Serialise(pathsToBytes *PathsToBytes) (err error) {
+func (s *State) Serialise(pathsToBytes PathsToBytesWriter) (err error) {
 	var data []byte
 	if data, err = json.Marshal(s); err != nil {
 		err = errors.Wrap(err, "cannot serialise State")
@@ -934,7 +975,7 @@ func (s *State) Serialise(pathsToBytes *PathsToBytes) (err error) {
 	return
 }
 
-func (s *State) Deserialise(pathsToBytes *PathsToBytes) (err error) {
+func (s *State) Deserialise(pathsToBytes PathsToBytesReader) (err error) {
 	var data []byte
 	if data, err = pathsToBytes.BytesForFilename(s.Path()); err != nil {
 		err = errors.Wrap(err, "State does not exist in cache")
@@ -1189,22 +1230,54 @@ func (state *ScoutState) MergeIterableCachedFields(stateToMerge *ScoutState) {
 	}
 }
 
+func (state *ScoutState) deserialiseFields(p PathsToBytesReader) (err error) {
+	for cachedFieldType, cacheField := range state.cachedFields {
+		if err = cacheField.Deserialise(p); err != nil {
+			err = errors.Wrapf(err, "could not deserialise cached field %s", cachedFieldType.String())
+			return
+		}
+	}
+	return
+}
+
 // Load will deserialise the relevant files in BaseDir into the CachedField within the ScoutState. If the InMemory flag is
 // set then this will do nothing.
 func (state *ScoutState) Load() (err error) {
 	if !state.InMemory {
 		log.INFO.Printf("Loading ScoutState from %s", state.BaseDir())
 		pathsToBytes := NewPathsToBytes(state.BaseDir())
-		if err = pathsToBytes.LoadBaseDir(); err != nil {
-			err = errors.Wrapf(err, "could not load ScoutState (%s) from disk", state.BaseDir())
-		}
-
-		for cachedFieldType, cacheField := range state.cachedFields {
-			if err = cacheField.Deserialise(pathsToBytes); err != nil {
-				err = errors.Wrapf(err, "could not deserialise cached field %s", cachedFieldType.String())
-			}
+		if err = state.LoadFrom(pathsToBytes); err != nil {
+			return
 		}
 		pathsToBytes = nil
+	}
+	return
+}
+
+func (state *ScoutState) LoadFrom(p PathsToBytesReader) (err error) {
+	if err = p.LoadBaseDir(); err != nil {
+		err = errors.Wrapf(err, "could not load ScoutState (%s) from disk", p.BaseDir())
+		return
+	}
+	err = state.deserialiseFields(p)
+	return
+}
+
+func (state *ScoutState) serialiseFields(p PathsToBytesWriter) (err error) {
+	for cachedFieldType, cacheField := range state.cachedFields {
+		switch cacheField.(type) {
+		case IterableCachedField:
+			log.INFO.Printf(
+				"Serialising iterable field %s which contains %d",
+				cachedFieldType.String(), cacheField.(IterableCachedField).Len(),
+			)
+		default:
+			log.INFO.Printf("Serialising non-iterable field %s: %v", cachedFieldType.String(), cacheField)
+		}
+		if err = cacheField.Serialise(p); err != nil {
+			err = errors.Wrapf(err, "could not serialise cached field %s", cachedFieldType.String())
+			return
+		}
 	}
 	return
 }
@@ -1219,28 +1292,23 @@ func (state *ScoutState) Save() (err error) {
 			return
 		}
 
+		// Save the State to a newly created PathsToBytesDirectory reader
 		pathsToBytes := NewPathsToBytes(state.BaseDir())
-		for cachedFieldType, cacheField := range state.cachedFields {
-			switch cacheField.(type) {
-			case IterableCachedField:
-				log.INFO.Printf(
-					"Serialising iterable field %s which contains %d",
-					cachedFieldType.String(), cacheField.(IterableCachedField).Len(),
-				)
-			default:
-				log.INFO.Printf("Serialising non-iterable field %s: %v", cachedFieldType.String(), cacheField)
-			}
-			if err = cacheField.Serialise(pathsToBytes); err != nil {
-				err = errors.Wrapf(err, "could not serialise cached field %s", cachedFieldType.String())
-				return
-			}
-		}
-
-		// Finally, we write the PathsToBytes to disk
-		if err = pathsToBytes.Write(); err != nil {
-			err = errors.Wrap(err, "could not write serialised ScoutState to disk")
+		if err = state.SaveTo(pathsToBytes); err != nil {
+			return
 		}
 		pathsToBytes = nil
+	}
+	return
+}
+
+func (state *ScoutState) SaveTo(p PathsToBytesWriter) (err error) {
+	if err = state.serialiseFields(p); err != nil {
+		return
+	}
+
+	if err = p.Write(); err != nil {
+		err = errors.Wrap(err, "could not write serialised ScoutState to disk")
 	}
 	return
 }
@@ -1338,4 +1406,91 @@ func StateInMemory() *ScoutState {
 	state := &ScoutState{InMemory: true, cachedFields: make(map[CachedFieldType]CachedField)}
 	state.makeCachedFields()
 	return state
+}
+
+type pathToBytesZipped struct {
+	inner   map[string][]byte
+	baseDir string
+	buf     *bytes.Buffer
+	archive *zip.Writer
+}
+
+func (p *pathToBytesZipped) BaseDir() string                       { return p.baseDir }
+func (p *pathToBytesZipped) Path(filename string) string           { return pathDefault(p, filename) }
+func (p *pathToBytesZipped) AddPathBytes(path string, data []byte) { p.inner[path] = data }
+func (p *pathToBytesZipped) Len() int                              { return len(p.inner) }
+func (p *pathToBytesZipped) AddFilenameBytes(filename string, data []byte) {
+	addFilenameBytesDefault(p, filename, data)
+}
+
+func (p *pathToBytesZipped) Write() (err error) {
+	start := time.Now().UTC()
+	p.buf = new(bytes.Buffer)
+	p.archive = zip.NewWriter(p.buf)
+	defer func(archive *zip.Writer) {
+		err = myErrors.MergeErrors(err, archive.Close())
+	}(p.archive)
+
+	log.INFO.Printf("PathsToBytesZipped is writing %d files to zip", p.Len())
+	for filename, data := range p.inner {
+		log.INFO.Printf("\tWriting %d bytes to file %s", len(data), filename)
+		var w io.Writer
+		if w, err = p.archive.Create(filename); err != nil {
+			err = errors.Wrapf(err, "could not create archived file %q", filename)
+		}
+
+		if _, err = w.Write(data); err != nil {
+			err = errors.Wrapf(err, "could not write %d bytes to file %q in PathsToBytesZipped", len(data), filename)
+			return
+		}
+	}
+
+	log.INFO.Printf(
+		"PathsToBytesZipped has finished writing %d files to archive in %s",
+		p.Len(), time.Now().UTC().Sub(start).String(),
+	)
+	return
+}
+
+func newPathsToBytesZipped() *pathToBytesZipped {
+	return &pathToBytesZipped{
+		inner:   make(map[string][]byte),
+		baseDir: "",
+		buf:     nil,
+		archive: nil,
+	}
+}
+
+type StartedContext struct {
+	State *ScoutState
+}
+
+func (s *StartedContext) Path() email.TemplatePath { return email.Started }
+func (s *StartedContext) Execute() *email.Template { return s.Template().Execute() }
+func (s *StartedContext) Template() *email.Template {
+	return email.NewParsedTemplate(email.Text, s).Template(s)
+}
+func (s *StartedContext) AdditionalParts() []email.Part {
+	archive := newPathsToBytesZipped()
+	if err := s.State.SaveTo(archive); err != nil {
+		panic(errors.Wrap(err, "could not save ScoutState to ZIP archive"))
+	}
+	return []email.Part{
+		{
+			Buffer:     bytes.NewReader(archive.buf.Bytes()),
+			Attachment: true,
+			Filename:   "scout_state.zip",
+		},
+	}
+}
+func (s *StartedContext) Funcs() template.FuncMap {
+	return map[string]any{
+		"stamp": func(t time.Time) string {
+			return t.Format(time.Stamp)
+		},
+		"mustGet": func(field CachedField, key string) any {
+			v, _ := field.Get(key)
+			return v
+		},
+	}
 }

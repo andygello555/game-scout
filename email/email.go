@@ -87,7 +87,7 @@ func (p *Part) ContentTypeSlug() string {
 func (p *Part) Encoder() (io.WriteCloser, error) {
 	_, _ = p.file.Seek(0, io.SeekStart)
 	if p.Attachment {
-		if p.Buffer.Size() > compressionLimit {
+		if p.Buffer.Size() > compressionLimit && p.ContentType != "application/zip" {
 			p.ContentType = "application/zip"
 			filename := p.Filename
 			p.Filename = strings.TrimSuffix(filename, filepath.Ext(filename)) + ".zip"
