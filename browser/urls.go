@@ -273,24 +273,39 @@ func (su ScrapeURL) Standardise(url string) string {
 	return su.Fill(args...)
 }
 
+// Request creates a new http.MethodGet http.Request for the given ScrapeURL with the given arguments.
+func (su ScrapeURL) Request(args ...any) (url string, req *http.Request, err error) {
+	url = su.Fill(args...)
+	if req, err = http.NewRequest(http.MethodGet, url, nil); err != nil {
+		err = errors.Wrapf(err, "request for %q could not be created", url)
+	}
+	return
+}
+
 // Soup fetches the ScrapeURL using the default HTTP client, then parses the returned HTML page into a soup.Root. It
-// also returns the http.Response object returned by the http.Get request.
-func (su ScrapeURL) Soup(args ...any) (doc *soup.Root, resp *http.Response, err error) {
-	url := su.Fill(args...)
-	if resp, err = http.Get(url); err != nil {
-		err = errors.Wrapf(err, "could not get Steam page %s", url)
+// also returns the http.Response object returned by the http.Get request. A http.Request can be provided, but if nil is
+// provided then a default http.MethodGet http.Request will be constructed instead.
+func (su ScrapeURL) Soup(req *http.Request, args ...any) (doc *soup.Root, resp *http.Response, err error) {
+	if req == nil {
+		if _, req, err = su.Request(args...); err != nil {
+			return
+		}
+	}
+
+	if resp, err = http.DefaultClient.Do(req); err != nil {
+		err = errors.Wrapf(err, "could not get Steam page %s", req.URL.String())
 		return
 	}
 
 	if resp.Body != nil {
 		defer func(body io.ReadCloser) {
-			err = myErrors.MergeErrors(err, errors.Wrapf(body.Close(), "could not close response body to %s", url))
+			err = myErrors.MergeErrors(err, errors.Wrapf(body.Close(), "could not close response body to %s", req.URL.String()))
 		}(resp.Body)
 	}
 
 	var body []byte
 	if body, err = io.ReadAll(resp.Body); err != nil {
-		err = errors.Wrapf(err, "could not read response body to %s", url)
+		err = errors.Wrapf(err, "could not read response body to %s", req.URL.String())
 		return
 	}
 
@@ -301,15 +316,17 @@ func (su ScrapeURL) Soup(args ...any) (doc *soup.Root, resp *http.Response, err 
 
 // RetrySoup will run Soup with the given args and try the given function. If the function returns an error then the
 // function will be retried up to a total of the given number of maxTries. If minDelay is given, and is not 0, then
-// before the function is retried it will sleep for (maxTries + 1 - currentTries) * minDelay.
-func (su ScrapeURL) RetrySoup(maxTries int, minDelay time.Duration, try func(doc *soup.Root, resp *http.Response) error, args ...any) error {
+// before the function is retried it will sleep for (maxTries + 1 - currentTries) * minDelay. If a non-nil http.Request
+// is provided then it will be used to fetch the page for the Soup, otherwise a default http.MethodGet http.Request will
+// be constructed instead.
+func (su ScrapeURL) RetrySoup(req *http.Request, maxTries int, minDelay time.Duration, try func(doc *soup.Root, resp *http.Response) error, args ...any) error {
 	return myErrors.Retry(maxTries, minDelay, func(currentTry int, maxTries int, minDelay time.Duration, args ...any) (err error) {
 		log.INFO.Printf("RetrySoup(%s, %v) is on try %d/%d", su.Name(), args, currentTry, maxTries)
 		var (
 			doc  *soup.Root
 			resp *http.Response
 		)
-		if doc, resp, err = su.Soup(args...); err != nil {
+		if doc, resp, err = su.Soup(req, args...); err != nil {
 			return errors.Wrapf(err, "ran out of tries (%d total) whilst requesting Soup for %s", maxTries, su.String())
 		}
 		if err = try(doc, resp); err != nil {
@@ -320,19 +337,19 @@ func (su ScrapeURL) RetrySoup(maxTries int, minDelay time.Duration, try func(doc
 }
 
 // JSON makes a request to the ScrapeURL and parses the response to JSON. As well as returning the parsed JSON as a map,
-// it also returns the response to the original HTTP request made to the given ScrapeURL.
-func (su ScrapeURL) JSON(args ...any) (jsonBody map[string]any, resp *http.Response, err error) {
-	url := su.Fill(args...)
+// it also returns the response to the original HTTP request made to the given ScrapeURL. If a non-nil http.Request is
+// provided then it will be used to fetch the JSON resource, otherwise default http.MethodGet http.Request will be
+// constructed instead.
+func (su ScrapeURL) JSON(req *http.Request, args ...any) (jsonBody map[string]any, resp *http.Response, err error) {
 	client := http.Client{Timeout: time.Second * 10}
-
-	var req *http.Request
-	if req, err = http.NewRequest(http.MethodGet, url, nil); err != nil {
-		err = errors.Wrapf(err, "request for JSON for \"%s\" could not be created", url)
-		return
+	if req == nil {
+		if _, req, err = su.Request(args...); err != nil {
+			return
+		}
 	}
 
 	if resp, err = client.Do(req); err != nil {
-		err = errors.Wrapf(err, "JSON could not be fetched from \"%s\"", url)
+		err = errors.Wrapf(err, "JSON could not be fetched from \"%s\"", req.URL.String())
 		return
 	}
 
@@ -341,20 +358,20 @@ func (su ScrapeURL) JSON(args ...any) (jsonBody map[string]any, resp *http.Respo
 			err = myErrors.MergeErrors(err, errors.Wrapf(
 				Body.Close(),
 				"request body for JSON fetched from \"%s\" could not be closed",
-				url,
+				req.URL.String(),
 			))
 		}(resp.Body)
 	}
 
 	var body []byte
 	if body, err = io.ReadAll(resp.Body); err != nil {
-		err = errors.Wrapf(err, "JSON request body from \"%s\" could not be read", url)
+		err = errors.Wrapf(err, "JSON request body from \"%s\" could not be read", req.URL.String())
 		return
 	}
 
 	jsonBody = make(map[string]any)
 	if err = json.Unmarshal(body, &jsonBody); err != nil {
-		err = errors.Wrapf(err, "JSON could not be parsed from response from \"%s\"", url)
+		err = errors.Wrapf(err, "JSON could not be parsed from response from \"%s\"", req.URL.String())
 		return
 	}
 	return
@@ -362,15 +379,17 @@ func (su ScrapeURL) JSON(args ...any) (jsonBody map[string]any, resp *http.Respo
 
 // RetryJSON will run JSON with the given args and try the given function. If the function returns an error then the
 // function will be retried up to a total of the given number of maxTries. If minDelay is given, and is not 0, then
-// before the function is retried it will sleep for (maxTries + 1 - currentTries) * minDelay.
-func (su ScrapeURL) RetryJSON(maxTries int, minDelay time.Duration, try func(jsonBody map[string]any, resp *http.Response) error, args ...any) error {
+// before the function is retried it will sleep for (maxTries + 1 - currentTries) * minDelay. If a non-nil http.Request
+// is provided then it will be used to fetch the JSON resource, otherwise default http.MethodGet http.Request will be
+// constructed instead.
+func (su ScrapeURL) RetryJSON(req *http.Request, maxTries int, minDelay time.Duration, try func(jsonBody map[string]any, resp *http.Response) error, args ...any) error {
 	return myErrors.Retry(maxTries, minDelay, func(currentTry int, maxTries int, minDelay time.Duration, args ...any) (err error) {
 		log.INFO.Printf("RetryJSON(%s, %v) is on try %d/%d", su.Name(), args, currentTry, maxTries)
 		var (
 			jsonBody map[string]any
 			resp     *http.Response
 		)
-		if jsonBody, resp, err = su.JSON(args...); err != nil {
+		if jsonBody, resp, err = su.JSON(req, args...); err != nil {
 			return errors.Wrapf(err, "ran out of tries (%d total) whilst requesting JSON for %s", maxTries, su.String())
 		}
 		if err = try(jsonBody, resp); err != nil {
