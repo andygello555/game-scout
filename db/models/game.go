@@ -486,7 +486,7 @@ func (g *GameSteamStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, minD
 func (g *GameSteamStorefront) ScrapeReviews(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
 	appID := args[0]
 	// Fetch reviews to gather headline stats on the number of reviews
-	return browser.SteamAppReviews.RetryJSON(maxTries, minDelay, func(jsonBody map[string]any, resp *http.Response) error {
+	return browser.SteamAppReviews.RetryJSON(nil, maxTries, minDelay, func(jsonBody map[string]any, resp *http.Response) error {
 		querySummary, ok := jsonBody["query_summary"].(map[string]any)
 		if ok {
 			g.Game.TotalReviews = null.Int32From(int32(querySummary["total_reviews"].(float64)))
@@ -534,7 +534,7 @@ func (g *GameSteamStorefront) ScrapeCommunity(config ScrapeConfig, maxTries int,
 			}()
 
 			var jsonBody map[string]any
-			if jsonBody, _, err = browser.SteamCommunityPosts.JSON(appID, 0, batchSize, gidEvent, gidAnnouncement); err != nil {
+			if jsonBody, _, err = browser.SteamCommunityPosts.JSON(nil, appID, 0, batchSize, gidEvent, gidAnnouncement); err != nil {
 				log.WARNING.Printf("Could not get SteamCommunityPosts JSON for %d: %s. Tries left: %d", appID, err.Error(), tries)
 				if tries > 0 {
 					tries--
@@ -599,7 +599,7 @@ func (g *GameSteamStorefront) ScrapeTags(config ScrapeConfig, maxTries int, minD
 	// Use SteamSpy to find the accumulated TagScore for the game
 	storefrontConfig := config.ScrapeGetStorefront(SteamStorefront)
 	tagConfig := storefrontConfig.StorefrontTags()
-	return browser.SteamSpyAppDetails.RetryJSON(maxTries, minDelay, func(jsonBody map[string]any, resp *http.Response) (err error) {
+	return browser.SteamSpyAppDetails.RetryJSON(nil, maxTries, minDelay, func(jsonBody map[string]any, resp *http.Response) (err error) {
 		// We fall back to SteamSpy for fetching the game's name and publisher if we haven't got them yet
 		if !g.Game.Name.IsValid() && !g.Game.Publisher.IsValid() {
 			log.INFO.Printf(
@@ -706,7 +706,16 @@ func (g *GameSteamStorefront) ScrapeExtra(config ScrapeConfig, maxTries int, min
 	// also a fallback for finding the release date for games that are unreleased.
 	if len(g.Game.Developers) > 0 || !g.Game.ReleaseDate.IsValid() {
 		twitterUserURLPattern := regexp.MustCompile(`^https?://(?:www\.)?twitter\.com/(?:#!/)?@?([^/?#]*)(?:[?#].*)?$`)
-		return browser.SteamAppPage.RetrySoup(maxTries, minDelay, func(doc *soup.Root, resp *http.Response) (err error) {
+
+		// We will get around the agecheck by setting the following cookies
+		var req *http.Request
+		if _, req, err = browser.SteamAppPage.Request(appID); err != nil {
+			return
+		}
+		req.AddCookie(&http.Cookie{Name: "birthtime", Value: "568022401"})
+		req.AddCookie(&http.Cookie{Name: "mature_content", Value: "1"})
+
+		return browser.SteamAppPage.RetrySoup(req, maxTries, minDelay, func(doc *soup.Root, resp *http.Response) (err error) {
 			if len(g.Game.Developers) > 0 {
 				links := doc.FindAll("a")
 				usernames := mapset.NewThreadUnsafeSet[string]()
@@ -768,7 +777,8 @@ func (g *GameItchIOStorefront) GetStorefront() Storefront { return ItchIOStorefr
 
 func (g *GameItchIOStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
 	developer, gameSlug := args[0], args[1]
-	return browser.ItchIOGamePage.RetrySoup(maxTries, minDelay, func(doc *soup.Root, resp *http.Response) (err error) {
+	return browser.ItchIOGamePage.RetrySoup(nil, maxTries, minDelay, func(doc *soup.Root, resp *http.Response) (err error) {
+		log.INFO.Println(developer, gameSlug)
 		return
 	})
 }

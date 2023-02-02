@@ -66,7 +66,7 @@ func ExampleScrapeURL_ExtractArgs() {
 
 func ExampleScrapeURL_Soup() {
 	fmt.Printf("Getting name of app 477160 from %s:\n", SteamAppPage.Fill(477160))
-	if soup, _, err := SteamAppPage.Soup(477160); err != nil {
+	if soup, _, err := SteamAppPage.Soup(nil, 477160); err != nil {
 		fmt.Printf("Could not get soup for %s, because %s", SteamAppPage.Fill(477160), err.Error())
 	} else {
 		fmt.Println(soup.Find("div", "id", "appHubAppName").Text())
@@ -79,7 +79,7 @@ func ExampleScrapeURL_Soup() {
 func ExampleScrapeURL_JSON() {
 	args := []any{477160, "*", "all", 20, "all", "all", -1, -1, "all"}
 	fmt.Printf("Getting review stats for 477160 from %s:\n", SteamAppReviews.Fill(args...))
-	if j, _, err := SteamAppReviews.JSON(args...); err != nil {
+	if j, _, err := SteamAppReviews.JSON(nil, args...); err != nil {
 		fmt.Printf("Could not get reviews for %s, because %s", SteamAppReviews.Fill(args...), err.Error())
 	} else {
 		var i int
