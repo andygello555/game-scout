@@ -25,6 +25,7 @@ import (
 const (
 	defaultBufSize                 = 4 * 1024
 	compressionLimit               = 15 * 1000 * 1024
+	maxAttachmentSize              = 24 * 1000 * 1024
 	maxContentTypeDetectionBufSize = 512
 )
 
@@ -74,6 +75,8 @@ type Part struct {
 	Attachment bool
 	// Filename is the filename of the attachment.
 	Filename string
+	// DropIfBig will drop the attachment from the email if its base64 encoded version larger than 25MB.
+	DropIfBig bool
 }
 
 // ContentTypeSlug returns the slugified version of the ContentType that can be used within the names of the temporary
@@ -87,7 +90,7 @@ func (p *Part) ContentTypeSlug() string {
 func (p *Part) Encoder() (io.WriteCloser, error) {
 	_, _ = p.file.Seek(0, io.SeekStart)
 	if p.Attachment {
-		if p.Buffer.Size() > compressionLimit {
+		if p.Buffer.Size() > compressionLimit && p.ContentType != "application/zip" {
 			p.ContentType = "application/zip"
 			filename := p.Filename
 			p.Filename = strings.TrimSuffix(filename, filepath.Ext(filename)) + ".zip"
@@ -344,6 +347,14 @@ func (e *Email) AddPart(part Part) (err error) {
 	}
 
 	reader := bufio.NewReader(part.Buffer)
+	if size := reader.Size(); size > maxAttachmentSize && part.Attachment {
+		if part.DropIfBig {
+			return
+		}
+		err = fmt.Errorf("attachment %q is bigger than %d bytes, and DropIfBig is not set", part.Filename, size)
+		return
+	}
+
 	nBytes, nChunks := int64(0), int64(0)
 	buf := make([]byte, 0, defaultBufSize)
 	for {

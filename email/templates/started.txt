@@ -1,0 +1,7 @@
+{{ $start := mustGet (.State.GetCachedField 4) "Start" }}
+{{ $batchSize := mustGet (.State.GetCachedField 4) "BatchSize" }}
+{{ $discoveryTweets := mustGet (.State.GetCachedField 4) "DiscoveryTweets" }}
+Robo-scout has started the Scout procedure at {{ stamp $start }} with batchSize = {{ $batchSize }}, and discoveryTweets = {{ $discoveryTweets }}.
+
+{{ if .State.Loaded }}Current state was loaded from disk:{{ else }}Current state was just created, so we are probably starting from scratch today:{{ end }}
+{{ .State.String }}

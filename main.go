@@ -84,20 +84,6 @@ func main() {
 	}
 	log.INFO.Printf("Done setting up additional tasks in %s", time.Now().UTC().Sub(start).String())
 
-	start = time.Now().UTC()
-	log.INFO.Printf("Registering additional periodic tasks:")
-	for i, t := range []struct {
-		spec string
-		name string
-		args []any
-	}{
-		{"0 10 * * *", "scout", []any{100, 30250}},
-	} {
-		log.INFO.Printf("\tRegistering periodic task no. %d: \"%s\" for %q with args: %v", i+1, t.name, t.spec, t.args)
-		task.RegisterPeriodicTask(t.spec, t.name, t.args...)
-	}
-	log.INFO.Printf("Done setting up additional periodic tasks in %s", time.Now().UTC().Sub(start).String())
-
 	// Set the CLI app commands
 	cliApp.Commands = []cli.Command{
 		{
@@ -635,6 +621,124 @@ func main() {
 			},
 		},
 		{
+			Name:  "template",
+			Usage: "test template creation and sending",
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:     "template",
+					Usage:    "the template to fill",
+					Required: true,
+				},
+				cli.BoolFlag{
+					Name:  "send",
+					Usage: "send the email to its required recipients",
+				},
+				cli.BoolFlag{
+					Name:  "loadState",
+					Usage: "load the most recent state from disk",
+				},
+			},
+			Action: func(c *cli.Context) (err error) {
+				templatePath := email.TemplatePathFromName(c.String("template"))
+				state := StateInMemory()
+				if c.Bool("loadState") {
+					if state, err = StateLoadOrCreate(false); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+				}
+
+				var context email.Context
+				switch templatePath {
+				case email.Measure:
+					context = &email.MeasureContext{
+						Start: time.Now(),
+						End:   time.Now(),
+					}
+				case email.Started:
+					context = &StartedContext{state}
+				case email.Error:
+					context = &ErrorContext{
+						Time:  time.Now(),
+						Error: errors.New("this is a made-up error"),
+						State: state,
+					}
+				case email.Finished:
+					context = &email.FinishedContext{
+						BatchSize:       100,
+						DiscoveryTweets: 30250,
+						Started:         time.Now().Add(-1 * time.Hour * 3),
+						Finished:        time.Now(),
+						Result: &models.ScoutResult{
+							DiscoveryStats: &models.DiscoveryUpdateSnapshotStats{
+								Developers:       rand.Int63(),
+								Games:            rand.Int63(),
+								TweetsConsumed:   rand.Int63(),
+								TotalSnapshots:   rand.Int63(),
+								SnapshotsCreated: rand.Int63(),
+							},
+							UpdateStats: &models.DiscoveryUpdateSnapshotStats{
+								Developers:       rand.Int63(),
+								Games:            rand.Int63(),
+								TweetsConsumed:   rand.Int63(),
+								TotalSnapshots:   rand.Int63(),
+								SnapshotsCreated: rand.Int63(),
+							},
+							SnapshotStats: &models.DiscoveryUpdateSnapshotStats{
+								Developers:       rand.Int63(),
+								Games:            rand.Int63(),
+								TweetsConsumed:   rand.Int63(),
+								TotalSnapshots:   rand.Int63(),
+								SnapshotsCreated: rand.Int63(),
+							},
+							DisableStats: &models.DisableEnableDeleteStats{
+								EnabledDevelopersBefore:  rand.Int63(),
+								DisabledDevelopersBefore: rand.Int63(),
+								EnabledDevelopersAfter:   rand.Int63(),
+								DisabledDevelopersAfter:  rand.Int63(),
+								DeletedDevelopers:        rand.Int63(),
+								TotalSampledDevelopers:   rand.Int63(),
+							},
+							EnableStats: &models.DisableEnableDeleteStats{
+								EnabledDevelopersBefore:  rand.Int63(),
+								DisabledDevelopersBefore: rand.Int63(),
+								EnabledDevelopersAfter:   rand.Int63(),
+								DisabledDevelopersAfter:  rand.Int63(),
+								DeletedDevelopers:        rand.Int63(),
+								TotalSampledDevelopers:   rand.Int63(),
+							},
+							DeleteStats: &models.DisableEnableDeleteStats{
+								EnabledDevelopersBefore:  rand.Int63(),
+								DisabledDevelopersBefore: rand.Int63(),
+								EnabledDevelopersAfter:   rand.Int63(),
+								DisabledDevelopersAfter:  rand.Int63(),
+								DeletedDevelopers:        rand.Int63(),
+								TotalSampledDevelopers:   rand.Int63(),
+							},
+							MeasureStats: &models.MeasureStats{
+								SampledTrendingDevelopers: rand.Int63(),
+								EmailSendTimeTaken:        time.Second * 30,
+								EmailSize:                 rand.Int63(),
+							},
+						},
+					}
+				}
+
+				var executed *email.Template
+				if executed = context.Execute(); executed.Error != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+
+				if c.Bool("send") {
+					if resp := executed.SendSync(); resp.Error != nil {
+						return cli.NewExitError(err.Error(), 1)
+					} else {
+						fmt.Println(resp.Email.Profiling.String())
+					}
+				}
+				return
+			},
+		},
+		{
 			Name: "developer",
 			Flags: []cli.Flag{
 				cli.StringSliceFlag{
@@ -811,7 +915,7 @@ func main() {
 
 				if c.Bool("measure") {
 					var template *email.Template
-					if template = measureContext.HTML(); template.Error != nil {
+					if template = measureContext.Execute(); template.Error != nil {
 						return cli.NewExitError(template.Error.Error(), 1)
 					}
 
@@ -913,7 +1017,7 @@ func main() {
 
 				if c.Bool("measure") {
 					var template *email.Template
-					if template = measureContext.HTML(); template.Error != nil {
+					if template = measureContext.Execute(); template.Error != nil {
 						return cli.NewExitError(template.Error.Error(), 1)
 					}
 
