@@ -1,0 +1,46 @@
+Robo-scout has finished the Scout procedure which started at {{ stamp .Started }} with batchSize = {{ .BatchSize }}, and discoveryTweets = {{ .DiscoveryTweets }}.
+
+This was achieved at {{ stamp .Finished }}, with a total time of {{ (duration .Finished .Started).String }}. The produced ScoutResult is as follows:
+- Discovery Phase
+  - DiscoveryStats.Developers = {{ .Result.DiscoveryStats.Developers }}
+  - DiscoveryStats.Games = {{ .Result.DiscoveryStats.Games }}
+  - DiscoveryStats.TweetsConsumed = {{ .Result.DiscoveryStats.TweetsConsumed }}
+  - DiscoveryStats.TotalSnapshots = {{ .Result.DiscoveryStats.TotalSnapshots }}
+  - DiscoveryStats.SnapshotsCreated = {{ .Result.DiscoveryStats.SnapshotsCreated }}
+- Update Phase
+  - UpdateStats.Developers = {{ .Result.UpdateStats.Developers }}
+  - UpdateStats.Games = {{ .Result.UpdateStats.Games }}
+  - UpdateStats.TweetsConsumed = {{ .Result.UpdateStats.TweetsConsumed }}
+  - UpdateStats.TotalSnapshots = {{ .Result.UpdateStats.TotalSnapshots }}
+  - UpdateStats.SnapshotsCreated = {{ .Result.UpdateStats.SnapshotsCreated }}
+- Snapshot Phase
+  - SnapshotStats.Developers = {{ .Result.SnapshotStats.Developers }}
+  - SnapshotStats.Games = {{ .Result.SnapshotStats.Games }}
+  - SnapshotStats.TweetsConsumed = {{ .Result.SnapshotStats.TweetsConsumed }}
+  - SnapshotStats.TotalSnapshots = {{ .Result.SnapshotStats.TotalSnapshots }}
+  - SnapshotStats.SnapshotsCreated = {{ .Result.SnapshotStats.SnapshotsCreated }}
+- Disable Phase
+  - DisableStats.EnabledDevelopersBefore = {{ .Result.DisableStats.EnabledDevelopersBefore }}
+  - DisableStats.DisabledDevelopersBefore = {{ .Result.DisableStats.DisabledDevelopersBefore }}
+  - DisableStats.EnabledDevelopersAfter = {{ .Result.DisableStats.EnabledDevelopersAfter }}
+  - DisableStats.DisabledDevelopersAfter = {{ .Result.DisableStats.DisabledDevelopersAfter }}
+  - DisableStats.DeletedDevelopers = {{ .Result.DisableStats.DeletedDevelopers }}
+  - DisableStats.TotalSampledDevelopers = {{ .Result.DisableStats.TotalSampledDevelopers }}
+- Enable Phase
+  - EnableStats.EnabledDevelopersBefore = {{ .Result.EnableStats.EnabledDevelopersBefore }}
+  - EnableStats.DisabledDevelopersBefore = {{ .Result.EnableStats.DisabledDevelopersBefore }}
+  - EnableStats.EnabledDevelopersAfter = {{ .Result.EnableStats.EnabledDevelopersAfter }}
+  - EnableStats.DisabledDevelopersAfter = {{ .Result.EnableStats.DisabledDevelopersAfter }}
+  - EnableStats.DeletedDevelopers = {{ .Result.EnableStats.DeletedDevelopers }}
+  - EnableStats.TotalSampledDevelopers = {{ .Result.EnableStats.TotalSampledDevelopers }}
+- Delete Phase
+  - DeleteStats.EnabledDevelopersBefore = {{ .Result.DeleteStats.EnabledDevelopersBefore }}
+  - DeleteStats.DisabledDevelopersBefore = {{ .Result.DeleteStats.DisabledDevelopersBefore }}
+  - DeleteStats.EnabledDevelopersAfter = {{ .Result.DeleteStats.EnabledDevelopersAfter }}
+  - DeleteStats.DisabledDevelopersAfter = {{ .Result.DeleteStats.DisabledDevelopersAfter }}
+  - DeleteStats.DeletedDevelopers = {{ .Result.DeleteStats.DeletedDevelopers }}
+  - DeleteStats.TotalSampledDevelopers = {{ .Result.DeleteStats.TotalSampledDevelopers }}
+- Measure Phase
+  - MeasureStats.SampledTrendingDevelopers = {{ .Result.MeasureStats.SampledTrendingDevelopers }}
+  - MeasureStats.EmailSendTimeTaken = {{ .Result.MeasureStats.EmailSendTimeTaken.String }}
+  - MeasureStats.EmailSize = {{ .Result.MeasureStats.EmailSize }}

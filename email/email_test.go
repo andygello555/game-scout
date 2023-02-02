@@ -241,7 +241,7 @@ func TestMeasureContext_Template(t *testing.T) {
 	var err error
 	for testNo, test := range examples {
 		testNo++
-		template := test.context.HTML()
+		template := test.context.Execute()
 		if err = template.Error; err != nil {
 			if test.err != nil {
 				if test.err.Error() != err.Error() {
@@ -333,7 +333,7 @@ func TestTemplate_SendAsync(t *testing.T) {
 	for testNo, test := range examples {
 		testNo++
 
-		template := test.context.HTML()
+		template := test.context.Execute()
 		resp := sendAsyncTemplate(template)
 		checkResponseError(t, testNo, test, resp)
 		checkMessageRequest(t, testNo, test, 1, server)
@@ -352,7 +352,7 @@ func TestTemplate_SendSync(t *testing.T) {
 	for testNo, test := range examples {
 		testNo++
 
-		template := test.context.HTML()
+		template := test.context.Execute()
 		resp := template.SendSync()
 		checkResponseError(t, testNo, test, resp)
 		checkMessageRequest(t, testNo, test, 1, server)
@@ -403,6 +403,7 @@ func ExampleNewEmail() {
 	fmt.Printf("Final email size: %d\n", email.Size())
 	fmt.Println(email.Profiling.String())
 
+	// Convert DOS line-endings to UNIX so that we can check the output.
 	fmt.Println(strings.ReplaceAll(email.Read().String(), "\r\n", "\n"))
 	// Output:
 	// Final email size: 463
