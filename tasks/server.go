@@ -4,23 +4,17 @@ import (
 	exampletasks "github.com/RichardKnop/machinery/example/tasks"
 	"github.com/RichardKnop/machinery/v1"
 	"github.com/RichardKnop/machinery/v1/config"
+	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/RichardKnop/machinery/v1/tasks"
-	"github.com/andygello555/gotils/v2/slices"
 	"github.com/pkg/errors"
 	"reflect"
+	"runtime"
 )
 
-type periodicRegisteredTask struct {
-	*tasks.Signature
-	Spec string
-}
-
 var registeredTasks map[string]any
-var periodicRegisteredTasks map[string]periodicRegisteredTask
 
 func init() {
 	registeredTasks = make(map[string]any)
-	periodicRegisteredTasks = make(map[string]periodicRegisteredTask)
 	RegisterTask("add", exampletasks.Add)
 	RegisterTask("multiply", exampletasks.Multiply)
 	RegisterTask("sum_ints", exampletasks.SumInts)
@@ -31,7 +25,7 @@ func init() {
 	RegisterTask("long_running_task", exampletasks.LongRunningTask)
 }
 
-func StartServer(tasksConfig Config) (*machinery.Server, error) {
+func StartServer(tasksConfig Config) (server *machinery.Server, err error) {
 	cnf := &config.Config{
 		DefaultQueue:    tasksConfig.TasksDefaultQueue(),
 		ResultsExpireIn: tasksConfig.TasksResultsExpireIn(),
@@ -48,34 +42,34 @@ func StartServer(tasksConfig Config) (*machinery.Server, error) {
 		},
 	}
 
-	server, err := machinery.NewServer(cnf)
-	if err != nil {
-		return nil, err
+	if server, err = machinery.NewServer(cnf); err != nil {
+		err = errors.Wrap(err, "could not create new machinery server")
+		return
 	}
 
-	for name, signature := range periodicRegisteredTasks {
-		if err = server.RegisterPeriodicTask(signature.Spec, name, signature.Signature); err != nil {
-			return nil, errors.Wrapf(err, "could not register PeriodicTask %q with spec %q", name, signature.Spec)
+	for name, signature := range tasksConfig.TasksPeriodicTaskSignatures() {
+		if err = server.RegisterPeriodicTask(signature.PeriodicTaskSignatureCron(), name, &tasks.Signature{
+			Name:       name,
+			Args:       signature.PeriodicTaskSignatureArgs(),
+			RetryCount: signature.PeriodicTaskSignatureRetryCount(),
+		}); err != nil {
+			err = errors.Wrapf(err, "could not register PeriodicTask %q with spec %v", name, signature)
+			return
 		}
 	}
-	return server, server.RegisterTasks(registeredTasks)
+
+	if err = server.RegisterTasks(registeredTasks); err != nil {
+		err = errors.Wrapf(err, "could not register %d tasks", len(registeredTasks))
+	}
+
+	log.INFO.Printf("Tasks that were registered:")
+	for i, name := range server.GetRegisteredTaskNames() {
+		task, _ := server.GetRegisteredTask(name)
+		log.INFO.Printf("\tTask %d: %v", i+1, runtime.FuncForPC(reflect.ValueOf(task).Pointer()).Name())
+	}
+	return
 }
 
 func RegisterTask(name string, function any) {
 	registeredTasks[name] = function
-}
-
-func RegisterPeriodicTask(cron, name string, args ...any) {
-	periodicRegisteredTasks[name] = periodicRegisteredTask{
-		Signature: &tasks.Signature{
-			Name: name,
-			Args: slices.Comprehension(args, func(idx int, value any, arr []any) tasks.Arg {
-				return tasks.Arg{
-					Type:  reflect.TypeOf(value).String(),
-					Value: value,
-				}
-			}),
-		},
-		Spec: cron,
-	}
 }

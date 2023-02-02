@@ -35,9 +35,10 @@ const templateDir = "templates/"
 type TemplatePath string
 
 const (
-	Measure TemplatePath = templateDir + "measure.html"
-	Started TemplatePath = templateDir + "started.txt"
-	Error   TemplatePath = templateDir + "error.txt"
+	Measure  TemplatePath = templateDir + "measure.html"
+	Started  TemplatePath = templateDir + "started.txt"
+	Error    TemplatePath = templateDir + "error.txt"
+	Finished TemplatePath = templateDir + "finished.txt"
 )
 
 // TemplatePathFromName returns the TemplatePath of the given name.
@@ -49,6 +50,8 @@ func TemplatePathFromName(name string) TemplatePath {
 		return Started
 	case "error":
 		return Error
+	case "finished":
+		return Finished
 	default:
 		panic(fmt.Errorf("there is no template with name %q", name))
 	}
@@ -63,6 +66,8 @@ func (tt TemplatePath) Name() string {
 		return "Started"
 	case Error:
 		return "Error"
+	case Finished:
+		return "Finished"
 	default:
 		return "Unknown"
 	}
@@ -502,8 +507,11 @@ func (t *Template) Email() (email *Email, err error) {
 	}
 
 	// Add any additional parts
-	if additionalParts := t.Context.AdditionalParts(); len(additionalParts) > 0 {
+	var additionalParts []Part
+	if additionalParts, err = t.Context.AdditionalParts(); len(additionalParts) > 0 && err == nil {
 		errs = append(errs, email.AddParts(additionalParts...))
+	} else if err != nil {
+		errs = append(errs, errors.Wrapf(err, "could not find additional parts for %sContext", t.Path.Name()))
 	}
 
 	// Merge all the errors. If this returns a non-nil error then we will Close the email

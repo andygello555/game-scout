@@ -1,0 +1,11 @@
+{{ $start := mustGet (.State.GetCachedField 4) "Start" }}
+{{ $batchSize := mustGet (.State.GetCachedField 4) "BatchSize" }}
+{{ $discoveryTweets := mustGet (.State.GetCachedField 4) "DiscoveryTweets" }}
+{{ $phase := mustGet (.State.GetCachedField 4) "Phase" }}
+Robo-scout has encountered an error during the Scout procedure which started at {{ stamp $start }} with batchSize = {{ $batchSize }}, and discoveryTweets = {{ $discoveryTweets }}.
+
+The error occurred in the {{ $phase.String }} phase at {{ stamp .Time }}:
+"{{ .Error.Error }}"
+
+{{ if .State.Loaded }}Current state was loaded from disk:{{ else }}Current state was just created, so we are probably starting from scratch today:{{ end }}
+{{ .State.String }}

@@ -3,6 +3,8 @@ package main
 import (
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/db"
+	"github.com/andygello555/game-scout/db/models"
+	"github.com/andygello555/game-scout/email"
 	myErrors "github.com/andygello555/game-scout/errors"
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	"github.com/pkg/errors"
@@ -88,12 +90,26 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 		// If an error occurs we'll always attempt to save the state
 		if err != nil {
 			err = myErrors.MergeErrors(err, state.Save())
+			// Send the Error email Template
+			context := &ErrorContext{
+				Time:  time.Now().UTC(),
+				Error: err,
+				State: state,
+			}
+			template := context.Execute()
+			err = myErrors.MergeErrors(err, template.Error, template.SendSync().Error)
 		}
 	}()
 
 	if state.Loaded {
 		log.WARNING.Printf("Previous ScoutState \"%s\" was loaded from disk so we are ignoring batchSize and discoveryTweets parameters:", state.BaseDir())
 		log.WARNING.Println(state.String())
+
+		// Set the discoveryTweets and batchSize parameters according to the saved values in ScoutState
+		batchSizeAny, _ := state.GetCachedField(StateType).Get("BatchSize")
+		batchSize = batchSizeAny.(int)
+		discoveryTweetsAny, _ := state.GetCachedField(StateType).Get("DiscoveryTweets")
+		discoveryTweets = discoveryTweetsAny.(int)
 	} else {
 		// If no state has been loaded, then we'll assume that the previous run of Scout was successful and set up
 		// ScoutState as usual
@@ -105,6 +121,20 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 	}
 	// We always set the Debug flag in the State to be the same as the debug flag in the ScrapeConfig.
 	state.GetCachedField(StateType).SetOrAdd("Debug", globalConfig.Scrape.Debug)
+
+	// Send the Started email Template
+	var startedTemplate *email.Template
+	startedContext := &StartedContext{State: state}
+	if startedTemplate = startedContext.Execute(); startedTemplate.Error != nil {
+		log.ERROR.Printf("Could not fill Started Template with StartedContext: %v", startedTemplate.Error)
+	}
+	startedTemplate.SendAsyncAndConsume(func(resp email.Response) {
+		if resp.Error != nil {
+			log.ERROR.Printf("Error occurred whilst sending Started Template: %v", resp.Error)
+		} else {
+			log.INFO.Printf("Successfully sent Started email in %s", resp.Email.Profiling.Total().String())
+		}
+	})
 
 	getPhase := func() Phase {
 		phase, _ := state.GetCachedField(StateType).Get("Phase")
@@ -118,17 +148,39 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 		}
 	}
 
+	// Save the ScoutResult
 	scoutResultAny, _ := state.GetCachedField(StateType).Get("Result")
 	if err = db.DB.Create(scoutResultAny).Error; err != nil {
 		return errors.Wrap(err, "could not create ScoutResult")
 	}
 	log.INFO.Println("Saved ScoutResult")
 
+	// Set the Finished time in ScoutState, then retrieve the Start and Finished times to calculate the duration.
 	state.GetCachedField(StateType).SetOrAdd("Finished", time.Now().UTC())
 	start, _ := state.GetCachedField(StateType).Get("Start")
 	finished, _ := state.GetCachedField(StateType).Get("Finished")
-	log.INFO.Printf("Finished Scout in %s", finished.(time.Time).Sub(start.(time.Time)).String())
 
+	// Send the Finished email Template
+	var finishedTemplate *email.Template
+	finishedContext := &email.FinishedContext{
+		BatchSize:       batchSize,
+		DiscoveryTweets: discoveryTweets,
+		Started:         start.(time.Time),
+		Finished:        finished.(time.Time),
+		Result:          scoutResultAny.(*models.ScoutResult),
+	}
+	if finishedTemplate = finishedContext.Execute(); finishedTemplate.Error != nil {
+		log.ERROR.Printf("Could not fill Finished Template with FinishedContext: %v", finishedTemplate.Error)
+	}
+	if resp := finishedTemplate.SendSync(); resp.Error != nil {
+		log.ERROR.Printf("Error occurred whilst sending Finished Template: %v", resp.Error)
+	} else {
+		log.INFO.Printf("Successfully sent Finished email in %s", resp.Email.Profiling.Total().String())
+	}
+
+	log.INFO.Printf("Finished Scout in %s", finishedContext.Finished.Sub(finishedContext.Started))
+
+	// Finally, delete the state
 	state.Delete()
 	return
 }

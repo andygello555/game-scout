@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/RichardKnop/machinery/v1/tasks"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/game-scout/email"
@@ -215,12 +216,27 @@ func (c *RedisConfig) String() string {
 	)
 }
 
+type PeriodicTaskSignature struct {
+	Args       []tasks.Arg `json:"args"`
+	Cron       string      `json:"cron"`
+	RetryCount int         `json:"retry_count"`
+}
+
+func (pts PeriodicTaskSignature) PeriodicTaskSignatureArgs() []tasks.Arg { return pts.Args }
+func (pts PeriodicTaskSignature) PeriodicTaskSignatureCron() string      { return pts.Cron }
+func (pts PeriodicTaskSignature) PeriodicTaskSignatureRetryCount() int   { return pts.RetryCount }
+
+func (pts PeriodicTaskSignature) String() string {
+	return fmt.Sprintf("{Args: %v, Cron: %v, RetryCount: %v}", pts.Args, pts.Cron, pts.RetryCount)
+}
+
 type TaskConfig struct {
-	DefaultQueue    string       `json:"default_queue"`
-	ResultsExpireIn int          `json:"results_expire_in"`
-	Broker          string       `json:"broker"`
-	ResultBackend   string       `json:"result_backend"`
-	Redis           *RedisConfig `json:"redis"`
+	DefaultQueue           string                           `json:"default_queue"`
+	ResultsExpireIn        int                              `json:"results_expire_in"`
+	Broker                 string                           `json:"broker"`
+	ResultBackend          string                           `json:"result_backend"`
+	Redis                  *RedisConfig                     `json:"redis"`
+	PeriodicTaskSignatures map[string]PeriodicTaskSignature `json:"periodic_task_signatures"`
 }
 
 func (c *TaskConfig) TasksDefaultQueue() string    { return c.DefaultQueue }
@@ -228,11 +244,21 @@ func (c *TaskConfig) TasksResultsExpireIn() int    { return c.ResultsExpireIn }
 func (c *TaskConfig) TasksBroker() string          { return c.Broker }
 func (c *TaskConfig) TasksResultBackend() string   { return c.ResultBackend }
 func (c *TaskConfig) TasksRedis() task.RedisConfig { return c.Redis }
+func (c *TaskConfig) TasksPeriodicTaskSignatures() map[string]task.PeriodicTaskSignature {
+	periodicTaskSignatures := make(map[string]task.PeriodicTaskSignature)
+	for name, sig := range c.PeriodicTaskSignatures {
+		periodicTaskSignatures[name] = sig
+	}
+	return periodicTaskSignatures
+}
+func (c *TaskConfig) TasksPeriodicTaskSignature(taskName string) task.PeriodicTaskSignature {
+	return c.PeriodicTaskSignatures[taskName]
+}
 
 func (c *TaskConfig) String() string {
 	return fmt.Sprintf(
-		"{DefaultQueue: %v, ResultsExpireIn: %v, Broker: %v, ResultBackend: %v, Redis: %v}",
-		c.DefaultQueue, c.ResultsExpireIn, c.Broker, c.ResultBackend, c.Redis,
+		"{DefaultQueue: %v, ResultsExpireIn: %v, Broker: %v, ResultBackend: %v, Redis: %v, PeriodicTaskSignatures: %v}",
+		c.DefaultQueue, c.ResultsExpireIn, c.Broker, c.ResultBackend, c.Redis, c.PeriodicTaskSignatures,
 	)
 }
 
@@ -320,6 +346,8 @@ type ScrapeConfig struct {
 	Debug bool `json:"debug"`
 	// Storefronts is a list of StorefrontConfig that contains the configs for each models.Storefront.
 	Storefronts []*StorefrontConfig `json:"storefronts"`
+	// Constants are all the constants used throughout the Scout procedure as well as the ScoutWebPipes co-process.
+	Constants map[string]float64
 }
 
 func (sc *ScrapeConfig) ScrapeDebug() bool { return sc.Debug }

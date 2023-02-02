@@ -25,7 +25,7 @@ type Context interface {
 	// Execute executes the Context via Template.Execute.
 	Execute() *Template
 	// AdditionalParts returns any additional Part to add onto an Email.
-	AdditionalParts() []Part
+	AdditionalParts() ([]Part, error)
 }
 
 // MeasureContext is a Context that contains the data required to fill out the Measure HTML template.
@@ -39,10 +39,10 @@ type MeasureContext struct {
 	Config                 Config
 }
 
-func (m *MeasureContext) Path() TemplatePath      { return Measure }
-func (m *MeasureContext) Execute() *Template      { return m.Template().Execute() }
-func (m *MeasureContext) AdditionalParts() []Part { return []Part{} }
-func (m *MeasureContext) Template() *Template     { return NewParsedTemplate(HTML, m).Template(m) }
+func (m *MeasureContext) Path() TemplatePath               { return Measure }
+func (m *MeasureContext) Execute() *Template               { return m.Template().Execute() }
+func (m *MeasureContext) AdditionalParts() ([]Part, error) { return []Part{}, nil }
+func (m *MeasureContext) Template() *Template              { return NewParsedTemplate(HTML, m).Template(m) }
 func (m *MeasureContext) Funcs() template.FuncMap {
 	return map[string]any{
 		"intRange": func(start, end, step int) []int {
@@ -130,14 +130,25 @@ func (m *MeasureContext) Funcs() template.FuncMap {
 	}
 }
 
-type ErrorContext struct {
+type FinishedContext struct {
+	BatchSize       int
+	DiscoveryTweets int
+	Started         time.Time
+	Finished        time.Time
+	Result          *models.ScoutResult
 }
 
-func (e *ErrorContext) Path() TemplatePath      { return Error }
-func (e *ErrorContext) Execute() *Template      { return e.Template().Execute() }
-func (e *ErrorContext) AdditionalParts() []Part { return []Part{} }
-func (e *ErrorContext) Template() *Template     { return NewParsedTemplate(Text, e).Template(e) }
-func (e *ErrorContext) Funcs() template.FuncMap {
-	//TODO implement me
-	panic("implement me")
+func (f *FinishedContext) Path() TemplatePath               { return Finished }
+func (f *FinishedContext) Execute() *Template               { return f.Template().Execute() }
+func (f *FinishedContext) Template() *Template              { return NewParsedTemplate(Text, f).Template(f) }
+func (f *FinishedContext) AdditionalParts() ([]Part, error) { return []Part{}, nil }
+func (f *FinishedContext) Funcs() template.FuncMap {
+	return map[string]any{
+		"stamp": func(t time.Time) string {
+			return t.Format(time.Stamp)
+		},
+		"duration": func(start time.Time, end time.Time) time.Duration {
+			return start.Sub(end)
+		},
+	}
 }
