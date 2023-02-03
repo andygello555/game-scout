@@ -130,6 +130,18 @@ func (m *MeasureContext) Funcs() template.FuncMap {
 	}
 }
 
+// DeletedDevelopersWithGames filters out all models.TrendingDev in DevelopersBeingDeleted with no models.Game related to
+// them.
+func (m *MeasureContext) DeletedDevelopersWithGames() []*models.TrendingDev {
+	s := make([]*models.TrendingDev, 0)
+	for _, dev := range m.DevelopersBeingDeleted {
+		if len(dev.Games) > 0 {
+			s = append(s, dev)
+		}
+	}
+	return s
+}
+
 type FinishedContext struct {
 	BatchSize       int
 	DiscoveryTweets int
