@@ -15,17 +15,6 @@ import (
 	"time"
 )
 
-const (
-	// minScrapeStorefrontsForGameWorkerWaitTime is the minimum amount of time for a scrapeStorefrontsForGameWorker to
-	// wait after completing a job.
-	minScrapeStorefrontsForGameWorkerWaitTime = time.Millisecond * 100
-	// maxScrapeStorefrontsForGameWorkerWaitTime is the maximum amount of time for a scrapeStorefrontsForGameWorker to
-	// wait after completing a job.
-	maxScrapeStorefrontsForGameWorkerWaitTime = time.Millisecond * 500
-	// maxGamesPerTweet is needed so that we don't overload the queue to the scrapeStorefrontsForGameWorker.
-	maxGamesPerTweet = 10
-)
-
 // TransformTweet takes a twitter.TweetDictionary and splits it out into instances of the models.Developer,
 // models.DeveloperSnapshot, and models.Game models. It also returns the time when the tweet was created so that we can
 // track the duration between tweets for models.DeveloperSnapshot.
@@ -97,7 +86,7 @@ out:
 			}
 
 			// If we have reached the maximum number of games, then we will exit out of these loops
-			if totalGames == maxGamesPerTweet {
+			if totalGames == globalConfig.Scrape.Constants.MaxGamesPerTweet {
 				log.WARNING.Printf(
 					"We have reached the maximum number of games found in tweet: %s, for author %s (%s)",
 					tweet.Tweet.ID, developer.Username, developer.ID,
@@ -179,7 +168,7 @@ func DiscoveryBatch(
 	gameIDs = mapset.NewThreadUnsafeSet[uuid.UUID]()
 
 	// Start the transformTweetWorkers
-	for i := 0; i < transformTweetWorkers; i++ {
+	for i := 0; i < globalConfig.Scrape.Constants.TransformTweetWorkers; i++ {
 		go transformTweetWorker(jobs, results, gameScrapers)
 	}
 
@@ -313,8 +302,11 @@ func DiscoveryPhase(state *ScoutState) (gameIDs mapset.Set[uuid.UUID], err error
 	// Start the workers for scraping games.
 	gameScrapers := models.NewStorefrontScrapers[string](
 		globalConfig.Scrape, db.DB,
-		discoveryGameScrapeWorkers, discoveryMaxConcurrentGameScrapeWorkers, batchSize*maxGamesPerTweet,
-		minScrapeStorefrontsForGameWorkerWaitTime, maxScrapeStorefrontsForGameWorkerWaitTime,
+		globalConfig.Scrape.Constants.DiscoveryGameScrapeWorkers,
+		globalConfig.Scrape.Constants.DiscoveryMaxConcurrentGameScrapeWorkers,
+		batchSize*globalConfig.Scrape.Constants.MaxGamesPerTweet,
+		globalConfig.Scrape.Constants.MinScrapeStorefrontsForGameWorkerWaitTime.Duration,
+		globalConfig.Scrape.Constants.MaxScrapeStorefrontsForGameWorkerWaitTime.Duration,
 	)
 	gameScrapers.Start()
 
@@ -377,9 +369,9 @@ func DiscoveryPhase(state *ScoutState) (gameIDs mapset.Set[uuid.UUID], err error
 		// Nap time
 		log.INFO.Printf(
 			"Continue batch in %s. Sleeping for %s so we don't overdo it",
-			time.Now().UTC().Sub(batchStart).String(), secondsBetweenDiscoveryBatches.String(),
+			time.Now().UTC().Sub(batchStart).String(), globalConfig.Scrape.Constants.SecondsBetweenDiscoveryBatches.String(),
 		)
-		sleepBar(secondsBetweenDiscoveryBatches)
+		sleepBar(globalConfig.Scrape.Constants.SecondsBetweenDiscoveryBatches.Duration)
 	}
 
 	gameScrapers.Wait()

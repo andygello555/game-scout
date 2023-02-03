@@ -84,7 +84,7 @@ func (p Phase) Run(state *ScoutState) (err error) {
 
 		// If the number of discovery tweets we requested is more than maxDiscoveryTweetsDailyPercent of the total tweets
 		// available for a day then we will error out.
-		if float64(discoveryTweets) > maxTotalDiscoveryTweets {
+		if float64(discoveryTweets) > globalConfig.Scrape.Constants.maxTotalDiscoveryTweets() {
 			return errors.TemporaryErrorf(
 				false,
 				"cannot request more than %d tweets per day for discovery purposes",

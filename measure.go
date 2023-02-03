@@ -14,12 +14,6 @@ import (
 	"time"
 )
 
-const (
-	maxTrendWorkers       = 10
-	maxTrendingDevelopers = 10
-	maxTopSteamApps       = 10
-)
-
 type trendFinderResult struct {
 	err error
 	*models.TrendingDev
@@ -139,7 +133,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 
 	jobs := make(chan *models.Developer, len(enabledDevelopers))
 	results := make(chan *trendFinderResult, len(enabledDevelopers))
-	for w := 0; w < maxTrendWorkers; w++ {
+	for w := 0; w < globalConfig.Scrape.Constants.MaxTrendWorkers; w++ {
 		go trendFinder(jobs, results)
 	}
 
@@ -164,7 +158,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 	close(results)
 
 	// Add the top maxTrendingDevelopers (or however many we found)
-	topDevelopersNo := int(math.Min(float64(topDevelopers.Len()), maxTrendingDevelopers))
+	topDevelopersNo := int(math.Min(float64(topDevelopers.Len()), float64(globalConfig.Scrape.Constants.MaxTrendingDevelopers)))
 	log.INFO.Printf("Adding top %d developers to the MeasureContext", topDevelopersNo)
 	for i := 0; i < topDevelopersNo; i++ {
 		topDeveloper := heap.Pop(&topDevelopers).(*trendFinderResult)
@@ -194,8 +188,11 @@ func MeasurePhase(state *ScoutState) (err error) {
 		"not bare and weighted_score is not null",
 	).Order(
 		"weighted_score desc",
-	).Limit(maxTopSteamApps).Find(&steamApps).Error; err != nil {
-		return myErrors.TemporaryWrapf(false, err, "could not find the top %d SteamApps", maxTopSteamApps)
+	).Limit(globalConfig.Scrape.Constants.MaxTopSteamApps).Find(&steamApps).Error; err != nil {
+		return myErrors.TemporaryWrapf(
+			false, err,
+			"could not find the top %d SteamApps", globalConfig.Scrape.Constants.MaxTopSteamApps,
+		)
 	}
 	measureContext.TopSteamApps = steamApps
 

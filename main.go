@@ -846,8 +846,10 @@ func main() {
 
 					if c.Bool("update") {
 						gameScrapers := models.NewStorefrontScrapers[string](
-							globalConfig.Scrape, db.DB, 1, 1, 12*maxGamesPerTweet,
-							minScrapeStorefrontsForGameWorkerWaitTime, maxScrapeStorefrontsForGameWorkerWaitTime,
+							globalConfig.Scrape, db.DB, 1, 1,
+							12*globalConfig.Scrape.Constants.MaxGamesPerTweet,
+							globalConfig.Scrape.Constants.MinScrapeStorefrontsForGameWorkerWaitTime.Duration,
+							globalConfig.Scrape.Constants.MaxScrapeStorefrontsForGameWorkerWaitTime.Duration,
 						)
 						gameScrapers.Start()
 

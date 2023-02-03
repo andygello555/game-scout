@@ -42,7 +42,7 @@ func DeletePhase(state *ScoutState) (err error) {
 	if err = db.DB.Model(&models.Developer{}).Where("disabled").Count(&totalDisabledDevelopers).Error; err != nil {
 		return myErrors.TemporaryWrap(false, err, "could not find the total number of disabled developers")
 	}
-	developersToDelete := int(math.Floor(float64(totalDisabledDevelopers) * percentageOfDisabledDevelopersToDelete))
+	developersToDelete := int(math.Floor(float64(totalDisabledDevelopers) * globalConfig.Scrape.Constants.PercentageOfDisabledDevelopersToDelete))
 
 	// We also set the developersToGo variable so that it won't be skewed by the number of stale developers. This will
 	// also subtract the number of existing deleted developers in the cache.
@@ -75,7 +75,7 @@ func DeletePhase(state *ScoutState) (err error) {
 	// First find any developers that haven't had a snapshot for a while and add them to the developers to be deleted
 	log.INFO.Printf(
 		"First we are going to queue up any developers that haven't had a new snapshot in %d days to be deleted",
-		staleDeveloperDays,
+		globalConfig.Scrape.Constants.StaleDeveloperDays,
 	)
 
 	// SELECT developers.*
@@ -104,7 +104,7 @@ func DeletePhase(state *ScoutState) (err error) {
 		"JOIN developers ON ds2.developer_id = developers.id",
 	).Where(
 		"ds2.created_at < NOW() - (? * INTERVAL '1 DAY') AND ds2.version < 2 AND (?) = 0",
-		staleDeveloperDays,
+		globalConfig.Scrape.Constants.StaleDeveloperDays,
 		whereZeroVerified,
 	).Order(
 		"ds2.created_at",
@@ -134,7 +134,7 @@ func DeletePhase(state *ScoutState) (err error) {
 
 	log.INFO.Printf(
 		"There are %d total disabled developers in the DB, we have to delete %.1f%% of those, which is %d",
-		totalDisabledDevelopers, percentageOfDisabledDevelopersToDelete*100, developersToDelete,
+		totalDisabledDevelopers, globalConfig.Scrape.Constants.PercentageOfDisabledDevelopersToDelete*100, developersToDelete,
 	)
 
 	// SELECT developers.*
