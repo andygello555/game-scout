@@ -5,6 +5,7 @@ import (
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
+	"github.com/andygello555/game-scout/email"
 	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/andygello555/gotils/v2/numbers"
 	"github.com/andygello555/gotils/v2/slices"
@@ -13,9 +14,11 @@ import (
 	"gorm.io/gorm"
 	"math"
 	"strings"
+	"time"
 )
 
-// DeletePhase will run the "disable" phase of the Scout procedure.
+// DeletePhase will run the Disable phase of the Scout procedure. It is only run on the same days that the Measure Phase
+// is run. This day can be changed in the TemplateConfig.SendDay in the config.json.
 //
 // This Phase first deletes any developers that have less than 3 snapshots and their latest snapshot was created over
 // staleDeveloperDays ago.
@@ -31,6 +34,23 @@ import (
 // The deleted developers are stored within the DeletedDevelopers cached field of the given ScoutState, along with all
 // their snapshots and games, so that they can be mentioned in the Measure Phase.
 func DeletePhase(state *ScoutState) (err error) {
+	startAny, _ := state.GetCachedField(StateType).Get("Start")
+	start := startAny.(time.Time)
+	start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
+	debugAny, _ := state.GetCachedField(StateType).Get("Debug")
+	debug := debugAny.(bool)
+
+	// If the weekday of the start of the scrape does not match the weekday that Measure emails are sent out on and
+	// debug is not set, then the DeletePhase does not need to be run.
+	if !debug && globalConfig.Email.EmailTemplateConfigFor(email.Measure).TemplateSendDay() != start.Weekday() {
+		log.WARNING.Printf(
+			"Delete Phase does not need to be run as Scout was started on %s, which was/is not a %s",
+			start.Format("Monday 2 January"),
+			globalConfig.Email.EmailTemplateConfigFor(email.Measure).TemplateSendDay().String(),
+		)
+		return nil
+	}
+
 	scoutResultAny, _ := state.GetCachedField(StateType).Get("Result")
 	if err = scoutResultAny.(*models.ScoutResult).DeleteStats.Before(db.DB); err != nil {
 		log.ERROR.Printf("Could not set Before fields for ScoutResult.DeleteStats: %v", err)
