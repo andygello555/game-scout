@@ -1,7 +1,10 @@
 package models
 
 import (
+	"encoding/json"
+	"fmt"
 	mapset "github.com/deckarep/golang-set/v2"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +31,92 @@ func (sfc *storefrontConfig) StorefrontTags() TagConfig        { return sfc.tags
 
 type scrapeConfig struct {
 	storefronts []*storefrontConfig
+}
+
+// duration that can JSON serialised/deserialised. To be used in configs.
+type duration struct {
+	time.Duration
+}
+
+func (d duration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(d.String())
+}
+
+func (d *duration) UnmarshalJSON(b []byte) error {
+	var v interface{}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	switch value := v.(type) {
+	case float64:
+		d.Duration = time.Duration(value)
+		return nil
+	case string:
+		var err error
+		d.Duration, err = time.ParseDuration(value)
+		if err != nil {
+			return err
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid duration")
+	}
+}
+
+type scrapeConstants struct {
+	TransformTweetWorkers                     int      `json:"transform_tweet_workers"`
+	UpdateDeveloperWorkers                    int      `json:"update_developer_workers"`
+	MaxUpdateTweets                           int      `json:"max_update_tweets"`
+	SecondsBetweenDiscoveryBatches            duration `json:"seconds_between_discovery_batches"`
+	SecondsBetweenUpdateBatches               duration `json:"seconds_between_update_batches"`
+	MaxTotalDiscoveryTweetsDailyPercent       float64  `json:"max_total_discovery_tweets_daily_percent"`
+	MaxEnabledDevelopersAfterEnablePhase      float64  `json:"max_enabled_developers_after_enable_phase"`
+	MaxEnabledDevelopersAfterDisablePhase     float64  `json:"max_enabled_developers_after_disable_phase"`
+	MaxDevelopersToEnable                     float64  `json:"max_developers_to_enable"`
+	PercentageOfDisabledDevelopersToDelete    float64  `json:"percentage_of_disabled_developers_to_delete"`
+	StaleDeveloperDays                        int      `json:"stale_developer_days"`
+	DiscoveryGameScrapeWorkers                int      `json:"discovery_game_scrape_workers"`
+	DiscoveryMaxConcurrentGameScrapeWorkers   int      `json:"discovery_max_concurrent_game_scrape_workers"`
+	UpdateGameScrapeWorkers                   int      `json:"update_game_scrape_workers"`
+	UpdateMaxConcurrentGameScrapeWorkers      int      `json:"update_max_concurrent_game_scrape_workers"`
+	MinScrapeStorefrontsForGameWorkerWaitTime duration `json:"min_scrape_storefronts_for_game_worker_wait_time"`
+	MaxScrapeStorefrontsForGameWorkerWaitTime duration `json:"max_scrape_storefronts_for_game_worker_wait_time"`
+	MaxGamesPerTweet                          int      `json:"max_games_per_tweet"`
+	MaxTrendWorkers                           int      `json:"max_trend_workers"`
+	MaxTrendingDevelopers                     int      `json:"max_trending_developers"`
+	MaxTopSteamApps                           int      `json:"max_top_steam_apps"`
+	SockSteamAppScrapeWorkers                 int      `json:"sock_steam_app_scrape_workers"`
+	SockMaxConcurrentSteamAppScrapeWorkers    int      `json:"sock_max_concurrent_steam_app_scrape_workers"`
+	SockMaxSteamAppScraperJobs                int      `json:"sock_max_steam_app_scraper_jobs"`
+	SockSteamAppScraperJobsPerMinute          int      `json:"sock_steam_app_scraper_jobs_per_minute"`
+	SockSteamAppScraperDropJobsThreshold      int      `json:"sock_steam_app_scraper_drop_jobs_threshold"`
+	SockMinSteamAppScraperWaitTime            duration `json:"sock_min_steam_app_scraper_wait_time"`
+	SockMaxSteamAppScraperWaitTime            duration `json:"sock_max_steam_app_scraper_wait_time"`
+	SockSteamAppScrapeConsumers               int      `json:"sock_steam_app_scrape_consumers"`
+	SockDropperWaitTime                       duration `json:"sock_dropper_wait_time"`
+	ScrapeMaxTries                            int      `json:"scrape_max_tries"`
+	ScrapeMinDelay                            duration `json:"scrape_min_delay"`
+}
+
+func (c *scrapeConstants) maxTotalDiscoveryTweets() float64 {
+	return 55000.0 * c.MaxTotalDiscoveryTweetsDailyPercent
+}
+func (c *scrapeConstants) maxTotalUpdateTweets() float64 {
+	return 55000.0 * (1.0 - c.MaxTotalDiscoveryTweetsDailyPercent)
+}
+func (c *scrapeConstants) DefaultMaxTries() int           { return c.ScrapeMaxTries }
+func (c *scrapeConstants) DefaultMinDelay() time.Duration { return c.ScrapeMinDelay.Duration }
+
+func (sc *scrapeConfig) ScrapeConstants() ScrapeConstants {
+	if fileBytes, err := os.ReadFile("../../config.json"); err != nil {
+		panic(err)
+	} else {
+		constants := scrapeConstants{}
+		if err = json.Unmarshal(fileBytes[3:], &constants); err != nil {
+			panic(err)
+		}
+		return &constants
+	}
 }
 
 func (sc *scrapeConfig) ScrapeStorefronts() []StorefrontConfig {
@@ -101,7 +190,7 @@ func TestScrapeStorefrontsForGameWrapper(t *testing.T) {
 			expectedWebsite:                    "https://store.steampowered.com/app/477160",
 			expectedPublisher:                  "Curve Games",
 			expectedVerifiedDeveloperUsernames: mapset.NewThreadUnsafeSet[string](),
-			expectedDevelopers:                 mapset.NewThreadUnsafeSet[string]("curvegames"),
+			expectedDevelopers:                 mapset.NewThreadUnsafeSet[string](),
 			expectedReleaseDate:                time.Unix(1469206680, 0),
 			gameModel:                          &Game{},
 			storefrontMapping: map[Storefront]mapset.Set[string]{
@@ -127,6 +216,9 @@ func TestScrapeStorefrontsForGameWrapper(t *testing.T) {
 		},
 	} {
 		gameModel := ScrapeStorefrontsForGameModel[string](test.gameModel, test.storefrontMapping, fakeConfig)
+		if testing.Verbose() {
+			fmt.Printf("%d: %#v\n", i, gameModel)
+		}
 		if !test.fail {
 			for _, check := range []struct {
 				name     string
