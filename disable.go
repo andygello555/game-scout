@@ -38,7 +38,7 @@ func DisablePhase(state *ScoutState) (err error) {
 	var enabledDeveloperCount int64
 	if err = db.DB.Model(&models.Developer{}).Where("NOT disabled").Count(&enabledDeveloperCount).Error; err == nil {
 		log.INFO.Printf("There are %d enabled developers", enabledDeveloperCount)
-		if maxEnabled := int64(math.Floor(maxEnabledDevelopersAfterDisablePhase)); enabledDeveloperCount > maxEnabled {
+		if maxEnabled := int64(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase)); enabledDeveloperCount > maxEnabled {
 			limit := enabledDeveloperCount - maxEnabled
 			log.INFO.Printf("Disabling %d of the worst performing developers", limit)
 			var disabled []*models.Developer

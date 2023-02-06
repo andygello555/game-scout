@@ -9,6 +9,7 @@ import (
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/game-scout/email"
 	task "github.com/andygello555/game-scout/tasks"
+	myTwitter "github.com/andygello555/game-scout/twitter"
 	"github.com/pkg/errors"
 	"jaytaylor.com/html2text"
 	"os"
@@ -42,6 +43,9 @@ type DBConfig struct {
 	Port     int    `json:"port"`
 	SSLMode  bool   `json:"sslmode"`
 	Timezone string `json:"timezone"`
+	// PostgresDBName is the name of the main PostgreSQL database. This is used so that we can create and drop the test
+	// database when running tests.
+	PostgresDBName string `json:"postgres_db_name"`
 	// PhaseRWAccess this is the DB read/write access for individual phases.
 	// TODO: Implement a way of asserting read/write access to the DB in different phases, probably by creating a custom
 	//       clause or by creating a set of callbacks?
@@ -58,13 +62,10 @@ func (c *DBConfig) DBName() string     { return c.Name }
 func (c *DBConfig) TestDBName() string { return "test_" + c.DBName() }
 func (c *DBConfig) DBPort() int        { return c.Port }
 func (c *DBConfig) DBSSLMode() string {
-	sslMode := "disable"
-	if c.SSLMode {
-		sslMode = "enable"
-	}
-	return sslMode
+	return map[bool]string{true: "enable", false: "disable"}[c.SSLMode]
 }
-func (c *DBConfig) DBTimezone() string { return c.Timezone }
+func (c *DBConfig) DBTimezone() string       { return c.Timezone }
+func (c *DBConfig) DBPostgresDBName() string { return c.PostgresDBName }
 
 func (c *DBConfig) DBDefaultRWAccess() (config db.RWConfig) {
 	return c.DefaultPhaseRWAccess
@@ -99,8 +100,8 @@ func (c *DBConfig) DBPhaseWriteAccess(id int) bool {
 
 func (c *DBConfig) String() string {
 	return fmt.Sprintf(
-		"{Host: %v, User: %v, Password: %v, Name: %v, Port: %v, SSLMode: %v, Timezone: %v, PhaseRWAccess: %v, DefaultPhaseRWAccess: %v}",
-		c.Host, c.User, c.Password, c.Name, c.Port, c.SSLMode, c.Timezone, c.PhaseRWAccess, c.DefaultPhaseRWAccess,
+		"{Host: %v, User: %v, Password: %v, Name: %v, Port: %v, SSLMode: %v, Timezone: %v, PostgresDBName: %v, PhaseRWAccess: %v, DefaultPhaseRWAccess: %v}",
+		c.Host, c.User, c.Password, c.Name, c.Port, c.SSLMode, c.Timezone, c.PostgresDBName, c.PhaseRWAccess, c.DefaultPhaseRWAccess,
 	)
 }
 
@@ -262,29 +263,64 @@ func (c *TaskConfig) String() string {
 	)
 }
 
-type TwitterConfig struct {
-	APIKey              string   `json:"api_key"`
-	APIKeySecret        string   `json:"api_key_secret"`
-	BearerToken         string   `json:"bearer_token"`
-	Username            string   `json:"username"`
-	Password            string   `json:"password"`
-	Hashtags            []string `json:"hashtags"`
-	BlacklistedHashtags []string `json:"blacklisted_hashtags"`
-	Headless            bool     `json:"headless"`
+type TwitterRateLimits struct {
+	TweetsPerMonth  uint64   `json:"tweets_per_month"`
+	TweetsPerWeek   uint64   `json:"tweets_per_week"`
+	TweetsPerDay    uint64   `json:"tweets_per_day"`
+	TweetsPerHour   uint64   `json:"tweets_per_hour"`
+	TweetsPerMinute uint64   `json:"tweets_per_minute"`
+	TweetsPerSecond uint64   `json:"tweets_per_second"`
+	TimePerRequest  Duration `json:"time_per_request"`
 }
 
-func (c *TwitterConfig) TwitterAPIKey() string       { return c.APIKey }
-func (c *TwitterConfig) TwitterAPIKeySecret() string { return c.APIKeySecret }
-func (c *TwitterConfig) TwitterBearerToken() string  { return c.BearerToken }
-func (c *TwitterConfig) TwitterUsername() string     { return c.Username }
-func (c *TwitterConfig) TwitterPassword() string     { return c.Password }
-func (c *TwitterConfig) TwitterHashtags() []string   { return c.Hashtags }
-func (c *TwitterConfig) TwitterHeadless() bool       { return c.Headless }
+func (rl *TwitterRateLimits) LimitPerMonth() uint64          { return rl.TweetsPerMonth }
+func (rl *TwitterRateLimits) LimitPerWeek() uint64           { return rl.TweetsPerWeek }
+func (rl *TwitterRateLimits) LimitPerDay() uint64            { return rl.TweetsPerDay }
+func (rl *TwitterRateLimits) LimitPerHour() uint64           { return rl.TweetsPerHour }
+func (rl *TwitterRateLimits) LimitPerMinute() uint64         { return rl.TweetsPerMinute }
+func (rl *TwitterRateLimits) LimitPerSecond() uint64         { return rl.TweetsPerSecond }
+func (rl *TwitterRateLimits) LimitPerRequest() time.Duration { return rl.TimePerRequest.Duration }
+
+func (rl *TwitterRateLimits) String() string {
+	return fmt.Sprintf(
+		"{TweetsPerMonth: %v, TweetsPerWeek: %v, TweetsPerDay: %v, TweetsPerHour: %v, TweetsPerMinute: %v, TweetsPerSecond: %v, TimePerRequest: %v}",
+		rl.TweetsPerMonth, rl.TweetsPerWeek, rl.TweetsPerDay, rl.TweetsPerHour, rl.TweetsPerMinute, rl.TweetsPerSecond, rl.TimePerRequest,
+	)
+}
+
+type TwitterConfig struct {
+	APIKey              string             `json:"api_key"`
+	APIKeySecret        string             `json:"api_key_secret"`
+	BearerToken         string             `json:"bearer_token"`
+	Username            string             `json:"username"`
+	Password            string             `json:"password"`
+	Hashtags            []string           `json:"hashtags"`
+	BlacklistedHashtags []string           `json:"blacklisted_hashtags"`
+	Headless            bool               `json:"headless"`
+	RateLimits          *TwitterRateLimits `json:"rate_limits"`
+	TweetCapLocation    string             `json:"tweet_cap_location"`
+	CreatedAtFormat     string             `json:"created_at_format"`
+	// IgnoredErrorTypes is a semi-colon-seperated list of Twitter API error types
+	// (https://developer.twitter.com/en/support/twitter-api/error-troubleshooting) that we can safely ignore.
+	IgnoredErrorTypes []string `json:"ignored_error_types"`
+}
+
+func (c *TwitterConfig) TwitterAPIKey() string                   { return c.APIKey }
+func (c *TwitterConfig) TwitterAPIKeySecret() string             { return c.APIKeySecret }
+func (c *TwitterConfig) TwitterBearerToken() string              { return c.BearerToken }
+func (c *TwitterConfig) TwitterUsername() string                 { return c.Username }
+func (c *TwitterConfig) TwitterPassword() string                 { return c.Password }
+func (c *TwitterConfig) TwitterHashtags() []string               { return c.Hashtags }
+func (c *TwitterConfig) TwitterHeadless() bool                   { return c.Headless }
+func (c *TwitterConfig) TwitterRateLimits() myTwitter.RateLimits { return c.RateLimits }
+func (c *TwitterConfig) TwitterTweetCapLocation() string         { return c.TweetCapLocation }
+func (c *TwitterConfig) TwitterCreatedAtFormat() string          { return c.CreatedAtFormat }
+func (c *TwitterConfig) TwitterIgnoredErrorTypes() []string      { return c.IgnoredErrorTypes }
 
 func (c *TwitterConfig) String() string {
 	return fmt.Sprintf(
-		"{APIKey: %v, APIKeySecret: %v, BearerToken: %v, Username: %v, Password: %v, Hashtags: %v, BlacklistedHashtags: %v, Headless: %v}",
-		c.APIKey, c.APIKeySecret, c.BearerToken, c.Username, c.Password, c.Hashtags, c.BlacklistedHashtags, c.Headless,
+		"{APIKey: %v, APIKeySecret: %v, BearerToken: %v, Username: %v, Password: %v, Hashtags: %v, BlacklistedHashtags: %v, Headless: %v, RateLimits: %v, TweetCapLocation: %v, CreatedAtFormat: %v, IgnoredErrorTypes: %v}",
+		c.APIKey, c.APIKeySecret, c.BearerToken, c.Username, c.Password, c.Hashtags, c.BlacklistedHashtags, c.Headless, c.RateLimits, c.TweetCapLocation, c.CreatedAtFormat, c.IgnoredErrorTypes,
 	)
 }
 
@@ -341,13 +377,151 @@ func (sfc *StorefrontConfig) String() string {
 	return fmt.Sprintf("{Storefront: %v, Tags: %v}", sfc.Storefront, sfc.Tags)
 }
 
+// Duration that can JSON serialised/deserialised. To be used in configs.
+type Duration struct {
+	time.Duration
+}
+
+func (d Duration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(d.String())
+}
+
+func (d *Duration) UnmarshalJSON(b []byte) error {
+	var v interface{}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	switch value := v.(type) {
+	case float64:
+		d.Duration = time.Duration(value)
+		return nil
+	case string:
+		var err error
+		d.Duration, err = time.ParseDuration(value)
+		if err != nil {
+			return err
+		}
+		return nil
+	default:
+		return errors.New("invalid duration")
+	}
+}
+
+type ScrapeConstants struct {
+	// TransformTweetWorkers is the number of transformTweetWorker that will be spun up in the DiscoveryBatch.
+	TransformTweetWorkers int `json:"transform_tweet_workers"`
+	// UpdateDeveloperWorkers is the number of updateDeveloperWorker that will be spun up in the update phase.
+	UpdateDeveloperWorkers int `json:"update_developer_workers"`
+	// MaxUpdateTweets is the maximum number of tweets fetched in the update phase.
+	MaxUpdateTweets int `json:"max_update_tweets"`
+	// SecondsBetweenDiscoveryBatches is the number of seconds to sleep between DiscoveryBatch batches.
+	SecondsBetweenDiscoveryBatches Duration `json:"seconds_between_discovery_batches"`
+	// SecondsBetweenUpdateBatches is the number of seconds to sleep between queue batches of updateDeveloperJob.
+	SecondsBetweenUpdateBatches Duration `json:"seconds_between_update_batches"`
+	// MaxTotalDiscoveryTweetsDailyPercent is the maximum percentage that the discoveryTweets number can be out of
+	// myTwitter.TweetsPerDay.
+	MaxTotalDiscoveryTweetsDailyPercent float64 `json:"max_total_discovery_tweets_daily_percent"`
+	// MaxEnabledDevelopersAfterEnablePhase is the number of enabled developers that should exist after the Enable phase.
+	MaxEnabledDevelopersAfterEnablePhase float64 `json:"max_enabled_developers_after_enable_phase"`
+	// MaxEnabledDevelopersAfterDisablePhase is the number of developers to keep in the Disable phase.
+	MaxEnabledDevelopersAfterDisablePhase float64 `json:"max_enabled_developers_after_disable_phase"`
+	// MaxDevelopersToEnable is the maximum number of developers that can be re-enabled in the Enable phase.
+	MaxDevelopersToEnable float64 `json:"max_developers_to_enable"`
+	// PercentageOfDisabledDevelopersToDelete is the percentage of all disabled developers to delete in the Delete phase.
+	PercentageOfDisabledDevelopersToDelete float64 `json:"percentage_of_disabled_developers_to_delete"`
+	// StaleDeveloperDays is the number of days after which a developer can become stale if their latest snapshot was
+	// created StaleDeveloperDays ago.
+	StaleDeveloperDays int `json:"stale_developer_days"`
+	// DiscoveryGameScrapeWorkers is the number of models.StorefrontScrapers to start in the Discovery Phase.
+	DiscoveryGameScrapeWorkers int `json:"discovery_game_scrape_workers"`
+	// DiscoveryMaxConcurrentGameScrapeWorkers is the number of models.StorefrontScrapers that can be processing a job
+	// at the same time in the Discovery Phase.
+	DiscoveryMaxConcurrentGameScrapeWorkers int `json:"discovery_max_concurrent_game_scrape_workers"`
+	// UpdateGameScrapeWorkers is the number of models.StorefrontScrapers to start in the Update Phase.
+	UpdateGameScrapeWorkers int `json:"update_game_scrape_workers"`
+	// UpdateMaxConcurrentGameScrapeWorkers is number of models.StorefrontScrapers that can be processing a job at the
+	// same time in the Update Phase.
+	UpdateMaxConcurrentGameScrapeWorkers int `json:"update_max_concurrent_game_scrape_workers"`
+
+	// MinScrapeStorefrontsForGameWorkerWaitTime is the minimum amount of time for a models.StorefrontScrapers to wait
+	// after completing a job in the Discovery and Update Phase.
+	MinScrapeStorefrontsForGameWorkerWaitTime Duration `json:"min_scrape_storefronts_for_game_worker_wait_time"`
+	// MaxScrapeStorefrontsForGameWorkerWaitTime is the maximum amount of time for a models.StorefrontScrapers to wait
+	// after completing a job in the Discovery and Update Phase.
+	MaxScrapeStorefrontsForGameWorkerWaitTime Duration `json:"max_scrape_storefronts_for_game_worker_wait_time"`
+	// MaxGamesPerTweet is the maximum number of games for each tweet we process in the Discovery and Update Phase. This
+	// is needed so that we don't overload the queue to the models.StorefrontScrapers.
+	MaxGamesPerTweet int `json:"max_games_per_tweet"`
+
+	// MaxTrendWorkers is the maximum number of trendFinder workers to start to find the models.Trend,
+	// models.DeveloperSnapshot, and models.Game for a models.Developer to use in the models.TrendingDev field in
+	// email.MeasureContext for the email.Measure email email.Template.
+	MaxTrendWorkers int `json:"max_trend_workers"`
+	// MaxTrendingDevelopers is the maximum number of models.TrendingDev to feature within the email.Measure email
+	// email.Template.
+	MaxTrendingDevelopers int `json:"max_trending_developers"`
+	// MaxTopSteamApps is the maximum number of models.SteamApp to feature within the email.Measure email
+	// email.Template.
+	MaxTopSteamApps int `json:"max_top_steam_apps"`
+
+	// SockSteamAppScrapeWorkers is the number of models.StorefrontScrapers to start in the goroutine that will watch
+	// the output of the ScoutWebPipes co-process.
+	SockSteamAppScrapeWorkers int `json:"sock_steam_app_scrape_workers"`
+	// SockMaxConcurrentSteamAppScrapeWorkers is the number of models.StorefrontScrapers that can be processing a job at
+	// the same time in the websocket client.
+	SockMaxConcurrentSteamAppScrapeWorkers int `json:"sock_max_concurrent_steam_app_scrape_workers"`
+	// SockMaxSteamAppScraperJobs is the maximum number of jobs that can be queued for the models.StorefrontScrapers
+	// instance in the websocket client.
+	SockMaxSteamAppScraperJobs int `json:"sock_max_steam_app_scraper_jobs"`
+	// SockSteamAppScraperJobsPerMinute is the number of models.SteamApp the websocket client should be completing every
+	// minute. If it falls below this threshold, and the number of jobs in the models.StorefrontScrapers queue is above
+	// SockSteamAppScraperDropJobsThreshold then the dropper goroutine will drop some jobs the next time it is running.
+	SockSteamAppScraperJobsPerMinute int `json:"sock_steam_app_scraper_jobs_per_minute"`
+	// SockSteamAppScraperDropJobsThreshold is the threshold of jobs in the models.StorefrontScrapers at which the
+	// dropper goroutine will start to drop jobs to make room.
+	SockSteamAppScraperDropJobsThreshold int `json:"sock_steam_app_scraper_drop_jobs_threshold"`
+	// SockMinSteamAppScraperWaitTime is the minimum amount of time for a models.StorefrontScrapers to wait after
+	// completing a job in the websocket client.
+	SockMinSteamAppScraperWaitTime Duration `json:"sock_min_steam_app_scraper_wait_time"`
+	// SockMaxSteamAppScraperWaitTime is the maximum amount of time for a models.StorefrontScrapers to wait after
+	// completing a job in the websocket client.
+	SockMaxSteamAppScraperWaitTime Duration `json:"sock_max_steam_app_scraper_wait_time"`
+	// SockSteamAppScrapeConsumers is the number of consumers to start in the websocket client to consume the scraped
+	// models.SteamApp from the models.StorefrontScrapers instance.
+	SockSteamAppScrapeConsumers int `json:"sock_steam_app_scrape_consumers"`
+	// SockDropperWaitTime is the amount time for the dropper goroutine to wait each time it has been run.
+	SockDropperWaitTime Duration `json:"sock_dropper_wait_time"`
+
+	// ScrapeMaxTries is the maximum number of tries that is passed to a models.GameModelStorefrontScraper from
+	// models.ScrapeStorefrontForGameModel in a models.StorefrontScrapers instance. This affects the number of times a
+	// certain scrape procedure will be retried for a certain models.Storefront.
+	ScrapeMaxTries int `json:"scrape_max_tries"`
+	// ScrapeMinDelay is the minimum wait time after an unsuccessful try that is passed to a
+	// models.GameModelStorefrontScraper from models.ScrapeStorefrontForGameModel in a models.StorefrontScrapers
+	// instance. This affects the wait time after an unsuccessful call to a scrape procedure for a certain models.Storefront.
+	ScrapeMinDelay Duration `json:"scrape_min_delay"`
+}
+
+// maxTotalDiscoveryTweets is the maximum number of discoveryTweets that can be given to Scout.
+func (c *ScrapeConstants) maxTotalDiscoveryTweets() float64 {
+	return float64(globalConfig.Twitter.RateLimits.TweetsPerDay) * c.MaxTotalDiscoveryTweetsDailyPercent
+}
+
+// maxTotalUpdateTweets is the maximum number of tweets that can be scraped by the Update phase.
+func (c *ScrapeConstants) maxTotalUpdateTweets() float64 {
+	return float64(globalConfig.Twitter.RateLimits.TweetsPerDay) * (1.0 - c.MaxTotalDiscoveryTweetsDailyPercent)
+}
+
+func (c *ScrapeConstants) DefaultMaxTries() int           { return c.ScrapeMaxTries }
+func (c *ScrapeConstants) DefaultMinDelay() time.Duration { return c.ScrapeMinDelay.Duration }
+
 type ScrapeConfig struct {
 	// Debug is the value for the State.Debug field.
 	Debug bool `json:"debug"`
 	// Storefronts is a list of StorefrontConfig that contains the configs for each models.Storefront.
 	Storefronts []*StorefrontConfig `json:"storefronts"`
 	// Constants are all the constants used throughout the Scout procedure as well as the ScoutWebPipes co-process.
-	Constants map[string]float64
+	Constants *ScrapeConstants
 }
 
 func (sc *ScrapeConfig) ScrapeDebug() bool { return sc.Debug }
@@ -359,6 +533,8 @@ func (sc *ScrapeConfig) ScrapeStorefronts() []models.StorefrontConfig {
 	}
 	return storefronts
 }
+
+func (sc *ScrapeConfig) ScrapeConstants() models.ScrapeConstants { return sc.Constants }
 
 func (sc *ScrapeConfig) ScrapeGetStorefront(storefront models.Storefront) (storefrontConfig models.StorefrontConfig) {
 	found := false
@@ -375,7 +551,7 @@ func (sc *ScrapeConfig) ScrapeGetStorefront(storefront models.Storefront) (store
 }
 
 func (sc *ScrapeConfig) String() string {
-	return fmt.Sprintf("{Debug: %v, Storefronts: %v}", sc.Debug, sc.Storefronts)
+	return fmt.Sprintf("{Debug: %v, Storefronts: %v, Constants: %v}", sc.Debug, sc.Storefronts, sc.Constants)
 }
 
 // SteamWebPipesConfig stores the configuration for the SteamWebPipes co-process that's started when the machinery workers

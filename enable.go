@@ -59,11 +59,11 @@ func EnablePhase(state *ScoutState) (err error) {
 	developersToGo := developersToGoAny.(int)
 	if enabledDevelopers, _ := state.GetCachedField(StateType).Get("EnabledDevelopers"); len(enabledDevelopers.([]string)) == 0 && developersToGo == 0 {
 		log.INFO.Printf("Looks like State cache does not contain a previous Enable run. Starting from scratch...")
-		developersToGo = int(math.Ceil(maxDevelopersToEnable))
+		developersToGo = int(math.Ceil(globalConfig.Scrape.Constants.MaxDevelopersToEnable))
 		state.GetCachedField(StateType).SetOrAdd("DevelopersToEnable", developersToGo)
-		log.INFO.Printf("\tmaxEnabledDevelopersAfterEnablePhase = %.3f (%.0f)", maxEnabledDevelopersAfterEnablePhase, maxEnabledDevelopersAfterEnablePhase)
-		log.INFO.Printf("\tmaxEnabledDevelopersAfterDisablePhase = %.3f (%.0f)", maxEnabledDevelopersAfterDisablePhase, maxEnabledDevelopersAfterDisablePhase)
-		log.INFO.Printf("\tmaxDevelopersToEnable = %.3f (%.0f)", maxDevelopersToEnable, maxDevelopersToEnable)
+		log.INFO.Printf("\tmaxEnabledDevelopersAfterEnablePhase = %.3f (%.0f)", globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterEnablePhase, globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterEnablePhase)
+		log.INFO.Printf("\tmaxEnabledDevelopersAfterDisablePhase = %.3f (%.0f)", globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase, globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase)
+		log.INFO.Printf("\tmaxDevelopersToEnable = %.3f (%.0f)", globalConfig.Scrape.Constants.MaxDevelopersToEnable, globalConfig.Scrape.Constants.MaxDevelopersToEnable)
 	}
 	offset := 0
 	sample := 0
