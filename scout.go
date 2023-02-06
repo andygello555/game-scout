@@ -6,52 +6,10 @@ import (
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/game-scout/email"
 	myErrors "github.com/andygello555/game-scout/errors"
-	myTwitter "github.com/andygello555/game-scout/twitter"
 	"github.com/pkg/errors"
 	"github.com/schollz/progressbar/v3"
 	"math"
 	"time"
-)
-
-const (
-	// transformTweetWorkers is the number of transformTweetWorker that will be spun up in the DiscoveryBatch.
-	transformTweetWorkers = 5
-	// updateDeveloperWorkers is the number of updateDeveloperWorker that will be spun up in the update phase.
-	updateDeveloperWorkers = 5
-	// maxUpdateTweets is the maximum number of tweets fetched in the update phase.
-	maxUpdateTweets = 11
-	// secondsBetweenDiscoveryBatches is the number of seconds to sleep between DiscoveryBatch batches.
-	secondsBetweenDiscoveryBatches = time.Second * 3
-	// secondsBetweenUpdateBatches is the number of seconds to sleep between queue batches of updateDeveloperJob.
-	secondsBetweenUpdateBatches = time.Second * 30
-	// maxTotalDiscoveryTweetsDailyPercent is the maximum percentage that the discoveryTweets number can be out of
-	// myTwitter.TweetsPerDay.
-	maxTotalDiscoveryTweetsDailyPercent = 0.55
-	// maxTotalDiscoveryTweets is the maximum number of discoveryTweets that can be given to Scout.
-	maxTotalDiscoveryTweets = float64(myTwitter.TweetsPerDay) * maxTotalDiscoveryTweetsDailyPercent
-	// maxTotalUpdateTweets is the maximum number of tweets that can be scraped by the Update phase.
-	maxTotalUpdateTweets = float64(myTwitter.TweetsPerDay) * (1.0 - maxTotalDiscoveryTweetsDailyPercent)
-	// maxEnabledDevelopersAfterEnablePhase is the number of enabled developers that should exist after the Enable phase.
-	maxEnabledDevelopersAfterEnablePhase = maxTotalUpdateTweets / maxUpdateTweets
-	// maxEnabledDevelopersAfterDisablePhase is the number of developers to keep in the Disable phase.
-	maxEnabledDevelopersAfterDisablePhase = maxEnabledDevelopersAfterEnablePhase * 0.9165
-	// maxDevelopersToEnable is the maximum number of developers that can be re-enabled in the Enable phase.
-	maxDevelopersToEnable = maxEnabledDevelopersAfterEnablePhase - maxEnabledDevelopersAfterDisablePhase
-	// percentageOfDisabledDevelopersToDelete is the percentage of all disabled developers to delete in the Delete phase.
-	percentageOfDisabledDevelopersToDelete = 0.025
-	// staleDeveloperDays is the number of days after which a developer can become stale if their latest snapshot was
-	// created staleDeveloperDays ago.
-	staleDeveloperDays = 70
-	// discoveryGameScrapeWorkers is the number of scrapeStorefrontsForGameWorker to start in the discovery phase.
-	discoveryGameScrapeWorkers = 10
-	// discoveryMaxConcurrentGameScrapeWorkers is number of scrapeStorefrontsForGameWorker that can be processing a job
-	// at the same time in the discovery phase.
-	discoveryMaxConcurrentGameScrapeWorkers = 9
-	// updateGameScrapeWorkers is the number of scrapeStorefrontsForGameWorker to start in the UpdatePhase.
-	updateGameScrapeWorkers = 10
-	// updateMaxConcurrentGameScrapeWorkers is number of scrapeStorefrontsForGameWorker that can be processing a job
-	// at the same time in the UpdatePhase.
-	updateMaxConcurrentGameScrapeWorkers = 9
 )
 
 // sleepBar will sleep for the given time.Duration (as seconds) and display a progress bar for the sleep.

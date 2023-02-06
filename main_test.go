@@ -76,8 +76,10 @@ func TestDiscoveryBatch(t *testing.T) {
 		}
 
 		gameScrapers := models.NewStorefrontScrapers[string](
-			globalConfig.Scrape, db.DB, 5, 4, len(sampleTweets)*maxGamesPerTweet,
-			minScrapeStorefrontsForGameWorkerWaitTime, maxScrapeStorefrontsForGameWorkerWaitTime,
+			globalConfig.Scrape, db.DB, 5, 4,
+			len(sampleTweets)*globalConfig.Scrape.Constants.MaxGamesPerTweet,
+			globalConfig.Scrape.Constants.MinScrapeStorefrontsForGameWorkerWaitTime.Duration,
+			globalConfig.Scrape.Constants.MaxScrapeStorefrontsForGameWorkerWaitTime.Duration,
 		)
 		gameScrapers.Start()
 
@@ -244,7 +246,6 @@ func TestUpdatePhase(t *testing.T) {
 
 const (
 	extraDevelopers       = 200
-	fakeDevelopers        = maxEnabledDevelopersAfterDisablePhase + extraDevelopers
 	minDeveloperSnapshots = 1
 	maxDeveloperSnapshots = 10
 )
@@ -388,10 +389,11 @@ func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelop
 }
 
 func disablePhaseTest(t *testing.T) (state *ScoutState, expectedIDs mapset.Set[int]) {
+	fakeDevelopers := int(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase + float64(extraDevelopers)))
 	var err error
 	rand.Seed(time.Now().Unix())
 
-	expectedIDs = createFakeDevelopersWithSnaps(t, 1, int(math.Floor(fakeDevelopers)), extraDevelopers)
+	expectedIDs = createFakeDevelopersWithSnaps(t, 1, fakeDevelopers, extraDevelopers)
 
 	state = StateInMemory()
 	if err = DisablePhase(state); err != nil {
@@ -412,10 +414,10 @@ func TestDisablePhase(t *testing.T) {
 		t.Errorf("Could not get count of enabled developers: %s", err.Error())
 	}
 
-	if enabledDevelopers != int64(math.Floor(maxEnabledDevelopersAfterDisablePhase)) {
+	if enabledDevelopers != int64(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase)) {
 		t.Errorf(
 			"The number of enabled developers is not %d, it is %d",
-			int(math.Floor(maxEnabledDevelopersAfterDisablePhase)), enabledDevelopers,
+			int(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase)), enabledDevelopers,
 		)
 	}
 
@@ -463,7 +465,8 @@ func enablePhaseTest(t *testing.T) (state *ScoutState, enabledDeveloperCount int
 	}
 
 	// Create 500 more developers to disable
-	start, end := int(math.Floor(fakeDevelopers+1)), int(math.Floor(fakeDevelopers))+additionalDisabledDevelopers
+	fakeDevelopers := int(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase + float64(extraDevelopers)))
+	start, end := fakeDevelopers+1, fakeDevelopers+additionalDisabledDevelopers
 	createdDevelopers := createFakeDevelopersWithSnaps(t, start, end, end)
 	if err = db.DB.Model(
 		&models.Developer{},
@@ -504,10 +507,10 @@ func TestEnablePhase(t *testing.T) {
 		t.Errorf("Error was not expected to occur whilst getting the final count of the Developers table")
 	}
 
-	if enabledDeveloperCount != int64(math.Floor(maxEnabledDevelopersAfterEnablePhase)) {
+	if enabledDeveloperCount != int64(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterEnablePhase)) {
 		t.Errorf(
 			"The number of enabled developers after the Enable phase does not equal the expected value: %d (expected) vs. %d (actual)",
-			int64(math.Floor(maxEnabledDevelopersAfterEnablePhase)), enabledDeveloperCount,
+			int64(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterEnablePhase)), enabledDeveloperCount,
 		)
 	}
 }
@@ -523,7 +526,7 @@ func TestDeletePhase(t *testing.T) {
 	if err = db.DB.Where("disabled").Find(&disabledDevelopersBefore).Error; err != nil {
 		t.Errorf("Error was not expected to occur whilst finding disabled developers: %s", err.Error())
 	}
-	expectedDevelopersDeleted := int(math.Floor(float64(len(disabledDevelopersBefore)) * percentageOfDisabledDevelopersToDelete))
+	expectedDevelopersDeleted := int(math.Floor(float64(len(disabledDevelopersBefore)) * globalConfig.Scrape.Constants.PercentageOfDisabledDevelopersToDelete))
 
 	// Create a SteamApp for every disabled developer
 	disabledDevApp := make(map[string]uint64)

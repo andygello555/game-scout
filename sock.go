@@ -14,18 +14,6 @@ import (
 	"time"
 )
 
-const (
-	maxStorefrontScrapersWorkers           = 5
-	maxConcurrentStorefrontScrapersWorkers = 4
-	maxStorefrontScraperJobs               = 2048
-	storefrontScraperJobsPerMinute         = 15
-	storefrontScraperDropJobsThreshold     = maxStorefrontScraperJobs / 4
-	minStorefrontScraperWaitTime           = time.Millisecond * 100
-	maxStorefrontScraperWaitTime           = time.Millisecond * 500
-	gameScrapeConsumers                    = 10
-	dropperWaitTime                        = time.Minute
-)
-
 type WebsocketMessageType string
 
 const (
@@ -65,7 +53,7 @@ func steamAppWebsocketConsumer(no int, wg *sync.WaitGroup, timeout time.Duration
 			log.WARNING.Printf(
 				"SteamAppWebsocketConsumer %d: has a nil SteamApp, most likely because it has been dropped or because "+
 					"of a timeout. There are %d jobs left, %.2f%% capacity",
-				no+1, len(jobs), float64(len(jobs))/float64(maxStorefrontScraperJobs)*100.0,
+				no+1, len(jobs), float64(len(jobs))/float64(globalConfig.Scrape.Constants.SockMaxSteamAppScraperJobs)*100.0,
 			)
 			continue
 		}
@@ -74,7 +62,7 @@ func steamAppWebsocketConsumer(no int, wg *sync.WaitGroup, timeout time.Duration
 		log.WARNING.Printf(
 			"SteamAppWebsocketConsumer %d: is processing job for SteamApp \"%s\" (%d). "+
 				"There are %d jobs left, %.2f%% capacity",
-			no+1, app.Name, app.ID, len(jobs), float64(len(jobs))/float64(maxStorefrontScraperJobs)*100.0,
+			no+1, app.Name, app.ID, len(jobs), float64(len(jobs))/float64(globalConfig.Scrape.Constants.SockMaxSteamAppScraperJobs)*100.0,
 		)
 
 		if app.Type == "game" {
@@ -188,14 +176,18 @@ func (sws *SteamAppWebsocketScraper) Stop() error {
 // be sent to a batch of consumers that will save the scraped models.SteamApp to the DB.
 func (sws *SteamAppWebsocketScraper) worker(no int) {
 	gameScrapers := models.NewStorefrontScrapers[uint64](
-		sws.config.Scrape, db.DB, maxStorefrontScrapersWorkers, maxConcurrentStorefrontScrapersWorkers,
-		maxStorefrontScraperJobs, minStorefrontScraperWaitTime, maxStorefrontScraperWaitTime,
+		sws.config.Scrape, db.DB,
+		globalConfig.Scrape.Constants.SockSteamAppScrapeWorkers,
+		globalConfig.Scrape.Constants.SockMaxConcurrentSteamAppScrapeWorkers,
+		globalConfig.Scrape.Constants.SockMaxSteamAppScraperJobs,
+		globalConfig.Scrape.Constants.SockMinSteamAppScraperWaitTime.Duration,
+		globalConfig.Scrape.Constants.SockMaxSteamAppScraperWaitTime.Duration,
 	)
 	gameScrapers.Start()
 
-	consumerJobs := make(chan (<-chan models.GameModel[uint64]), maxStorefrontScraperJobs)
+	consumerJobs := make(chan (<-chan models.GameModel[uint64]), globalConfig.Scrape.Constants.SockMaxSteamAppScraperJobs)
 	var consumerWg sync.WaitGroup
-	for w := 0; w < gameScrapeConsumers; w++ {
+	for w := 0; w < globalConfig.Scrape.Constants.SockSteamAppScrapeConsumers; w++ {
 		consumerWg.Add(1)
 		go steamAppWebsocketConsumer(w, &consumerWg, gameScrapers.Timeout, consumerJobs)
 	}
@@ -250,26 +242,26 @@ func (sws *SteamAppWebsocketScraper) worker(no int) {
 			case <-dropperClose:
 				log.WARNING.Printf("Stopped dropper for SteamAppWebsocketScraper worker no. %d", no+1)
 				return
-			case <-time.After(dropperWaitTime):
+			case <-time.After(globalConfig.Scrape.Constants.SockDropperWaitTime.Duration):
 				jobs := gameScrapers.Jobs()
 				rate := previousJobLen - jobs
-				if jobs > storefrontScraperDropJobsThreshold {
+				if jobs > globalConfig.Scrape.Constants.SockSteamAppScraperDropJobsThreshold {
 					// We clamp a negative rate to the negative of storefrontScraperJobsPerMinute. This is so that we
 					// can deal with a sudden increase in the number of jobs, but we also won't drop every new job that
 					// came in.
-					if rate < -1*storefrontScraperJobsPerMinute {
-						rate = -1 * storefrontScraperJobsPerMinute
+					if rate < -1*globalConfig.Scrape.Constants.SockSteamAppScraperJobsPerMinute {
+						rate = -1 * globalConfig.Scrape.Constants.SockSteamAppScraperJobsPerMinute
 					}
 
 					log.WARNING.Printf(
 						"Number of StorefrontScraper jobs exceeds %d with %d jobs, rate is %d",
-						storefrontScraperDropJobsThreshold, jobs, rate,
+						globalConfig.Scrape.Constants.SockSteamAppScraperDropJobsThreshold, jobs, rate,
 					)
-					if rate < storefrontScraperJobsPerMinute {
-						dropped := gameScrapers.Drop(storefrontScraperJobsPerMinute - rate)
+					if rate < globalConfig.Scrape.Constants.SockSteamAppScraperJobsPerMinute {
+						dropped := gameScrapers.Drop(globalConfig.Scrape.Constants.SockSteamAppScraperJobsPerMinute - rate)
 						log.WARNING.Printf(
 							"StorefrontScraper: %d jobs per minute falls below %d jobs per minute. Dropped %d/%d jobs",
-							rate, storefrontScraperJobsPerMinute, dropped, storefrontScraperJobsPerMinute-rate,
+							rate, globalConfig.Scrape.Constants.SockSteamAppScraperJobsPerMinute, dropped, globalConfig.Scrape.Constants.SockSteamAppScraperJobsPerMinute-rate,
 						)
 						jobs -= dropped
 					}
@@ -277,7 +269,7 @@ func (sws *SteamAppWebsocketScraper) worker(no int) {
 				previousJobLen = jobs
 				log.INFO.Printf(
 					"Dropper: previous jobs = %d, rate = %d, sleeping for %s",
-					previousJobLen, rate, dropperWaitTime.String(),
+					previousJobLen, rate, globalConfig.Scrape.Constants.SockDropperWaitTime.String(),
 				)
 			}
 		}
@@ -304,7 +296,7 @@ func (sws *SteamAppWebsocketScraper) worker(no int) {
 							"SteamAppWebsocketScraper worker no. %d is sending app %d (%d/%d in the batch) to be "+
 								"scraped. There are %d jobs left, %.2f%% capacity",
 							no+1, appIDInt, i+1, len(msg.Apps),
-							gameScrapers.Jobs(), float64(gameScrapers.Jobs())/float64(maxStorefrontScraperJobs)*100.0,
+							gameScrapers.Jobs(), float64(gameScrapers.Jobs())/float64(globalConfig.Scrape.Constants.SockMaxSteamAppScraperJobs)*100.0,
 						)
 						if gameChannel, ok := gameScrapers.Add(false, &models.SteamApp{}, map[models.Storefront]mapset.Set[uint64]{
 							models.SteamStorefront: mapset.NewThreadUnsafeSet[uint64](uint64(appIDInt)),

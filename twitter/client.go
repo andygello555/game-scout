@@ -34,6 +34,16 @@ func (a authorize) Add(req *http.Request) {
 	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", a.Token))
 }
 
+type RateLimits interface {
+	LimitPerMonth() uint64
+	LimitPerWeek() uint64
+	LimitPerDay() uint64
+	LimitPerHour() uint64
+	LimitPerMinute() uint64
+	LimitPerSecond() uint64
+	LimitPerRequest() time.Duration
+}
+
 type Config interface {
 	TwitterAPIKey() string
 	TwitterAPIKeySecret() string
@@ -43,6 +53,10 @@ type Config interface {
 	TwitterHashtags() []string
 	TwitterQuery() string
 	TwitterHeadless() bool
+	TwitterRateLimits() RateLimits
+	TwitterTweetCapLocation() string
+	TwitterCreatedAtFormat() string
+	TwitterIgnoredErrorTypes() []string
 }
 
 func ClientCreate(config Config) error {
@@ -95,10 +109,10 @@ func (tc *TweetCap) CheckFresh() bool {
 func (w *ClientWrapper) GetTweetCap() (err error) {
 	log.INFO.Println("Getting TweetCap")
 	// We first check if the TweetCap file exists. If it does, we read in the TweetCap from there.
-	if _, err = os.Stat(DefaultTweetCapLocation); !errors.Is(err, os.ErrNotExist) {
-		log.INFO.Printf("\tTweetCap cache file exists, reading it in from %s", DefaultTweetCapLocation)
+	if _, err = os.Stat(w.Config.TwitterTweetCapLocation()); !errors.Is(err, os.ErrNotExist) {
+		log.INFO.Printf("\tTweetCap cache file exists, reading it in from %s", w.Config.TwitterTweetCapLocation())
 		var tweetCapData []byte
-		if tweetCapData, err = os.ReadFile(DefaultTweetCapLocation); err != nil {
+		if tweetCapData, err = os.ReadFile(w.Config.TwitterTweetCapLocation()); err != nil {
 			return err
 		}
 
@@ -263,7 +277,7 @@ func (w *ClientWrapper) GetTweetCap() (err error) {
 		if err = w.WriteTweetCap(); err != nil {
 			return errors.Wrap(err, "could not write TweetCap cache file")
 		}
-		log.INFO.Printf("\tSuccessfully wrote TweetCap to %s", DefaultTweetCapLocation)
+		log.INFO.Printf("\tSuccessfully wrote TweetCap to %s", w.Config.TwitterTweetCapLocation())
 	}
 	log.INFO.Printf("Successfully fetched TweetCap: %s", w.TweetCap.String())
 	return nil
@@ -276,18 +290,18 @@ func (w *ClientWrapper) WriteTweetCap() (err error) {
 		return errors.Wrap(err, "could not Marshal TweetCap to JSON")
 	}
 	var file *os.File
-	if file, err = os.Create(DefaultTweetCapLocation); err != nil {
-		return errors.Wrapf(err, "could not create TweetCap file %s", DefaultTweetCapLocation)
+	if file, err = os.Create(w.Config.TwitterTweetCapLocation()); err != nil {
+		return errors.Wrapf(err, "could not create TweetCap file %s", w.Config.TwitterTweetCapLocation())
 	}
 	defer func(file *os.File) {
 		err = myErrors.MergeErrors(err, errors.Wrapf(
 			file.Close(),
 			"could not close TweetCap file %s",
-			DefaultTweetCapLocation,
+			w.Config.TwitterTweetCapLocation(),
 		))
 	}(file)
 	if _, err = file.Write(jsonBytes); err != nil {
-		return errors.Wrapf(err, "could not write to TweetCap file %s", DefaultTweetCapLocation)
+		return errors.Wrapf(err, "could not write to TweetCap file %s", w.Config.TwitterTweetCapLocation())
 	}
 	return nil
 }
@@ -324,7 +338,10 @@ func (w *ClientWrapper) SetTweetCap(used int, remaining int, total int, resets t
 		}
 	} else {
 		// Otherwise, we just write the TweetCap to the cache file
-		log.INFO.Printf("TweetCap (%s) is fresh, writing to cache: %s", w.TweetCap.String(), DefaultTweetCapLocation)
+		log.INFO.Printf(
+			"TweetCap (%s) is fresh, writing to cache: %s",
+			w.TweetCap.String(), w.Config.TwitterTweetCapLocation(),
+		)
 		if err = w.WriteTweetCap(); err != nil {
 			return errors.Wrap(err, "could not write TweetCap cache file")
 		}
@@ -362,6 +379,7 @@ func (w *ClientWrapper) CheckRateLimit(binding *Binding, totalResources int) (er
 	if binding.ResourceType == Tweet && totalResources > tweetCap.Remaining {
 		log.WARNING.Printf("TweetCap check for %s failed when requesting %d tweets (%s)", binding.Type.String(), totalResources, w.TweetCap.String())
 		return &RateLimitError{
+			Config:                 w.Config.TwitterRateLimits(),
 			TweetCap:               &tweetCap,
 			MaxResourcesPerRequest: binding.MaxResourcesPerRequest,
 			RequestedResources:     totalResources,
@@ -383,6 +401,7 @@ func (w *ClientWrapper) CheckRateLimit(binding *Binding, totalResources int) (er
 				rateLimit.Reset.Time().String(),
 			)
 			return &RateLimitError{
+				Config:                 w.Config.TwitterRateLimits(),
 				RateLimit:              rateLimit,
 				MaxResourcesPerRequest: binding.MaxResourcesPerRequest,
 				RequestedResources:     totalResources,
@@ -392,7 +411,7 @@ func (w *ClientWrapper) CheckRateLimit(binding *Binding, totalResources int) (er
 		}
 		// If the number of requests we can make in the remaining time on the rate limit exceeds the number of requests
 		// we would have to make to satisfy the totalResources to get.
-		if remaining := rateLimit.Reset.Time().Sub(now) / TimePerRequest; int64(remaining) < int64(totalResources/binding.MaxResourcesPerRequest) {
+		if remaining := rateLimit.Reset.Time().Sub(now) / w.Config.TwitterRateLimits().LimitPerRequest(); int64(remaining) < int64(totalResources/binding.MaxResourcesPerRequest) {
 			log.WARNING.Printf(
 				"There is %s remaining on the rate limit meaning we cannot make the %d requests required for %d %ss",
 				remaining.String(),
@@ -401,6 +420,7 @@ func (w *ClientWrapper) CheckRateLimit(binding *Binding, totalResources int) (er
 				binding.ResourceType.String(),
 			)
 			return &RateLimitError{
+				Config:                 w.Config.TwitterRateLimits(),
 				RateLimit:              rateLimit,
 				MaxResourcesPerRequest: binding.MaxResourcesPerRequest,
 				RequestedResources:     totalResources,
@@ -419,6 +439,7 @@ func (w *ClientWrapper) CheckRateLimit(binding *Binding, totalResources int) (er
 			binding.Type.String(), binding.RequestRateLimit.Requests*binding.MaxResourcesPerRequest,
 		)
 		return &RateLimitError{
+			Config: w.Config.TwitterRateLimits(),
 			RequestRateLimit: &RequestRateLimit{
 				Requests: binding.RequestRateLimit.Requests,
 				Every:    binding.RequestRateLimit.Every,
@@ -518,7 +539,7 @@ func (w *ClientWrapper) ExecuteBinding(bindingType BindingType, options *Binding
 
 			// Then we wrap the response in a BindingResult instance.
 			var nextBindingResult BindingResult
-			if nextBindingResult, err = binding.Type.WrapResponse(response); err != nil {
+			if nextBindingResult, err = binding.Type.WrapResponse(w, response); err != nil {
 				return bindingResult, errors.Wrapf(err, "could not wrap response from request no. %d", requestNo)
 			}
 
@@ -577,7 +598,7 @@ func (w *ClientWrapper) ExecuteBinding(bindingType BindingType, options *Binding
 		}
 
 		// And then we wrap the response in a BindingResult.
-		if bindingResult, err = binding.Type.WrapResponse(response); err != nil {
+		if bindingResult, err = binding.Type.WrapResponse(w, response); err != nil {
 			return bindingResult, errors.Wrapf(err, "could not wrap response from singleton %s request", binding.Type.String())
 		}
 

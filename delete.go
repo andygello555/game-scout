@@ -5,6 +5,7 @@ import (
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
+	"github.com/andygello555/game-scout/email"
 	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/andygello555/gotils/v2/numbers"
 	"github.com/andygello555/gotils/v2/slices"
@@ -13,9 +14,11 @@ import (
 	"gorm.io/gorm"
 	"math"
 	"strings"
+	"time"
 )
 
-// DeletePhase will run the "disable" phase of the Scout procedure.
+// DeletePhase will run the Disable phase of the Scout procedure. It is only run on the same days that the Measure Phase
+// is run. This day can be changed in the TemplateConfig.SendDay in the config.json.
 //
 // This Phase first deletes any developers that have less than 3 snapshots and their latest snapshot was created over
 // staleDeveloperDays ago.
@@ -31,6 +34,23 @@ import (
 // The deleted developers are stored within the DeletedDevelopers cached field of the given ScoutState, along with all
 // their snapshots and games, so that they can be mentioned in the Measure Phase.
 func DeletePhase(state *ScoutState) (err error) {
+	startAny, _ := state.GetCachedField(StateType).Get("Start")
+	start := startAny.(time.Time)
+	start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
+	debugAny, _ := state.GetCachedField(StateType).Get("Debug")
+	debug := debugAny.(bool)
+
+	// If the weekday of the start of the scrape does not match the weekday that Measure emails are sent out on and
+	// debug is not set, then the DeletePhase does not need to be run.
+	if !debug && globalConfig.Email.EmailTemplateConfigFor(email.Measure).TemplateSendDay() != start.Weekday() {
+		log.WARNING.Printf(
+			"Delete Phase does not need to be run as Scout was started on %s, which was/is not a %s",
+			start.Format("Monday 2 January"),
+			globalConfig.Email.EmailTemplateConfigFor(email.Measure).TemplateSendDay().String(),
+		)
+		return nil
+	}
+
 	scoutResultAny, _ := state.GetCachedField(StateType).Get("Result")
 	if err = scoutResultAny.(*models.ScoutResult).DeleteStats.Before(db.DB); err != nil {
 		log.ERROR.Printf("Could not set Before fields for ScoutResult.DeleteStats: %v", err)
@@ -42,7 +62,7 @@ func DeletePhase(state *ScoutState) (err error) {
 	if err = db.DB.Model(&models.Developer{}).Where("disabled").Count(&totalDisabledDevelopers).Error; err != nil {
 		return myErrors.TemporaryWrap(false, err, "could not find the total number of disabled developers")
 	}
-	developersToDelete := int(math.Floor(float64(totalDisabledDevelopers) * percentageOfDisabledDevelopersToDelete))
+	developersToDelete := int(math.Floor(float64(totalDisabledDevelopers) * globalConfig.Scrape.Constants.PercentageOfDisabledDevelopersToDelete))
 
 	// We also set the developersToGo variable so that it won't be skewed by the number of stale developers. This will
 	// also subtract the number of existing deleted developers in the cache.
@@ -75,7 +95,7 @@ func DeletePhase(state *ScoutState) (err error) {
 	// First find any developers that haven't had a snapshot for a while and add them to the developers to be deleted
 	log.INFO.Printf(
 		"First we are going to queue up any developers that haven't had a new snapshot in %d days to be deleted",
-		staleDeveloperDays,
+		globalConfig.Scrape.Constants.StaleDeveloperDays,
 	)
 
 	// SELECT developers.*
@@ -104,7 +124,7 @@ func DeletePhase(state *ScoutState) (err error) {
 		"JOIN developers ON ds2.developer_id = developers.id",
 	).Where(
 		"ds2.created_at < NOW() - (? * INTERVAL '1 DAY') AND ds2.version < 2 AND (?) = 0",
-		staleDeveloperDays,
+		globalConfig.Scrape.Constants.StaleDeveloperDays,
 		whereZeroVerified,
 	).Order(
 		"ds2.created_at",
@@ -134,7 +154,7 @@ func DeletePhase(state *ScoutState) (err error) {
 
 	log.INFO.Printf(
 		"There are %d total disabled developers in the DB, we have to delete %.1f%% of those, which is %d",
-		totalDisabledDevelopers, percentageOfDisabledDevelopersToDelete*100, developersToDelete,
+		totalDisabledDevelopers, globalConfig.Scrape.Constants.PercentageOfDisabledDevelopersToDelete*100, developersToDelete,
 	)
 
 	// SELECT developers.*

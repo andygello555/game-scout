@@ -13,11 +13,6 @@ import (
 	"time"
 )
 
-const (
-	maxTries = 3
-	minDelay = time.Second * 2
-)
-
 type Storefront string
 
 const (
@@ -116,11 +111,17 @@ type StorefrontConfig interface {
 	StorefrontTags() TagConfig
 }
 
+type ScrapeConstants interface {
+	DefaultMaxTries() int
+	DefaultMinDelay() time.Duration
+}
+
 // ScrapeConfig contains the configuration for the scrape.
 type ScrapeConfig interface {
 	ScrapeDebug() bool
 	ScrapeStorefronts() []StorefrontConfig
 	ScrapeGetStorefront(storefront Storefront) StorefrontConfig
+	ScrapeConstants() ScrapeConstants
 }
 
 // ScrapableGameSource represents a source that can be scraped for a GameModelStorefrontScraper for a Storefront.
@@ -527,19 +528,21 @@ func (ss *StorefrontScrapers[ID]) worker(no int) {
 func ScrapeStorefrontForGameModel[ID comparable](id ID, gameModelScraper GameModelStorefrontScraper[ID], config ScrapeConfig) {
 	// Do some scraping to find more details for the game
 	args := gameModelScraper.Args(id)
+	scrapeMaxTries := config.ScrapeConstants().DefaultMaxTries()
+	scrapeMinDelay := config.ScrapeConstants().DefaultMinDelay()
 	for _, source := range Info.Sources() {
 		var err error
 		switch source {
 		case Info:
-			err = gameModelScraper.ScrapeInfo(config, maxTries, minDelay, args...)
+			err = gameModelScraper.ScrapeInfo(config, scrapeMaxTries, scrapeMinDelay, args...)
 		case Reviews:
-			err = gameModelScraper.ScrapeReviews(config, maxTries, minDelay, args...)
+			err = gameModelScraper.ScrapeReviews(config, scrapeMaxTries, scrapeMinDelay, args...)
 		case Community:
-			err = gameModelScraper.ScrapeCommunity(config, maxTries, minDelay, args...)
+			err = gameModelScraper.ScrapeCommunity(config, scrapeMaxTries, scrapeMinDelay, args...)
 		case Tags:
-			err = gameModelScraper.ScrapeTags(config, maxTries, minDelay, args...)
+			err = gameModelScraper.ScrapeTags(config, scrapeMaxTries, scrapeMinDelay, args...)
 		case Extra:
-			err = gameModelScraper.ScrapeExtra(config, maxTries, minDelay, args...)
+			err = gameModelScraper.ScrapeExtra(config, scrapeMaxTries, scrapeMinDelay, args...)
 		default:
 			err = fmt.Errorf("cannot scrape ScrapableGameSource %d for game", source)
 		}

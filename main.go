@@ -317,7 +317,7 @@ func main() {
 				gameIDs := make([]uuid.UUID, 10)
 				for _, tweet := range response.Raw().(*twitter.TweetRaw).TweetDictionaries() {
 					var createdAt time.Time
-					if createdAt, err = time.Parse(myTwitter.CreatedAtFormat, tweet.Author.CreatedAt); err != nil {
+					if createdAt, err = time.Parse(globalConfig.Twitter.CreatedAtFormat, tweet.Author.CreatedAt); err != nil {
 						return cli.NewExitError(err.Error(), 1)
 					}
 
@@ -846,8 +846,10 @@ func main() {
 
 					if c.Bool("update") {
 						gameScrapers := models.NewStorefrontScrapers[string](
-							globalConfig.Scrape, db.DB, 1, 1, 12*maxGamesPerTweet,
-							minScrapeStorefrontsForGameWorkerWaitTime, maxScrapeStorefrontsForGameWorkerWaitTime,
+							globalConfig.Scrape, db.DB, 1, 1,
+							12*globalConfig.Scrape.Constants.MaxGamesPerTweet,
+							globalConfig.Scrape.Constants.MinScrapeStorefrontsForGameWorkerWaitTime.Duration,
+							globalConfig.Scrape.Constants.MaxScrapeStorefrontsForGameWorkerWaitTime.Duration,
 						)
 						gameScrapers.Start()
 
