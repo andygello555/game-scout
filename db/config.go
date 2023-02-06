@@ -17,16 +17,13 @@ type Config interface {
 	DBPort() int
 	DBSSLMode() string
 	DBTimezone() string
+	DBPostgresDBName() string
 	DBDefaultRWAccess() (config RWConfig)
 	DBRWAccessConfigForID(id int) (config RWConfig)
 	DBRWAccessForID(id int) (read bool, write bool)
 	DBPhaseReadAccess(id int) bool
 	DBPhaseWriteAccess(id int) bool
 }
-
-const (
-	PostgresDBName = "postgres"
-)
 
 func configToDSN(config Config) string {
 	return fmt.Sprintf(
@@ -60,7 +57,7 @@ func configToPostgresDSN(config Config) string {
 		config.DBHost(),
 		config.DBUser(),
 		config.DBPassword(),
-		PostgresDBName,
+		config.DBPostgresDBName(),
 		config.DBPort(),
 		config.DBSSLMode(),
 		config.DBTimezone(),

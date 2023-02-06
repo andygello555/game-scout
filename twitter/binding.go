@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/errors"
+	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"strings"
 	"time"
@@ -63,8 +64,9 @@ func (bt BindingType) Binding() *Binding {
 	return &binding
 }
 
-// WrapResponse wraps the given response from twitter.Client in a prototype that implements the BindingResult interface.
-func (bt BindingType) WrapResponse(response any) (result BindingResult, err error) {
+// WrapResponse wraps the given response from the given ClientWrapper in a prototype that implements the BindingResult
+// interface.
+func (bt BindingType) WrapResponse(client *ClientWrapper, response any) (result BindingResult, err error) {
 	bindingResult := &struct{ bindingResultProto }{}
 	switch bt {
 	case RecentSearch:
@@ -74,14 +76,16 @@ func (bt BindingType) WrapResponse(response any) (result BindingResult, err erro
 			// If we find any errors that shouldn't be ignored we will return that error
 			ignore := true
 			for _, tweetErr := range tweetRecentSearchResponse.Raw.Errors {
-				if !strings.Contains(IgnoredErrorTypes, tweetErr.Type) {
+				if mapset.NewThreadUnsafeSet[string](client.Config.TwitterIgnoredErrorTypes()...).Contains(tweetErr.Type) {
 					log.ERROR.Printf(
-						"Un-ignorable occurred in %s response: %s, %s", bt.String(), tweetErr.Type, tweetErr.Detail,
+						"Un-ignorable error occurred in %s response: %s, %s",
+						bt.String(), tweetErr.Type, tweetErr.Detail,
 					)
 					ignore = false
 					break
 				}
 			}
+
 			if !ignore {
 				bep := &bindingErrorProto{errorsMethod: func() []*twitter.ErrorObj { return tweetRecentSearchResponse.Raw.Errors }}
 				return bindingResult, bep

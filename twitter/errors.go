@@ -8,6 +8,8 @@ import (
 
 // RateLimitError represents an error returned by ClientWrapper.CheckRateLimit.
 type RateLimitError struct {
+	// Config is a copy of the RateLimits config from the ClientWrapper.Config.
+	Config RateLimits
 	// RateLimit is a copy of the rate limit from a Twitter API action response.
 	RateLimit *twitter.RateLimit
 	// TweetCap is a copy of the TweetCap from the ClientWrapper.
@@ -36,7 +38,7 @@ func (rle *RateLimitError) Error() string {
 				rle.RateLimit.Reset.Time().String(),
 			)
 		}
-		if remaining := rle.RateLimit.Reset.Time().Sub(rle.Happened) / TimePerRequest; int64(remaining) < int64(rle.RequestedResources/rle.MaxResourcesPerRequest) {
+		if remaining := rle.RateLimit.Reset.Time().Sub(rle.Happened) / rle.Config.LimitPerRequest(); int64(remaining) < int64(rle.RequestedResources/rle.MaxResourcesPerRequest) {
 			return fmt.Sprintf(
 				"cannot request now (%s) as the number of requests to make to get %d %ss exceeds the number we can make in the time remaining %s",
 				rle.Happened.String(),

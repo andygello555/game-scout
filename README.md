@@ -31,6 +31,7 @@ All configuration variables for game-scout exist in a `config.json` file that mu
     "port": 5432,
     "sslmode": false,
     "timezone": "Europe/London",
+    "postgres_db_name": "postgres",
     "default_phase_rw_access": {
       "phase": 0,
       "read": true,
@@ -120,7 +121,22 @@ All configuration variables for game-scout exist in a `config.json` file that mu
     "password": "<TWITTER_PASSWORD>",
     "hashtags": [],
     "blacklisted_hashtags": [],
-    "headless": false
+    "headless": false,
+    "rate_limit": {
+      "tweets_per_month": 1650000,
+      "tweets_per_week": 385000,
+      "tweets_per_day": 55000,
+      "tweets_per_hour": 2200,
+      "tweets_per_minute": 1000,
+      "tweets_per_second": 200,
+      "time_per_request": "500ms"
+    },
+    "tweet_cap_location":"tweetCap.json",
+    "created_at_format": "2006-01-02T15:04:05.000Z",
+    "ignored_error_types": [
+      "https://api.twitter.com/2/problems/resource-not-found",
+      "https://api.twitter.com/2/problems/not-authorized-for-resource"
+    ]
   },
   "scrape": {
     "debug": true,
@@ -184,17 +200,18 @@ Remember to update all the values containing a placeholder (e.g. `<TWITTER_PASSW
 
 This contains the [DB](db) settings. Game-scout uses [GORM](https://gorm.io/) as an ORM for a [PostgreSQL](https://www.postgresql.org/) DB to store its findings. Please note that (at the moment) there is **no option to use another DB server**.
 
-| Key                       | Type     | Description                                                                             |
-|---------------------------|----------|-----------------------------------------------------------------------------------------|
-| `host`                    | `string` | The hostname/address of the PostgreSQL DB that [GORM](https://gorm.io/) will connect to |
-| `user`                    | `string` | The username of the user that will be used to connect to the PostgreSQL DB              |
-| `password`                | `string` | The password of the user that will be used to connect to the DB                         |
-| `name`                    | `string` | The name of the DB to connect to                                                        |
-| `port`                    | `int`    | The port on which the PostgreSQL server is running                                      |
-| `sslmode`                 | `bool`   | Whether the PostgreSQL server is running in SSL mode                                    |
-| `timezone`                | `string` | The timezone which the PostgreSQL server uses                                           |
-| `default_phase_rw_access` | `object` | This isn't used just yet                                                                |
-| `phase_rw_access`         | `array`  | This isn't used just yet                                                                |
+| Key                       | Type     | Description                                                                                                                 |
+|---------------------------|----------|-----------------------------------------------------------------------------------------------------------------------------|
+| `host`                    | `string` | The hostname/address of the PostgreSQL DB that [GORM](https://gorm.io/) will connect to                                     |
+| `user`                    | `string` | The username of the user that will be used to connect to the PostgreSQL DB                                                  |
+| `password`                | `string` | The password of the user that will be used to connect to the DB                                                             |
+| `name`                    | `string` | The name of the DB to connect to                                                                                            |
+| `port`                    | `int`    | The port on which the PostgreSQL server is running                                                                          |
+| `sslmode`                 | `bool`   | Whether the PostgreSQL server is running in SSL mode                                                                        |
+| `timezone`                | `string` | The timezone which the PostgreSQL server uses                                                                               |
+| `postgres_db_name`        | `string` | The name of the main PostgreSQL database. This is used so that we can create and drop the test database when running tests. |
+| `default_phase_rw_access` | `object` | **This isn't used just yet**                                                                                                |
+| `phase_rw_access`         | `array`  | **This isn't used just yet**                                                                                                |
 
 ### Email
 
@@ -254,16 +271,35 @@ Represents the task signature for a periodic task in game-scout. The only period
 
 This contains the settings for the Twitter API and the Discovery phase of the Scout procedure. Game-scout requires the details of your developer Twitter account (the one to which your API keys are bound to). Game-scout uses these to determine your Tweet cap/how many Tweets you can fetch for the current month.
 
-| Key                    | Type       | Description                                                                                                                                                                                                                                 |
-|------------------------|------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `api_key`              | `string`   | Your Twitter API key                                                                                                                                                                                                                        |
-| `api_key_secret`       | `string`   | Your Twitter API secret                                                                                                                                                                                                                     |
-| `bearer_token`         | `string`   | Your Twitter API bearer token                                                                                                                                                                                                               |
-| `username`             | `string`   | Your Twitter login username/email. This is used for determining your current Tweet cap                                                                                                                                                      |
-| `password`             | `string`   | Your Twitter login password. This is used for determining your current Tweet cap                                                                                                                                                            |
-| `hashtags`             | `[]string` | The hashtags to search for in the Discovery phase. Note: that you need to take into account your Twitter dev account's [query limitations](https://developer.twitter.com/en/docs/twitter-api/tweets/search/integrate/build-a-query#limits). |
-| `blacklisted_hashtags` | `[]string` | The hashtags to blacklist in the Discovery phase. Note: that you need to take into account your Twitter dev account's [query limitations](https://developer.twitter.com/en/docs/twitter-api/tweets/search/integrate/build-a-query#limits).  |
-| `headless`             | `bool`     | Whether to run the playwright browser that is used to fetch your Tweet cap in headless mode                                                                                                                                                 |
+| Key                    | Type                             | Description                                                                                                                                                                                                                                                                                                               |
+|------------------------|----------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `api_key`              | `string`                         | Your Twitter API key                                                                                                                                                                                                                                                                                                      |
+| `api_key_secret`       | `string`                         | Your Twitter API secret                                                                                                                                                                                                                                                                                                   |
+| `bearer_token`         | `string`                         | Your Twitter API bearer token                                                                                                                                                                                                                                                                                             |
+| `username`             | `string`                         | Your Twitter login username/email. This is used for determining your current Tweet cap                                                                                                                                                                                                                                    |
+| `password`             | `string`                         | Your Twitter login password. This is used for determining your current Tweet cap                                                                                                                                                                                                                                          |
+| `hashtags`             | `[]string`                       | The hashtags to search for in the Discovery phase. Note: that you need to take into account your Twitter dev account's [query limitations](https://developer.twitter.com/en/docs/twitter-api/tweets/search/integrate/build-a-query#limits).                                                                               |
+| `blacklisted_hashtags` | `[]string`                       | The hashtags to blacklist in the Discovery phase. Note: that you need to take into account your Twitter dev account's [query limitations](https://developer.twitter.com/en/docs/twitter-api/tweets/search/integrate/build-a-query#limits).                                                                                |
+| `headless`             | `bool`                           | Whether to run the playwright browser that is used to fetch your Tweet cap in headless mode                                                                                                                                                                                                                               |
+| `rate_limits`          | `*TwitterRateLimits` as `object` | The rate limits for each timeframe to abide by when requesting resources from the Twitter API. See the [Rate limits](#rate-limits) section for more details                                                                                                                                                               |
+| `tweet_cap_location`   | `string`                         | The path (relative to the root of the repository) to save/load the Tweet cap cache to/from. This is a JSON file that contains the remaining number of Tweets for your account for the month. This is used by game-scout to know how many Tweets it can request per-day and per-month.                                     |
+| `created_at_format`    | `string`                         | The time format that the Twitter API uses for the `created_at` fields of various resources. This should be set to the ISO 8601 standard i.e. `"2006-01-02T15:04:05.000Z"`.                                                                                                                                                |
+| `ignored_error_types`  | `[]string`                       | The errors from the Twitter API that can be safely ignored. This is a list of URLs to the Twitter API documentation's explanations of the error to be ignored. I recommend setting this to `["https://api.twitter.com/2/problems/resource-not-found", "https://api.twitter.com/2/problems/not-authorized-for-resource"]`. |
+
+#### Rate limits
+
+One thing to note when setting your rate limits is that it is better to be pessimistic than optimistic. To set the rate limits for my own Elevated account I used percentages, rounding down, and averages of the `tweets_per_month` and `tweets_per_second`.
+
+| Key                 | Type                        | Description                                                                                                                                                                                                  | You should use these as a default (when using a Twitter API account with Elevated access) |
+|---------------------|-----------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------|
+| `tweets_per_month`  | `uint64`                    | The number of Tweets that can safely be requested per-month. I would recommend setting this to 80-85% of the Tweet cap for your account, so that you can use the rest for testing/other purposes.            | `1650000`                                                                                 |
+| `tweets_per_week`   | `uint64`                    | The number of Tweets that can safely be requested per-week.                                                                                                                                                  | `tweets_per_day * 7 = 385000`                                                             |
+| `tweets_per_day`    | `uint64`                    | The number of Tweets that can safely be requested per-day. I use this metric to calculate the `tweets_per_week`, `tweets_per_hour` and `tweets_per_minute`.                                                  | `tweets_per_month / 30 = 55000`                                                           |
+| `tweets_per_hour`   | `uint64`                    | The number of Tweets that can safely be requested per-hour.                                                                                                                                                  | `rounded_down_to_nearest_100(tweets_per_day / 24) = 2200`                                 |
+| `tweets_per_minute` | `uint64`                    | The number of Tweets that can safely be requested per-minute.                                                                                                                                                | `(tweets_per_day - tweets_per_second) / 2 = 1000`                                         |
+| `tweets_per_second` | `uint64`                    | The number of Tweets that can safely be requested per-second. I set this to the maximum number of Tweets that can be requested by an endpoint that returns Tweets (100), divided by `time_per_request / 1s`. | `100 / (time_per_request / 1s) = 200`                                                     |
+| `time_per_request`  | `time.Duration` as `string` | The average time that a request to the Twitter API should be completed. Set this to something that is more towards the end of "worst-case".                                                                  | `500ms`                                                                                   |
+
 
 ### Scrape
 

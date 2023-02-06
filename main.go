@@ -317,7 +317,7 @@ func main() {
 				gameIDs := make([]uuid.UUID, 10)
 				for _, tweet := range response.Raw().(*twitter.TweetRaw).TweetDictionaries() {
 					var createdAt time.Time
-					if createdAt, err = time.Parse(myTwitter.CreatedAtFormat, tweet.Author.CreatedAt); err != nil {
+					if createdAt, err = time.Parse(globalConfig.Twitter.CreatedAtFormat, tweet.Author.CreatedAt); err != nil {
 						return cli.NewExitError(err.Error(), 1)
 					}
 

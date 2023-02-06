@@ -287,7 +287,7 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 		// For each unscraped developer we will execute a query on RecentSearch for the developer for tweets after the
 		// latest developer snapshot's LastTweetTime. We decide how many tweets to request for each developer by dividing
 		// the remaining number of tweets for this day by the number of developers we need to update.
-		totalTweetsForEachDeveloper := (int(myTwitter.TweetsPerDay) - discoveryTweets) / len(unscrapedDevelopers)
+		totalTweetsForEachDeveloper := (int(globalConfig.Twitter.RateLimits.TweetsPerDay) - discoveryTweets) / len(unscrapedDevelopers)
 		totalTweetsForEachDeveloper = numbers.Clamp(totalTweetsForEachDeveloper, globalConfig.Scrape.Constants.MaxUpdateTweets)
 		log.INFO.Printf("Initial number of tweets fetched for %d developers is %d", len(unscrapedDevelopers), totalTweetsForEachDeveloper)
 
@@ -309,7 +309,7 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 					"left join developer_snapshots on developer_snapshots.developer_id = developer.id",
 				).Where("developer_snapshots.weighted_score IS NOT NULL").Order("version desc, weighted_score desc").Limit(checkDeveloperNo).Find(&unscrapedDevelopers)
 				// We re-calculate totalTweetsForEachDeveloper on each iteration
-				totalTweetsForEachDeveloper = (int(myTwitter.TweetsPerDay) - discoveryTweets) / len(unscrapedDevelopers)
+				totalTweetsForEachDeveloper = (int(globalConfig.Twitter.RateLimits.TweetsPerDay) - discoveryTweets) / len(unscrapedDevelopers)
 				checkDeveloperNo--
 			}
 			// If we end up with zero developers we will return a non-temporary error
@@ -318,7 +318,7 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 					"Could not get totalTweetsForEachDeveloper up to at least %d, because there is just not "+
 						"enough tweetcap left for today (%d rem.) to update %d developers",
 					myTwitter.RecentSearch.Binding().MinResourcesPerRequest,
-					int(myTwitter.TweetsPerDay)-discoveryTweets,
+					int(globalConfig.Twitter.RateLimits.TweetsPerDay)-discoveryTweets,
 					initialDeveloperCount,
 				)
 				err = myErrors.TemporaryErrorf(

@@ -43,6 +43,9 @@ type DBConfig struct {
 	Port     int    `json:"port"`
 	SSLMode  bool   `json:"sslmode"`
 	Timezone string `json:"timezone"`
+	// PostgresDBName is the name of the main PostgreSQL database. This is used so that we can create and drop the test
+	// database when running tests.
+	PostgresDBName string `json:"postgres_db_name"`
 	// PhaseRWAccess this is the DB read/write access for individual phases.
 	// TODO: Implement a way of asserting read/write access to the DB in different phases, probably by creating a custom
 	//       clause or by creating a set of callbacks?
@@ -59,13 +62,10 @@ func (c *DBConfig) DBName() string     { return c.Name }
 func (c *DBConfig) TestDBName() string { return "test_" + c.DBName() }
 func (c *DBConfig) DBPort() int        { return c.Port }
 func (c *DBConfig) DBSSLMode() string {
-	sslMode := "disable"
-	if c.SSLMode {
-		sslMode = "enable"
-	}
-	return sslMode
+	return map[bool]string{true: "enable", false: "disable"}[c.SSLMode]
 }
-func (c *DBConfig) DBTimezone() string { return c.Timezone }
+func (c *DBConfig) DBTimezone() string       { return c.Timezone }
+func (c *DBConfig) DBPostgresDBName() string { return c.PostgresDBName }
 
 func (c *DBConfig) DBDefaultRWAccess() (config db.RWConfig) {
 	return c.DefaultPhaseRWAccess
@@ -263,29 +263,64 @@ func (c *TaskConfig) String() string {
 	)
 }
 
-type TwitterConfig struct {
-	APIKey              string   `json:"api_key"`
-	APIKeySecret        string   `json:"api_key_secret"`
-	BearerToken         string   `json:"bearer_token"`
-	Username            string   `json:"username"`
-	Password            string   `json:"password"`
-	Hashtags            []string `json:"hashtags"`
-	BlacklistedHashtags []string `json:"blacklisted_hashtags"`
-	Headless            bool     `json:"headless"`
+type TwitterRateLimits struct {
+	TweetsPerMonth  uint64   `json:"tweets_per_month"`
+	TweetsPerWeek   uint64   `json:"tweets_per_week"`
+	TweetsPerDay    uint64   `json:"tweets_per_day"`
+	TweetsPerHour   uint64   `json:"tweets_per_hour"`
+	TweetsPerMinute uint64   `json:"tweets_per_minute"`
+	TweetsPerSecond uint64   `json:"tweets_per_second"`
+	TimePerRequest  Duration `json:"time_per_request"`
 }
 
-func (c *TwitterConfig) TwitterAPIKey() string       { return c.APIKey }
-func (c *TwitterConfig) TwitterAPIKeySecret() string { return c.APIKeySecret }
-func (c *TwitterConfig) TwitterBearerToken() string  { return c.BearerToken }
-func (c *TwitterConfig) TwitterUsername() string     { return c.Username }
-func (c *TwitterConfig) TwitterPassword() string     { return c.Password }
-func (c *TwitterConfig) TwitterHashtags() []string   { return c.Hashtags }
-func (c *TwitterConfig) TwitterHeadless() bool       { return c.Headless }
+func (rl *TwitterRateLimits) LimitPerMonth() uint64          { return rl.TweetsPerMonth }
+func (rl *TwitterRateLimits) LimitPerWeek() uint64           { return rl.TweetsPerWeek }
+func (rl *TwitterRateLimits) LimitPerDay() uint64            { return rl.TweetsPerDay }
+func (rl *TwitterRateLimits) LimitPerHour() uint64           { return rl.TweetsPerHour }
+func (rl *TwitterRateLimits) LimitPerMinute() uint64         { return rl.TweetsPerMinute }
+func (rl *TwitterRateLimits) LimitPerSecond() uint64         { return rl.TweetsPerSecond }
+func (rl *TwitterRateLimits) LimitPerRequest() time.Duration { return rl.TimePerRequest.Duration }
+
+func (rl *TwitterRateLimits) String() string {
+	return fmt.Sprintf(
+		"{TweetsPerMonth: %v, TweetsPerWeek: %v, TweetsPerDay: %v, TweetsPerHour: %v, TweetsPerMinute: %v, TweetsPerSecond: %v, TimePerRequest: %v}",
+		rl.TweetsPerMonth, rl.TweetsPerWeek, rl.TweetsPerDay, rl.TweetsPerHour, rl.TweetsPerMinute, rl.TweetsPerSecond, rl.TimePerRequest,
+	)
+}
+
+type TwitterConfig struct {
+	APIKey              string             `json:"api_key"`
+	APIKeySecret        string             `json:"api_key_secret"`
+	BearerToken         string             `json:"bearer_token"`
+	Username            string             `json:"username"`
+	Password            string             `json:"password"`
+	Hashtags            []string           `json:"hashtags"`
+	BlacklistedHashtags []string           `json:"blacklisted_hashtags"`
+	Headless            bool               `json:"headless"`
+	RateLimits          *TwitterRateLimits `json:"rate_limits"`
+	TweetCapLocation    string             `json:"tweet_cap_location"`
+	CreatedAtFormat     string             `json:"created_at_format"`
+	// IgnoredErrorTypes is a semi-colon-seperated list of Twitter API error types
+	// (https://developer.twitter.com/en/support/twitter-api/error-troubleshooting) that we can safely ignore.
+	IgnoredErrorTypes []string `json:"ignored_error_types"`
+}
+
+func (c *TwitterConfig) TwitterAPIKey() string                   { return c.APIKey }
+func (c *TwitterConfig) TwitterAPIKeySecret() string             { return c.APIKeySecret }
+func (c *TwitterConfig) TwitterBearerToken() string              { return c.BearerToken }
+func (c *TwitterConfig) TwitterUsername() string                 { return c.Username }
+func (c *TwitterConfig) TwitterPassword() string                 { return c.Password }
+func (c *TwitterConfig) TwitterHashtags() []string               { return c.Hashtags }
+func (c *TwitterConfig) TwitterHeadless() bool                   { return c.Headless }
+func (c *TwitterConfig) TwitterRateLimits() myTwitter.RateLimits { return c.RateLimits }
+func (c *TwitterConfig) TwitterTweetCapLocation() string         { return c.TweetCapLocation }
+func (c *TwitterConfig) TwitterCreatedAtFormat() string          { return c.CreatedAtFormat }
+func (c *TwitterConfig) TwitterIgnoredErrorTypes() []string      { return c.IgnoredErrorTypes }
 
 func (c *TwitterConfig) String() string {
 	return fmt.Sprintf(
-		"{APIKey: %v, APIKeySecret: %v, BearerToken: %v, Username: %v, Password: %v, Hashtags: %v, BlacklistedHashtags: %v, Headless: %v}",
-		c.APIKey, c.APIKeySecret, c.BearerToken, c.Username, c.Password, c.Hashtags, c.BlacklistedHashtags, c.Headless,
+		"{APIKey: %v, APIKeySecret: %v, BearerToken: %v, Username: %v, Password: %v, Hashtags: %v, BlacklistedHashtags: %v, Headless: %v, RateLimits: %v}",
+		c.APIKey, c.APIKeySecret, c.BearerToken, c.Username, c.Password, c.Hashtags, c.BlacklistedHashtags, c.Headless, c.RateLimits,
 	)
 }
 
@@ -469,12 +504,12 @@ type ScrapeConstants struct {
 
 // maxTotalDiscoveryTweets is the maximum number of discoveryTweets that can be given to Scout.
 func (c *ScrapeConstants) maxTotalDiscoveryTweets() float64 {
-	return float64(myTwitter.TweetsPerDay) * c.MaxTotalDiscoveryTweetsDailyPercent
+	return float64(globalConfig.Twitter.RateLimits.TweetsPerDay) * c.MaxTotalDiscoveryTweetsDailyPercent
 }
 
 // maxTotalUpdateTweets is the maximum number of tweets that can be scraped by the Update phase.
 func (c *ScrapeConstants) maxTotalUpdateTweets() float64 {
-	return float64(myTwitter.TweetsPerDay) * (1.0 - c.MaxTotalDiscoveryTweetsDailyPercent)
+	return float64(globalConfig.Twitter.RateLimits.TweetsPerDay) * (1.0 - c.MaxTotalDiscoveryTweetsDailyPercent)
 }
 
 func (c *ScrapeConstants) DefaultMaxTries() int           { return c.ScrapeMaxTries }

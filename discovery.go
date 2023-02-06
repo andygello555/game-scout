@@ -41,7 +41,7 @@ func TransformTweet(
 		}
 	}
 
-	if tweetCreatedAt, err = time.Parse(myTwitter.CreatedAtFormat, tweet.Tweet.CreatedAt); err != nil {
+	if tweetCreatedAt, err = time.Parse(globalConfig.Twitter.CreatedAtFormat, tweet.Tweet.CreatedAt); err != nil {
 		err = errors.Wrap(err, "could not parse tweet's created_at")
 		return
 	}
@@ -53,7 +53,7 @@ func TransformTweet(
 	developer.Username = tweet.Author.UserName
 	developer.PublicMetrics = tweet.Author.PublicMetrics
 	developer.Description = tweet.Author.Description
-	if developer.ProfileCreated, err = time.Parse(myTwitter.CreatedAtFormat, tweet.Author.CreatedAt); err != nil {
+	if developer.ProfileCreated, err = time.Parse(globalConfig.Twitter.CreatedAtFormat, tweet.Author.CreatedAt); err != nil {
 		err = errors.Wrap(err, "could not parse author's created_at")
 		return
 	}

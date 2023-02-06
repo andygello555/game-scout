@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/errors"
-	"github.com/andygello555/game-scout/twitter"
 	"github.com/deckarep/golang-set/v2"
 	"github.com/google/uuid"
 	errors2 "github.com/pkg/errors"
@@ -88,7 +87,7 @@ func (p Phase) Run(state *ScoutState) (err error) {
 			return errors.TemporaryErrorf(
 				false,
 				"cannot request more than %d tweets per day for discovery purposes",
-				int(twitter.TweetsPerDay),
+				int(globalConfig.Twitter.RateLimits.TweetsPerDay),
 			)
 		}
 
