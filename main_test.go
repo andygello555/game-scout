@@ -244,9 +244,8 @@ func TestUpdatePhase(t *testing.T) {
 	}
 }
 
-var (
+const (
 	extraDevelopers       = 200
-	fakeDevelopers        = globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase + float64(extraDevelopers)
 	minDeveloperSnapshots = 1
 	maxDeveloperSnapshots = 10
 )
@@ -390,10 +389,11 @@ func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelop
 }
 
 func disablePhaseTest(t *testing.T) (state *ScoutState, expectedIDs mapset.Set[int]) {
+	fakeDevelopers := int(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase + float64(extraDevelopers)))
 	var err error
 	rand.Seed(time.Now().Unix())
 
-	expectedIDs = createFakeDevelopersWithSnaps(t, 1, int(math.Floor(fakeDevelopers)), extraDevelopers)
+	expectedIDs = createFakeDevelopersWithSnaps(t, 1, fakeDevelopers, extraDevelopers)
 
 	state = StateInMemory()
 	if err = DisablePhase(state); err != nil {
@@ -465,7 +465,8 @@ func enablePhaseTest(t *testing.T) (state *ScoutState, enabledDeveloperCount int
 	}
 
 	// Create 500 more developers to disable
-	start, end := int(math.Floor(fakeDevelopers+1)), int(math.Floor(fakeDevelopers))+additionalDisabledDevelopers
+	fakeDevelopers := int(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase + float64(extraDevelopers)))
+	start, end := fakeDevelopers+1, fakeDevelopers+additionalDisabledDevelopers
 	createdDevelopers := createFakeDevelopersWithSnaps(t, start, end, end)
 	if err = db.DB.Model(
 		&models.Developer{},

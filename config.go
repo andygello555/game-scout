@@ -100,8 +100,8 @@ func (c *DBConfig) DBPhaseWriteAccess(id int) bool {
 
 func (c *DBConfig) String() string {
 	return fmt.Sprintf(
-		"{Host: %v, User: %v, Password: %v, Name: %v, Port: %v, SSLMode: %v, Timezone: %v, PhaseRWAccess: %v, DefaultPhaseRWAccess: %v}",
-		c.Host, c.User, c.Password, c.Name, c.Port, c.SSLMode, c.Timezone, c.PhaseRWAccess, c.DefaultPhaseRWAccess,
+		"{Host: %v, User: %v, Password: %v, Name: %v, Port: %v, SSLMode: %v, Timezone: %v, PostgresDBName: %v, PhaseRWAccess: %v, DefaultPhaseRWAccess: %v}",
+		c.Host, c.User, c.Password, c.Name, c.Port, c.SSLMode, c.Timezone, c.PostgresDBName, c.PhaseRWAccess, c.DefaultPhaseRWAccess,
 	)
 }
 
@@ -319,8 +319,8 @@ func (c *TwitterConfig) TwitterIgnoredErrorTypes() []string      { return c.Igno
 
 func (c *TwitterConfig) String() string {
 	return fmt.Sprintf(
-		"{APIKey: %v, APIKeySecret: %v, BearerToken: %v, Username: %v, Password: %v, Hashtags: %v, BlacklistedHashtags: %v, Headless: %v, RateLimits: %v}",
-		c.APIKey, c.APIKeySecret, c.BearerToken, c.Username, c.Password, c.Hashtags, c.BlacklistedHashtags, c.Headless, c.RateLimits,
+		"{APIKey: %v, APIKeySecret: %v, BearerToken: %v, Username: %v, Password: %v, Hashtags: %v, BlacklistedHashtags: %v, Headless: %v, RateLimits: %v, TweetCapLocation: %v, CreatedAtFormat: %v, IgnoredErrorTypes: %v}",
+		c.APIKey, c.APIKeySecret, c.BearerToken, c.Username, c.Password, c.Hashtags, c.BlacklistedHashtags, c.Headless, c.RateLimits, c.TweetCapLocation, c.CreatedAtFormat, c.IgnoredErrorTypes,
 	)
 }
 
