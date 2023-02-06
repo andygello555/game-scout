@@ -402,17 +402,28 @@ func main() {
 			},
 		},
 		{
-			Name: "scrapeSteamGame",
+			Name: "scrapeGame",
 			Flags: []cli.Flag{
 				cli.UintFlag{
-					Name:     "appid",
-					Usage:    "the appid of the Steam game to scrape",
-					Required: true,
+					Name:  "appid",
+					Usage: "the appid of the Steam game to scrape",
+				},
+				cli.StringFlag{
+					Name:  "website",
+					Usage: "the URL of this game's website",
 				},
 				cli.StringFlag{
 					Name:  "model",
 					Usage: "the model to use for the scrape of the Steam game. Accepted values: game, steamapp",
 					Value: "game",
+				},
+				cli.BoolFlag{
+					Name:  "upsert",
+					Usage: "whether to upsert the Game/SteamApp after it has been scraped",
+				},
+				cli.BoolFlag{
+					Name:  "print",
+					Usage: "whether to print the Game/SteamApp after it has been scraped",
 				},
 			},
 			Usage: "scrape the Steam game with the given appid",
@@ -420,13 +431,29 @@ func main() {
 				var gameUpsertable db.Upsertable
 				switch strings.ToLower(c.String("model")) {
 				case "game":
+					var website string
+					switch {
+					case c.IsSet("appid"):
+						website = browser.SteamAppPage.Fill(c.Uint("appid"))
+					case c.IsSet("website"):
+						website = c.String("website")
+					default:
+						return cli.NewExitError("neither the appid or website flag was given", 1)
+					}
+
+					storefrontMap := make(map[models.Storefront]mapset.Set[string])
+					switch {
+					case models.SteamStorefront.ScrapeURL().Match(website):
+						storefrontMap[models.SteamStorefront] = mapset.NewThreadUnsafeSet[string](website)
+					case models.ItchIOStorefront.ScrapeURL().Match(website):
+						storefrontMap[models.ItchIOStorefront] = mapset.NewThreadUnsafeSet[string](website)
+					default:
+						return cli.NewExitError("website does not match schema for neither Steam or ItchIO storefronts", 1)
+					}
+
 					gameScrapers := models.NewStorefrontScrapers[string](globalConfig.Scrape, db.DB, 1, 1, 1, 0, 0)
 					gameScrapers.Start()
-					if gameChannel, ok := gameScrapers.Add(false, &models.Game{}, map[models.Storefront]mapset.Set[string]{
-						models.SteamStorefront: mapset.NewThreadUnsafeSet[string](
-							browser.SteamAppPage.Fill(c.Uint("appid")),
-						),
-					}); ok {
+					if gameChannel, ok := gameScrapers.Add(false, &models.Game{}, storefrontMap); ok {
 						gameModel := <-gameChannel
 						if gameModel != nil {
 							gameUpsertable = gameModel.(*models.Game)
@@ -455,10 +482,15 @@ func main() {
 					)
 				}
 
-				if _, err = db.Upsert(gameUpsertable); err != nil {
-					return cli.NewExitError(err.Error(), 1)
+				if c.Bool("upsert") {
+					if _, err = db.Upsert(gameUpsertable); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
 				}
-				fmt.Println(gameUpsertable)
+
+				if c.Bool("print") {
+					fmt.Printf("%#v\n", gameUpsertable)
+				}
 				return
 			},
 		},

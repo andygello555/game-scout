@@ -198,6 +198,8 @@ func (su ScrapeURL) Name() string {
 		return "SteamGetAppList"
 	case SteamSpyAppDetails:
 		return "SteamSpyAppDetails"
+	case ItchIOGamePage:
+		return "ItchIOGamePage"
 	default:
 		return "<nil>"
 	}

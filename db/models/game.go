@@ -777,33 +777,146 @@ func (g *GameItchIOStorefront) GetStorefront() Storefront { return ItchIOStorefr
 
 func (g *GameItchIOStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
 	developer, gameSlug := args[0], args[1]
+	storefrontConfig := config.ScrapeGetStorefront(ItchIOStorefront)
+	tagConfig := storefrontConfig.StorefrontTags()
 	return browser.ItchIOGamePage.RetrySoup(nil, maxTries, minDelay, func(doc *soup.Root, resp *http.Response) (err error) {
-		log.INFO.Println(developer, gameSlug)
+		var title soup.Root
+		if title = doc.Find("h1", "class", "game_title"); title.Error != nil {
+			return errors.Wrapf(
+				title.Error, "could not find game name for Itch.IO title %s (dev: %s)",
+				gameSlug, developer,
+			)
+		}
+
+		g.Game.Name = null.StringFrom(title.Text())
+		log.INFO.Printf("Name found for Itch.IO title %s (dev: %s): %q", gameSlug, developer, g.Game.Name.String)
+
+		var gameInfoPanel soup.Root
+		if gameInfoPanel = doc.Find("div", "class", "game_info_panel_widget"); gameInfoPanel.Error != nil {
+			return errors.Wrapf(
+				gameInfoPanel.Error, "could not find game_info_panel_widget for Itch.IO title %s (dev: %s)",
+				gameSlug, developer,
+			)
+		}
+
+		abbreviationTitle := func(value soup.Root) *string {
+			var abbr soup.Root
+			if abbr = value.Find("abbr"); abbr.Error != nil {
+				log.ERROR.Printf("Could not find <abbr> within %s: %v", value.HTML(), abbr.Error)
+				return nil
+			}
+			abbrTitle := abbr.Attrs()["title"]
+			return &abbrTitle
+		}
+
+		infoItemPairs := doc.FindAll("td")
+		for i := 0; i < len(infoItemPairs); i += 2 {
+			infoKey := infoItemPairs[i].Text()
+			infoValue := infoItemPairs[i+1]
+			switch strings.ToLower(infoKey) {
+			case "release date":
+				releaseDateAbbr := abbreviationTitle(infoValue)
+				if releaseDateAbbr != nil {
+					var releaseDate time.Time
+					if releaseDate, err = time.Parse("02 January 2006 @ 15:04", *releaseDateAbbr); err != nil {
+						return errors.Wrapf(
+							err, "could not parse release date: %q, for Itch.IO title %s (dev: %s)",
+							*releaseDateAbbr, gameSlug, developer,
+						)
+					}
+					log.INFO.Printf(
+						"Release date for Itch.IO title %s (dev: %s) is %s",
+						gameSlug, developer, releaseDate.String(),
+					)
+					g.Game.ReleaseDate = null.TimeFrom(releaseDate)
+				} else {
+					log.WARNING.Printf(
+						"Release date abbreviation could not be found for Itch.IO title %s (dev: %s)",
+						gameSlug, developer,
+					)
+				}
+			case "rating":
+				ratingEl := infoValue.Find("div", "itemprop", "ratingValue")
+				ratingsEl := infoValue.Find("span", "itemprop", "ratingCount")
+				if err = myErrors.MergeErrors(ratingEl.Error, ratingsEl.Error); err != nil {
+					return errors.Wrapf(
+						err, "could not find the rating value and the rating count for Itch.IO title %s (dev: %s)",
+						gameSlug, developer,
+					)
+				}
+				rating, _ := strconv.ParseFloat(ratingEl.Attrs()["content"], 64)
+				totalRatings, _ := strconv.ParseInt(ratingsEl.Attrs()["content"], 10, 32)
+				g.Game.TotalReviews = null.Int32From(int32(totalRatings))
+				g.Game.PositiveReviews = null.Int32From(int32(math.Round(rating * 2 / 10 * float64(totalRatings))))
+				g.Game.NegativeReviews = null.Int32From(g.Game.TotalReviews.Int32 - g.Game.PositiveReviews.Int32)
+				log.INFO.Printf(
+					"Found TotalReviews = %d, PositiveReviews = %d, NegativeReviews = %d, for Itch.IO title %s (dev: %s)",
+					g.Game.TotalReviews.Int32, g.Game.PositiveReviews.Int32, g.Game.NegativeReviews.Int32, gameSlug, developer,
+				)
+			case "status":
+				if strings.ToLower(infoValue.FullText()) != "released" {
+					g.Game.ReleaseDate = null.TimeFrom(time.Now().UTC().Add(time.Hour * 24 * 30 * 5))
+					log.INFO.Printf(
+						"Itch.IO title %s (dev: %s) has release status: %q, so we will assume it hasn't been released yet: %s",
+						gameSlug, developer, infoValue.FullText(), g.Game.ReleaseDate.Time.String(),
+					)
+				}
+			case "tags":
+				tagEls := infoValue.FindAll("a")
+				if len(tagEls) > 0 {
+					g.Game.TagScore = null.Float64From(0.0)
+				}
+
+				for _, tagEl := range tagEls {
+					name := tagEl.Text()
+					var (
+						value float64
+						ok    bool
+					)
+					if value, ok = tagConfig.TagValues()[name]; !ok {
+						value = tagConfig.TagDefaultValue()
+					}
+					log.INFO.Printf("For Itch.IO title %s (dev: %s): \"%s\" = %f", gameSlug, developer, name, value)
+					g.Game.TagScore.Float64 += value
+				}
+
+				// Then we take the average of the score
+				if len(tagEls) > 0 && g.Game.TagScore.Float64 > 0.0 {
+					g.Game.TagScore.Float64 = g.Game.TagScore.Float64 / float64(len(tagEls))
+				}
+			default:
+				log.INFO.Printf(
+					"We are ignoring info item %q for Itch.IO title %s (dev: %s)",
+					infoKey, gameSlug, developer,
+				)
+			}
+		}
 		return
-	})
+	}, developer, gameSlug)
 }
 
 func (g *GameItchIOStorefront) ScrapeReviews(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
 	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (g *GameItchIOStorefront) ScrapeTags(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
 	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (g *GameItchIOStorefront) ScrapeCommunity(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
 	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (g *GameItchIOStorefront) ScrapeExtra(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
 	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (g *GameItchIOStorefront) AfterScrape(args ...any) {
-	//TODO implement me
-	panic("implement me")
+	standardisedURL := ItchIOStorefront.ScrapeURL().Fill(args...)
+	g.Game.Storefront = ItchIOStorefront
+	g.Game.Website = null.StringFrom(standardisedURL)
 }

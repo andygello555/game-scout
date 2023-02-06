@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
-	"github.com/andygello555/game-scout/browser"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
 	myErrors "github.com/andygello555/game-scout/errors"
@@ -67,19 +66,17 @@ func TransformTweet(
 	totalGames := 0
 out:
 	for _, url := range tweet.Tweet.Entities.URLs {
-		for _, check := range []struct {
-			url        browser.ScrapeURL
-			storefront models.Storefront
-		}{
-			{browser.SteamAppPage, models.SteamStorefront},
+		for _, storefront := range []models.Storefront{
+			models.SteamStorefront,
+			models.ItchIOStorefront,
 		} {
 			// If the expanded URL is in the same format as the ScrapeURL
-			if check.url.Match(url.ExpandedURL) {
-				if _, ok := storefrontMap[check.storefront]; !ok {
-					storefrontMap[check.storefront] = mapset.NewThreadUnsafeSet[string]()
+			if storefront.ScrapeURL().Match(url.ExpandedURL) {
+				if _, ok := storefrontMap[storefront]; !ok {
+					storefrontMap[storefront] = mapset.NewThreadUnsafeSet[string]()
 				}
-				if !storefrontMap[check.storefront].Contains(url.ExpandedURL) {
-					storefrontMap[check.storefront].Add(url.ExpandedURL)
+				if !storefrontMap[storefront].Contains(url.ExpandedURL) {
+					storefrontMap[storefront].Add(url.ExpandedURL)
 					// Because we know that this is a new game, we will increment the game total
 					totalGames++
 				}

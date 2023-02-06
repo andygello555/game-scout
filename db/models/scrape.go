@@ -570,7 +570,7 @@ func ScrapeStorefrontsForGameModel[ID comparable](gameModel GameModel[ID], store
 				storefrontWrapper := gameModelWrapper.StorefrontScraper(storefront)
 				if _, ok = storefrontWrapper.(*UnscrapableStorefront[ID]); !ok {
 					// Pop a random URL from the set of URLs for this storefront
-					id, _ := storefrontIDs[SteamStorefront].Pop()
+					id, _ := storefrontIDs[storefront].Pop()
 					// Do some scraping to find more details for the game
 					ScrapeStorefrontForGameModel(id, storefrontWrapper, config)
 				} else {
