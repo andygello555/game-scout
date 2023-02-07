@@ -3,11 +3,9 @@ package steamcmd
 import (
 	"bufio"
 	"fmt"
+	"github.com/andygello555/game-scout/browser"
 	"math/rand"
-	"net/url"
 	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -78,23 +76,10 @@ func benchmarkSteamCMDFlow(workers int, b *testing.B) {
 	for scanner.Scan() {
 		// Parse the scanned text to a URL
 		text := scanner.Text()
-		var u *url.URL
-		if u, err = url.Parse(strings.TrimSpace(text)); err != nil {
-			b.Fatalf("Could not parse \"%s\" to a URL", text)
-		}
-
-		// Find the appID in the path of the URL (aka. the integer value)
-		var appID int64
-		for _, path := range strings.Split(u.Path, "/") {
-			if appID, err = strconv.ParseInt(path, 10, 64); err == nil {
-				break
-			}
-		}
-
-		if appID != 0 {
+		if browser.SteamAppPage.Match(text) {
+			args := browser.SteamAppPage.ExtractArgs(text)
+			appID := args[0].(int64)
 			sampleAppIDs = append(sampleAppIDs, int(appID))
-		} else {
-			b.Fatalf("Could not find appID in \"%s\"", u.Path)
 		}
 	}
 

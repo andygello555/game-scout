@@ -181,6 +181,12 @@ const (
 	SteamSpyAppDetails ScrapeURL = "%s://steamspy.com/api.php?request=appdetails&appid=%d"
 	// ItchIOGamePage is the game page for a given developer and game-title combo.
 	ItchIOGamePage ScrapeURL = "%s://%s.itch.io/%s"
+	// ItchIOGameDevlogs is a page for an Itch.IO title listing all the developer logs/updates for that game. Like
+	// ItchIOGamePage it also takes a developer and game-title slug.
+	ItchIOGameDevlogs ScrapeURL = "%s://%s.itch.io/%s/devlog"
+	// ItchIOGameDevlog is a page for an individual devlog for the given developer-game slug pair for a title on
+	// Itch.IO.
+	ItchIOGameDevlog ScrapeURL = "%s://%s.itch.io/%s/devlog/%d/%s"
 )
 
 // Name returns the name of the ScrapeURL.
@@ -200,6 +206,10 @@ func (su ScrapeURL) Name() string {
 		return "SteamSpyAppDetails"
 	case ItchIOGamePage:
 		return "ItchIOGamePage"
+	case ItchIOGameDevlogs:
+		return "ItchIOGameDevlogs"
+	case ItchIOGameDevlog:
+		return "ItchIOGameDevlog"
 	default:
 		return "<nil>"
 	}

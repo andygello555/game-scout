@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/gob"
+	"encoding/json"
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/anaskhan96/soup"
@@ -18,6 +19,7 @@ import (
 	"gorm.io/gorm/clause"
 	"math"
 	"net/http"
+	"os"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -345,6 +347,14 @@ func (g *Game) Update(db *gorm.DB, config ScrapeConfig) error {
 func (g *Game) Wrapper() GameModelWrapper[string, GameModel[string]] { return &GameWrapper{Game: g} }
 func (g *Game) GetID() string                                        { return g.Website.String }
 
+func (g *Game) initTotalCommentsUpvotesDownvotes() {
+	if !g.TotalComments.IsValid() || !g.TotalUpvotes.IsValid() || !g.TotalDownvotes.IsValid() {
+		g.TotalUpvotes = null.Int32From(0)
+		g.TotalDownvotes = null.Int32From(0)
+		g.TotalComments = null.Int32From(0)
+	}
+}
+
 type GameWrapper struct{ Game *Game }
 
 func (g *GameWrapper) Default() {
@@ -546,11 +556,7 @@ func (g *GameSteamStorefront) ScrapeCommunity(config ScrapeConfig, maxTries int,
 			eventsProcessed := 0
 
 			// Once we know we can get some data we will set the totals fields
-			if !g.Game.TotalUpvotes.IsValid() || !g.Game.TotalDownvotes.IsValid() || !g.Game.TotalComments.IsValid() {
-				g.Game.TotalUpvotes = null.Int32From(0)
-				g.Game.TotalDownvotes = null.Int32From(0)
-				g.Game.TotalComments = null.Int32From(0)
-			}
+			g.Game.initTotalCommentsUpvotesDownvotes()
 
 			var events []any
 			events, _ = jsonBody["events"].([]interface{})
@@ -777,11 +783,47 @@ func (g *GameItchIOStorefront) Args(url string) []any {
 }
 func (g *GameItchIOStorefront) GetStorefront() Storefront { return ItchIOStorefront }
 
+func (g *GameItchIOStorefront) itchIOComments(doc *soup.Root, developer, gameSlug string) {
+	comments := doc.FindAll("div", "class", "community_post")
+	g.Game.initTotalCommentsUpvotesDownvotes()
+	g.Game.TotalComments.Int32 += int32(len(comments))
+	log.INFO.Printf("Itch.IO title %s (dev: %s), has %d comments", gameSlug, developer, g.Game.TotalComments.Int32)
+
+	for _, comment := range comments {
+		var upvotes, downvotes int64
+		for _, vote := range []struct {
+			name string
+			int  *int64
+		}{
+			{name: "upvotes", int: &upvotes},
+			{name: "downvotes", int: &downvotes},
+		} {
+			if el := comment.Find("span", "class", vote.name); el.Error == nil {
+				var err error
+				if *vote.int, err = strconv.ParseInt(strings.Trim(el.Text(), "()+-"), 10, 32); err != nil {
+					log.WARNING.Printf(
+						"Could not parse number of %s for comment %q on Itch.IO title %s (dev: %s)'s page",
+						vote.name, comment.Attrs()["id"], gameSlug, developer,
+					)
+				} else {
+					log.INFO.Printf(
+						"Comment %q for Itch.IO title %s (dev: %s) has %d %s",
+						comment.Attrs()["id"], gameSlug, developer, *vote.int, vote.name,
+					)
+				}
+			}
+		}
+		g.Game.TotalUpvotes.Int32 += int32(upvotes)
+		g.Game.TotalDownvotes.Int32 += int32(downvotes)
+	}
+}
+
 func (g *GameItchIOStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
 	developer, gameSlug := args[0], args[1]
 	storefrontConfig := config.ScrapeGetStorefront(ItchIOStorefront)
 	tagConfig := storefrontConfig.StorefrontTags()
 	return browser.ItchIOGamePage.RetrySoup(nil, maxTries, minDelay, func(doc *soup.Root, resp *http.Response) (err error) {
+		// First find the game's name. This is contained within h1.game_title
 		var title soup.Root
 		if title = doc.Find("h1", "class", "game_title"); title.Error != nil {
 			return errors.Wrapf(
@@ -793,6 +835,22 @@ func (g *GameItchIOStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, min
 		g.Game.Name = null.StringFrom(title.Text())
 		log.INFO.Printf("Name found for Itch.IO title %s (dev: %s): %q", gameSlug, developer, g.Game.Name.String)
 
+		// Find the verified developer usernames for this game. This can be found in meta[property='twitter:creator']
+		if creator := doc.Find("meta", "property", "twitter:creator"); creator.Error == nil {
+			g.Game.VerifiedDeveloperUsernames = []string{strings.Trim(creator.Attrs()["content"], "@")}
+			log.INFO.Printf(
+				"Found verified developer(s): %v, for Itch.IO title %s (dev: %s)",
+				g.Game.VerifiedDeveloperUsernames, gameSlug, developer,
+			)
+		} else {
+			log.WARNING.Printf(
+				"Could not find meta[property='twitter:creator'] for Itch.IO title %s (dev: %s)",
+				gameSlug, developer,
+			)
+		}
+
+		// Then we find the div.game_info_panel_widget. This contains some further information on this title such as the
+		// rating (review score), and release date.
 		var gameInfoPanel soup.Root
 		if gameInfoPanel = doc.Find("div", "class", "game_info_panel_widget"); gameInfoPanel.Error != nil {
 			return errors.Wrapf(
@@ -801,6 +859,7 @@ func (g *GameItchIOStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, min
 			)
 		}
 
+		// abbreviationTitle finds the title attribute of an <abbr> that resides within the given soup.Root.
 		abbreviationTitle := func(value soup.Root) *string {
 			var abbr soup.Root
 			if abbr = value.Find("abbr"); abbr.Error != nil {
@@ -811,6 +870,7 @@ func (g *GameItchIOStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, min
 			return &abbrTitle
 		}
 
+		var releaseStatus string
 		infoItemPairs := doc.FindAll("td")
 		for i := 0; i < len(infoItemPairs); i += 2 {
 			infoKey := infoItemPairs[i].Text()
@@ -856,11 +916,23 @@ func (g *GameItchIOStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, min
 					g.Game.TotalReviews.Int32, g.Game.PositiveReviews.Int32, g.Game.NegativeReviews.Int32, gameSlug, developer,
 				)
 			case "status":
-				if strings.ToLower(infoValue.FullText()) != "released" {
+				releaseStatus = strings.ToLower(infoValue.FullText())
+				if releaseStatus != "released" && g.Game.ReleaseDate.IsZero() {
 					g.Game.ReleaseDate = null.TimeFrom(time.Now().UTC().Add(time.Hour * 24 * 30 * 5))
 					log.INFO.Printf(
 						"Itch.IO title %s (dev: %s) has release status: %q, so we will assume it hasn't been released yet: %s",
-						gameSlug, developer, infoValue.FullText(), g.Game.ReleaseDate.Time.String(),
+						gameSlug, developer, releaseStatus, g.Game.ReleaseDate.Time.String(),
+					)
+				} else if releaseStatus == "released" {
+					log.WARNING.Printf(
+						"Itch.IO title %s (dev: %s) has release status: %q == \"released\", so we will assume that "+
+							"release date will be set later",
+						gameSlug, developer, releaseStatus,
+					)
+				} else {
+					log.WARNING.Printf(
+						"Itch.IO title %s (dev: %s) has release status: %q != \"released\", but release date is already set: %s",
+						gameSlug, developer, releaseStatus, g.Game.ReleaseDate.Time.String(),
 					)
 				}
 			case "tags":
@@ -893,27 +965,119 @@ func (g *GameItchIOStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, min
 				)
 			}
 		}
+
+		// If the release date has not yet been set then we will default it to +/- 5 months
+		if g.Game.ReleaseDate.IsZero() {
+			if releaseStatus == "released" {
+				// Game has been released, but we don't know the exact release date, so we'll set the release date to 5
+				// months before today
+				g.Game.ReleaseDate = null.TimeFrom(time.Now().UTC().Add(time.Hour * 24 * 30 * 5 * -1))
+			} else {
+				// Game has not been released, or we could not fetch the release status, and we don't know the future
+				// release date, so we'll set the release date to 5 months from now.
+				g.Game.ReleaseDate = null.TimeFrom(time.Now().UTC().Add(time.Hour * 24 * 30 * 5))
+			}
+			log.INFO.Printf(
+				"Release date for Itch.IO title %s (dev: %s) has been defaulted to: %s",
+				gameSlug, developer, g.Game.ReleaseDate.Time.String(),
+			)
+		}
+
+		g.itchIOComments(doc, developer.(string), gameSlug.(string))
+		log.INFO.Printf(
+			"Itch.IO title %s (dev: %s) has %d upvotes, and %d downvotes on its main page",
+			gameSlug, developer, g.Game.TotalUpvotes.Int32, g.Game.TotalDownvotes.Int32,
+		)
 		return
 	}, developer, gameSlug)
 }
 
 func (g *GameItchIOStorefront) ScrapeReviews(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
-	//TODO implement me
 	return nil
 }
 
 func (g *GameItchIOStorefront) ScrapeTags(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
-	//TODO implement me
 	return nil
 }
 
 func (g *GameItchIOStorefront) ScrapeCommunity(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
-	//TODO implement me
-	return nil
+	developer, gameSlug := args[0], args[1]
+	return browser.ItchIOGameDevlogs.RetrySoup(nil, maxTries, minDelay, func(doc *soup.Root, resp *http.Response) (err error) {
+		devlogs := doc.FindAll("a", "class", "title")
+		log.INFO.Printf(
+			"Found %d potential devlogs for Itch.IO title %s (dev: %s)",
+			len(devlogs), gameSlug, developer,
+		)
+		for devlogNo, devlog := range devlogs {
+			// If the href for the current <a> matches the ItchIOGameDevlog ScrapeURL, then we will initiate another
+			// RetrySoup method.
+			if url := devlog.Attrs()["href"]; browser.ItchIOGameDevlog.Match(url) {
+				devlogArgs := browser.ItchIOGameDevlog.ExtractArgs(url)
+				if err = browser.ItchIOGameDevlog.RetrySoup(nil, maxTries, minDelay, func(doc *soup.Root, resp *http.Response) (err error) {
+					// We first check if this devlog needs to be moderated so that we don't retry this a bunch of times.
+					if pageMessage := doc.Find("div", "class", "user_needs_review_page"); pageMessage.Error == nil {
+						log.WARNING.Printf(
+							"Devlog %d: %v, for Itch.IO title %s (dev: %s) still needs to be moderated. Skipping...",
+							devlogNo+1, devlogArgs, gameSlug, developer,
+						)
+						return myErrors.Done
+					}
+
+					var likesCountEl soup.Root
+					if likesCountEl = doc.Find("div", "class", "like_button_drop"); likesCountEl.Error != nil {
+						_ = os.WriteFile(fmt.Sprintf("%s-%s-devlog-%d-%s.html", devlogArgs...), []byte(doc.HTML()), 0666)
+						log.ERROR.Printf(
+							"Could not find likes for devlog %v for Itch.IO title %s (dev: %s): %v",
+							devlogArgs, gameSlug, developer, likesCountEl.Error,
+						)
+						return myErrors.Break
+					}
+
+					type likeData struct {
+						Likes int32 `json:"likes_count"`
+						Liked bool  `json:"liked"`
+					}
+					data := likeData{}
+
+					if err = json.Unmarshal([]byte(likesCountEl.Attrs()["data-init"]), &data); err != nil {
+						log.ERROR.Printf(
+							"Could not parse likes data for devlog %v for Itch.IO title %s (dev: %s): %v",
+							devlogArgs, gameSlug, developer, err,
+						)
+						return myErrors.Break
+					}
+					log.INFO.Printf(
+						"Devlog %d: %v, for Itch.IO title %s (dev: %s) has %d likes",
+						devlogNo+1, devlogArgs, gameSlug, developer, data.Likes,
+					)
+
+					g.Game.initTotalCommentsUpvotesDownvotes()
+					g.Game.TotalUpvotes.Int32 += data.Likes
+
+					g.itchIOComments(doc, developer.(string), gameSlug.(string))
+					log.INFO.Printf(
+						"Itch.IO title %s (dev: %s) has %d upvotes, and %d downvotes on its main page + %d events pages",
+						gameSlug, developer, g.Game.TotalUpvotes.Int32, g.Game.TotalDownvotes.Int32, devlogNo+1,
+					)
+					return
+				}, devlogArgs...); err != nil {
+					log.ERROR.Printf(
+						"Could not find upvotes, downvotes, and comments on devlog no. %d: %v, for Itch.IO title %s "+
+							"(dev: %s): %v",
+						devlogNo+1, devlogArgs, gameSlug, developer, err,
+					)
+					return errors.Wrapf(
+						err, "fetching soup for event %q Itch.IO title %s (dev: %s)",
+						url, gameSlug, developer,
+					)
+				}
+			}
+		}
+		return
+	}, developer, gameSlug)
 }
 
 func (g *GameItchIOStorefront) ScrapeExtra(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
-	//TODO implement me
 	return nil
 }
 
@@ -921,4 +1085,5 @@ func (g *GameItchIOStorefront) AfterScrape(args ...any) {
 	standardisedURL := ItchIOStorefront.ScrapeURL().Fill(args...)
 	g.Game.Storefront = ItchIOStorefront
 	g.Game.Website = null.StringFrom(standardisedURL)
+	g.Game.Publisher = null.StringFromPtr(nil)
 }
