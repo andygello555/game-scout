@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/game-scout/email"
+	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/andygello555/game-scout/steamcmd"
 	task "github.com/andygello555/game-scout/tasks"
 	myTwitter "github.com/andygello555/game-scout/twitter"
@@ -22,6 +24,7 @@ import (
 	"github.com/volatiletech/null/v9"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -649,6 +652,62 @@ func main() {
 					return cli.NewExitError(err.Error(), 1)
 				}
 				fmt.Println(state.String())
+				return
+			},
+		},
+		{
+			Name: "email",
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:     "subject",
+					Required: true,
+				},
+				cli.StringFlag{
+					Name:     "body",
+					Required: true,
+				},
+				cli.StringFlag{
+					Name:      "file",
+					TakesFile: true,
+				},
+				cli.StringSliceFlag{
+					Name:  "recipients",
+					Value: &cli.StringSlice{},
+				},
+			},
+			Action: func(c *cli.Context) (err error) {
+				var e *email.Email
+				if e, err = email.NewEmail(); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+				e.Recipients = c.StringSlice("recipients")
+				e.Subject = c.String("subject")
+				e.FromName = globalConfig.Email.FromName
+				e.FromAddress = globalConfig.Email.From
+				defer func(e *email.Email) {
+					err = myErrors.MergeErrors(err, e.Close())
+				}(e)
+
+				fileBytes, _ := os.ReadFile(c.String("file"))
+
+				if err = e.AddParts(
+					email.Part{Buffer: bytes.NewReader([]byte(c.String("body")))},
+					email.Part{
+						Buffer:     bytes.NewReader(fileBytes),
+						Attachment: true,
+						Filename:   filepath.Base(c.String("file")),
+					},
+				); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+
+				if err = e.Write(); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+
+				if err = email.Client.Send(e); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
 				return
 			},
 		},

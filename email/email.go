@@ -49,18 +49,22 @@ func (wc *plainWriteCloser) Close() error            { return wc.Flush() }
 type zipWriteCloser struct {
 	io.Writer
 	archive *zip.Writer
+	b64     io.WriteCloser
 }
 
 func newZipWriteCloser(filename string, w io.Writer) (io.WriteCloser, error) {
 	var err error
-	z := &zipWriteCloser{archive: zip.NewWriter(base64.NewEncoder(base64.StdEncoding, w))}
+	z := &zipWriteCloser{b64: base64.NewEncoder(base64.StdEncoding, w)}
+	z.archive = zip.NewWriter(z.b64)
 	if z.Writer, err = z.archive.Create(filename); err != nil {
 		return nil, err
 	}
 	return z, nil
 }
 
-func (z *zipWriteCloser) Close() (err error) { return z.archive.Close() }
+func (z *zipWriteCloser) Close() (err error) {
+	return myErrors.MergeErrors(z.archive.Close(), z.b64.Close())
+}
 
 // Part stores the information for a single part of an Email. When passing a Part to Email.AddPart Buffer should be set
 // so that the Part can be intermittently cached to a file.

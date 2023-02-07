@@ -552,7 +552,9 @@ func (g *GameSteamStorefront) ScrapeCommunity(config ScrapeConfig, maxTries int,
 				g.Game.TotalComments = null.Int32From(0)
 			}
 
-			for _, event := range jsonBody["events"].([]interface{}) {
+			var events []any
+			events, _ = jsonBody["events"].([]interface{})
+			for _, event := range events {
 				eventBody := event.(map[string]any)
 				switch eventBody["gid"].(type) {
 				case string:
