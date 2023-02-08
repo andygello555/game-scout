@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"time"
@@ -716,10 +717,15 @@ func main() {
 				case email.Started:
 					context = &StartedContext{state}
 				case email.Error:
+					stackTraces := new(strings.Builder)
 					context = &ErrorContext{
-						Time:  time.Now(),
-						Error: errors.New("this is a made-up error"),
-						State: state,
+						Time:        time.Now(),
+						Error:       myErrors.TemporaryError(false, "this is a made-up error"),
+						State:       state,
+						StackTraces: stackTraces,
+					}
+					if err = pprof.Lookup("goroutine").WriteTo(stackTraces, 1); err != nil {
+						return cli.NewExitError(err.Error(), 1)
 					}
 				case email.Finished:
 					context = &email.FinishedContext{

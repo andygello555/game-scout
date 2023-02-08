@@ -7,5 +7,11 @@ Robo-scout has encountered an error during the Scout procedure which started at 
 The error occurred in the {{ $phase.String }} phase at {{ stamp .Time }}:
 "{{ .Error.Error }}"
 
+{{ if checkStackTracer .Error }}Error is stack-traceable:
+{{ stackTraceString (stackTrace .Error) }}{{ end }}
+
+{{ if ne .StackTraces nil }}We also found the stack traces for all the running goroutines:
+{{ .StackTraces.String }}{{ end }}
+
 {{ if .State.Loaded }}Current state was loaded from disk:{{ else }}Current state was just created, so we are probably starting from scratch today:{{ end }}
 {{ .State.String }}
