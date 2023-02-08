@@ -76,7 +76,7 @@ func (bt BindingType) WrapResponse(client *ClientWrapper, response any) (result 
 			// If we find any errors that shouldn't be ignored we will return that error
 			ignore := true
 			for _, tweetErr := range tweetRecentSearchResponse.Raw.Errors {
-				if mapset.NewThreadUnsafeSet[string](client.Config.TwitterIgnoredErrorTypes()...).Contains(tweetErr.Type) {
+				if !mapset.NewThreadUnsafeSet[string](client.Config.TwitterIgnoredErrorTypes()...).Contains(tweetErr.Type) {
 					log.ERROR.Printf(
 						"Un-ignorable error occurred in %s response: %s, %s",
 						bt.String(), tweetErr.Type, tweetErr.Detail,
