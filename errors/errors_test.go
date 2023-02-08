@@ -150,3 +150,13 @@ func TestRetry(t *testing.T) {
 		}
 	}
 }
+
+func ExampleIsTemporary() {
+	nonTempErr := TemporaryError(false, "this is not a temporary error")
+	tempErr := TemporaryErrorf(true, "this is a temporary error")
+	fmt.Printf("%q is temporary = %t\n", nonTempErr.Error(), IsTemporary(nonTempErr))
+	fmt.Printf("%q is temporary = %t\n", tempErr.Error(), IsTemporary(tempErr))
+	// Output:
+	// "this is not a temporary error" is temporary = false
+	// "this is a temporary error" is temporary = true
+}

@@ -9,6 +9,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/schollz/progressbar/v3"
 	"math"
+	"runtime/pprof"
+	"strings"
 	"time"
 )
 
@@ -48,14 +50,19 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 		// If an error occurs we'll always attempt to save the state
 		if err != nil {
 			err = myErrors.MergeErrors(err, state.Save())
+			log.ERROR.Printf("Error occurred in Scout procedure, sending error email: %v", err)
 			// Send the Error email Template
 			context := &ErrorContext{
-				Time:  time.Now().UTC(),
-				Error: err,
-				State: state,
+				Time:        time.Now().UTC(),
+				Error:       err,
+				State:       state,
+				StackTraces: new(strings.Builder),
 			}
+			traceErr := pprof.Lookup("goroutine").WriteTo(context.StackTraces, 1)
 			template := context.Execute()
-			err = myErrors.MergeErrors(err, template.Error, template.SendSync().Error)
+			if err = myErrors.MergeErrors(err, traceErr, template.Error, template.SendSync().Error); err != nil {
+				log.ERROR.Printf("Errors after sending error email: %v", err)
+			}
 		}
 	}()
 

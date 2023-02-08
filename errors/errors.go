@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+type stackTracer interface {
+	StackTrace() errors.StackTrace
+}
+
 // temporary indicates whether an error is temporary
 type temporary interface {
 	Temporary() bool
@@ -16,6 +20,8 @@ type temporaryProto struct {
 	temporaryMethod func() bool
 	msgMethod       func() string
 	causeMethod     func() error
+	// causedItself is set when the error returned by causeMethod is the temporaryProto itself wrapped as a stackTracer.
+	causedItself bool
 }
 
 // Temporary calls the temporaryMethod of the prototype, thus implementing the temporary interface.
@@ -23,19 +29,23 @@ func (tp temporaryProto) Temporary() bool {
 	return tp.temporaryMethod()
 }
 
-// Error returns the outcome of the msgMethod of the prototype if there is no causeMethod. Otherwise, the result of
+// Error returns the outcome of the msgMethod of the prototype if causedItself is set. Otherwise, the result of
 // msgMethod will be concatenated with causeMethod.
 func (tp temporaryProto) Error() string {
-	if tp.causeMethod == nil {
+	if tp.causedItself {
 		return tp.msgMethod()
-	} else {
-		return tp.msgMethod() + ": " + tp.causeMethod().Error()
 	}
+	return tp.msgMethod() + ": " + tp.causeMethod().Error()
 }
 
 // Cause calls the causeMethod of the prototype, thus implementing the causer interface.
 func (tp temporaryProto) Cause() error {
 	return tp.causeMethod()
+}
+
+// StackTrace returns the errors.StackTrace of the Cause error.
+func (tp temporaryProto) StackTrace() errors.StackTrace {
+	return tp.causeMethod().(stackTracer).StackTrace()
 }
 
 // IsTemporary returns true if err is temporary.
@@ -44,13 +54,21 @@ func IsTemporary(err error) bool {
 	return ok && te.Temporary()
 }
 
+// TemporaryError creates a new temporary error with an Error method that returns the given message.
+func TemporaryError(temporary bool, msg string) error {
+	return TemporaryErrorf(temporary, msg)
+}
+
 // TemporaryErrorf creates a new temporary error with an Error method that returns the string interpolation of the given
 // format string and arguments.
 func TemporaryErrorf(temporary bool, format string, a ...any) error {
 	temp := struct{ temporaryProto }{}
 	temp.temporaryMethod = func() bool { return temporary }
 	temp.msgMethod = func() string { return fmt.Sprintf(format, a...) }
-	temp.causeMethod = nil
+	// Make the temporary error aware by adding a stack
+	tempWithStack := errors.WithStack(temp)
+	temp.causeMethod = func() error { return tempWithStack }
+	temp.causedItself = true
 	return temp
 }
 
@@ -60,7 +78,14 @@ func TemporaryWrap(temporary bool, err error, message string) error {
 	temp := struct{ temporaryProto }{}
 	temp.temporaryMethod = func() bool { return temporary }
 	temp.msgMethod = func() string { return message }
+
+	// Make the error stack traceable if it is not already
+	if _, ok := err.(stackTracer); !ok {
+		err = errors.WithStack(err)
+	}
+
 	temp.causeMethod = func() error { return err }
+	temp.causedItself = false
 	return temp
 }
 
@@ -71,7 +96,7 @@ func TemporaryWrapf(temporary bool, err error, format string, a ...any) error {
 
 // MergeErrors merges all the given errors into one error. This is done by using the fmt.Errorf function and separating
 // each error with a semicolon. If an error is nil, then the error won't be merged. If there are no non-nil errors given
-// (this includes providing 0 errors) then nil will be returned.
+// (this includes providing 0 errors) then nil will be returned. The returned error implements stackTracer.
 func MergeErrors(errs ...error) error {
 	var mergedErr error
 	for _, err := range errs {
@@ -83,7 +108,7 @@ func MergeErrors(errs ...error) error {
 			}
 		}
 	}
-	return mergedErr
+	return errors.WithStack(mergedErr)
 }
 
 // RetryFunction is the signature of the function that the Retry function must be given.

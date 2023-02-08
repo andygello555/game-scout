@@ -8,6 +8,7 @@ import (
 	"github.com/pkg/errors"
 	"html/template"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -309,6 +310,23 @@ var stateContextFuncMap = map[string]any{
 		v, _ := field.Get(key)
 		return v
 	},
+	"checkStackTracer": func(err error) bool {
+		type st interface{ StackTrace() errors.StackTrace }
+		_, ok := err.(st)
+		return ok
+	},
+	"stackTrace": func(err error) errors.StackTrace {
+		type st interface{ StackTrace() errors.StackTrace }
+		if stI, ok := err.(st); ok {
+			return stI.StackTrace()
+		}
+		return nil
+	},
+	"stackTraceString": func(stackTrace errors.StackTrace) string {
+		var builder strings.Builder
+		_, _ = fmt.Fprintf(&builder, "%+v", stackTrace)
+		return strings.TrimLeft(builder.String(), "\n")
+	},
 }
 
 type StartedContext struct {
@@ -328,9 +346,10 @@ func (s *StartedContext) AdditionalParts() (parts []email.Part, err error) {
 }
 
 type ErrorContext struct {
-	Time  time.Time
-	Error error
-	State *ScoutState
+	Time        time.Time
+	Error       error
+	State       *ScoutState
+	StackTraces *strings.Builder
 }
 
 func (e *ErrorContext) Path() email.TemplatePath { return email.Error }
