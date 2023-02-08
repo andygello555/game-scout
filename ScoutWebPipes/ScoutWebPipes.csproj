@@ -16,9 +16,9 @@
     <PackageReference Include="SteamKit2" Version="2.4.0-Alpha.3" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="../config.json">
+    <Content Include="../config.json">
       <Link>%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
+    </Content>
   </ItemGroup>
 </Project>
