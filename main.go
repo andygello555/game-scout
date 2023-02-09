@@ -13,6 +13,7 @@ import (
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/game-scout/email"
 	myErrors "github.com/andygello555/game-scout/errors"
+	"github.com/andygello555/game-scout/monday"
 	"github.com/andygello555/game-scout/steamcmd"
 	task "github.com/andygello555/game-scout/tasks"
 	myTwitter "github.com/andygello555/game-scout/twitter"
@@ -65,6 +66,11 @@ func main() {
 		panic(err)
 	}
 	log.INFO.Printf("Done setting up Twitter client in %s", time.Now().UTC().Sub(start).String())
+
+	start = time.Now().UTC()
+	log.INFO.Printf("Setting up Monday client at %s", start.String())
+	monday.CreateClient(globalConfig.Monday)
+	log.INFO.Printf("Done setting up Monday client in %s", time.Now().UTC().Sub(start).String())
 
 	// Set up the default email client
 	start = time.Now().UTC()
@@ -1015,6 +1021,99 @@ func main() {
 				if createState && c.Bool("stateDelete") {
 					state.Delete()
 				}
+				return
+			},
+		},
+		{
+			Name:  "monday",
+			Usage: "run a Monday Client Binding",
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:  "binding",
+					Usage: "the name of the binding to execute",
+				},
+				cli.StringSliceFlag{
+					Name:  "arg",
+					Usage: "an arg to execute the binding with",
+					Value: &cli.StringSlice{},
+				},
+				cli.BoolFlag{
+					Name:  "all",
+					Usage: "fetch all the resources from the binding using a Paginator",
+				},
+				cli.BoolFlag{
+					Name:  "log",
+					Usage: "whether to enable logging for the Monday API Client",
+				},
+			},
+			Action: func(c *cli.Context) (err error) {
+				if c.Bool("log") {
+					monday.DefaultClient.Log = func(s string) {
+						log.INFO.Println(s)
+					}
+				}
+
+				argsToInts := func(idx int, value string, arr []string) any {
+					var intVal int64
+					if intVal, err = strconv.ParseInt(value, 10, 64); err != nil {
+						panic(err)
+					}
+					return int(intVal)
+				}
+
+				var execute func() (any, error)
+				switch strings.ToLower(c.String("binding")) {
+				case "getusers":
+					execute = func() (any, error) {
+						return monday.GetUsers.Execute(monday.DefaultClient)
+					}
+				case "getboards":
+					args := slices.Comprehension(c.StringSlice("arg"), argsToInts)
+					execute = func() (any, error) {
+						return monday.GetBoards.Execute(monday.DefaultClient, args...)
+					}
+					if c.Bool("all") {
+						execute = func() (any, error) {
+							if paginator, err := monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, monday.GetBoards, args...); err != nil {
+								return nil, err
+							} else {
+								return paginator.All()
+							}
+						}
+					}
+				case "getgroups":
+					execute = func() (any, error) {
+						return monday.GetGroups.Execute(monday.DefaultClient, slices.Comprehension(c.StringSlice("arg"), argsToInts)...)
+					}
+				case "getcolumns":
+					execute = func() (any, error) {
+						return monday.GetColumns.Execute(monday.DefaultClient, slices.Comprehension(c.StringSlice("arg"), argsToInts)...)
+					}
+				case "getcolumnmap":
+					execute = func() (any, error) {
+						return monday.GetColumnMap.Execute(monday.DefaultClient, slices.Comprehension(c.StringSlice("arg"), argsToInts)...)
+					}
+				case "getitems":
+					args := slices.Comprehension(c.StringSlice("arg"), argsToInts)
+					execute = func() (any, error) {
+						return monday.GetItems.Execute(monday.DefaultClient, args...)
+					}
+					if c.Bool("all") {
+						execute = func() (any, error) {
+							if paginator, err := monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, monday.GetItems, args...); err != nil {
+								return nil, err
+							} else {
+								return paginator.All()
+							}
+						}
+					}
+				}
+
+				var resource any
+				if resource, err = execute(); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+				fmt.Printf("%+v\n", resource)
 				return
 			},
 		},

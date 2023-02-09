@@ -340,6 +340,12 @@ func (c *TwitterConfig) TwitterQuery() string {
 	return fmt.Sprintf("%s (%s)", query, strings.Join(hashtags, " OR "))
 }
 
+type MondayConfig struct {
+	Token string `json:"token"`
+}
+
+func (mc *MondayConfig) MondayToken() string { return mc.Token }
+
 type TagConfig struct {
 	// DefaultValue is the default value for tags that are not included in the Values map. The value of each tag for a
 	// models.Game (on the models.SteamStorefront) will be multiplied by the number of upvotes it has then accumulated.
@@ -576,6 +582,7 @@ type Config struct {
 	Email         *EmailConfig         `json:"email"`
 	Tasks         *TaskConfig          `json:"tasks"`
 	Twitter       *TwitterConfig       `json:"twitter"`
+	Monday        *MondayConfig        `json:"monday,omitempty"`
 	Scrape        *ScrapeConfig        `json:"scrape"`
 	SteamWebPipes *SteamWebPipesConfig `json:"SteamWebPipes"`
 }
