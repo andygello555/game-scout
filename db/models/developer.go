@@ -46,6 +46,11 @@ func (d *Developer) String() string {
 	}[d.Disabled])
 }
 
+// Link returns the URL link to the Developer's Twitter page.
+func (d *Developer) Link() string {
+	return fmt.Sprintf("https://twitter.com/%s", d.Username)
+}
+
 func (d *Developer) GetObservedName() string { return "Snapshot Weighted Score" }
 
 func (d *Developer) GetVariableNames() []string { return []string{"Snapshot Date"} }

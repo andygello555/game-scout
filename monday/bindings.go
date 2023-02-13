@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+// Paginator can fetch resources from a Binding that is paginated. Use NewPaginator to create a new one for a given
+// Binding.
 type Paginator[ResT any, RetT any] struct {
 	client      *Client
 	binding     Binding[ResT, RetT]
@@ -21,8 +23,10 @@ type Paginator[ResT any, RetT any] struct {
 	currentPage RetT
 }
 
+// NewPaginator creates a new Paginator using the given Client, wait time.Duration, and arguments for the given Binding.
+// The first given argument should not be the page parameter. Args should contain everything after the page parameter.
 func NewPaginator[ResT any, RetT any](client *Client, waitTime time.Duration, binding Binding[ResT, RetT], args ...any) (paginator *Paginator[ResT, RetT], err error) {
-	if !binding.(bindingProto[ResT, RetT]).paginated {
+	if !binding.Paginated() {
 		err = fmt.Errorf("cannot create Paginator as Binding is not pagenatable")
 		return
 	}
@@ -98,11 +102,14 @@ type Binding[ResT any, RetT any] interface {
 	// multiple arguments that should be handled accordingly and passed to the graphql.Request. These are the same
 	// arguments passed in from the Binding.Execute method.
 	Request(args ...any) (request *graphql.Request)
-	// Response converts the response from the Monday API from the type ResT to the type RetT.
-	Response(response ResT) RetT
+	// Response converts the response from the Monday API from the type ResT to the type RetT. It can also be passed
+	// additional arguments from Execute.
+	Response(response ResT, args ...any) RetT
 	// Execute will execute the binding using the given Client and arguments. It returns the response converted to RetT
 	// using the Response method, as well as an error that could have occurred.
 	Execute(client *Client, args ...any) (response RetT, err error)
+	// Paginated returns whether the Binding is paginated.
+	Paginated() bool
 }
 
 // bindingProto is the prototype for Binding.
@@ -110,7 +117,7 @@ type bindingProto[ResT, RetT any] struct {
 	jsonResponseKey string
 	paginated       bool
 	requestMethod   func(args ...any) *graphql.Request
-	responseMethod  func(response ResT) RetT
+	responseMethod  func(response ResT, args ...any) RetT
 }
 
 // NewBinding creates a new Binding for the Monday API via a prototype that implements the Binding interface. The
@@ -133,7 +140,7 @@ type bindingProto[ResT, RetT any] struct {
 // Paginator instance to find all/some resources for that Binding. When creating a paginated Binding make sure to bind
 // first argument of the request method to be the page number as an int, so that the Paginator can feed the page number
 // to the Binding appropriately. As well as this, the RetT type must be an array type.
-func NewBinding[ResT any, RetT any](request func(args ...any) *graphql.Request, response func(response ResT) RetT, jsonResponseKey string, paginated bool) Binding[ResT, RetT] {
+func NewBinding[ResT any, RetT any](request func(args ...any) *graphql.Request, response func(response ResT, args ...any) RetT, jsonResponseKey string, paginated bool) Binding[ResT, RetT] {
 	return bindingProto[ResT, RetT]{
 		jsonResponseKey: jsonResponseKey,
 		paginated:       paginated,
@@ -146,11 +153,11 @@ func (bp bindingProto[ResT, RetT]) Request(args ...any) *graphql.Request {
 	return bp.requestMethod(args...)
 }
 
-func (bp bindingProto[ResT, RetT]) Response(response ResT) RetT {
+func (bp bindingProto[ResT, RetT]) Response(response ResT, args ...any) RetT {
 	if bp.responseMethod == nil {
 		return any(response).(RetT)
 	}
-	return bp.responseMethod(response)
+	return bp.responseMethod(response, args...)
 }
 
 func (bp bindingProto[ResT, RetT]) Execute(client *Client, args ...any) (response RetT, err error) {
@@ -171,10 +178,12 @@ func (bp bindingProto[ResT, RetT]) Execute(client *Client, args ...any) (respons
 	if err = client.Run(ctx, req, &responseWrapperInt); err != nil {
 		err = errors.Wrapf(err, "Could not Execute Monday binding %T", bp)
 	} else {
-		response = bp.Response(responseWrapper.Elem().Field(0).Interface().(ResT))
+		response = bp.Response(responseWrapper.Elem().Field(0).Interface().(ResT), args...)
 	}
 	return
 }
+
+func (bp bindingProto[ResT, RetT]) Paginated() bool { return bp.paginated }
 
 // GetUsers returns an array of User that are currently subscribed to the same organisation as the requester.
 var GetUsers = NewBinding[[]User, []User](
@@ -218,7 +227,7 @@ var GetGroups = NewBinding[[]struct {
 	},
 	func(response []struct {
 		Groups []Group `json:"groups"`
-	}) []Group {
+	}, args ...any) []Group {
 		groups := make([]Group, 0)
 		for _, board := range response {
 			groups = append(groups, board.Groups...)
@@ -243,7 +252,7 @@ func getColumnsRequest(args ...any) *graphql.Request {
 
 var GetColumns = NewBinding[columnResponse, []Column](
 	getColumnsRequest,
-	func(response columnResponse) []Column {
+	func(response columnResponse, args ...any) []Column {
 		columns := make([]Column, 0)
 		for _, board := range response {
 			columns = append(columns, board.Columns...)
@@ -254,7 +263,7 @@ var GetColumns = NewBinding[columnResponse, []Column](
 
 var GetColumnMap = NewBinding[columnResponse, map[string]ColumnMap](
 	getColumnsRequest,
-	func(response columnResponse) map[string]ColumnMap {
+	func(response columnResponse, args ...any) map[string]ColumnMap {
 		m := make(map[string]ColumnMap)
 		for _, board := range response {
 			m[board.Id] = make(ColumnMap)
@@ -265,6 +274,17 @@ var GetColumnMap = NewBinding[columnResponse, map[string]ColumnMap](
 		return m
 	}, "boards", false,
 )
+
+// Example of creating columnValues for AddItem
+// map entry key is column id; run GetColumns to get column id's
+/*
+	columnValues := map[string]interface{}{
+		"text":   "have a nice day",
+		"date":   monday.BuildDate("2019-05-22"),
+		"status": monday.BuildStatusIndex(2),
+		"people": monday.BuildPeople(123456, 987654),   // parameters are user ids
+	}
+*/
 
 var AddItem = NewBinding[ItemId, string](
 	func(args ...any) *graphql.Request {
@@ -280,7 +300,7 @@ var AddItem = NewBinding[ItemId, string](
 		req.Var("colValues", string(jsonValues))
 		return req
 	},
-	func(response ItemId) string {
+	func(response ItemId, args ...any) string {
 		return response.Id
 	}, "create_item", false,
 )
@@ -294,35 +314,37 @@ var AddItemUpdate = NewBinding[ItemId, string](
 		req.Var("body", msg)
 		return req
 	},
-	func(response ItemId) string {
+	func(response ItemId, args ...any) string {
 		return response.Id
 	}, "create_update", false,
 )
 
-type itemResponse []struct {
-	Items []struct {
+type ItemResponse []struct {
+	Groups []struct {
 		Id    string `json:"id"`
-		Group struct {
-			Id string `json:"id"`
-		} `json:"group"`
-		Name         string        `json:"name"`
-		ColumnValues []ColumnValue `json:"column_values"`
-	} `json:"items"`
+		Items []struct {
+			Id           string        `json:"id"`
+			Name         string        `json:"name"`
+			ColumnValues []ColumnValue `json:"column_values"`
+		} `json:"items"`
+	} `json:"groups"`
 }
 
-var GetItems = NewBinding[itemResponse, []Item](
+var GetItems = NewBinding[ItemResponse, []Item](
 	func(args ...any) *graphql.Request {
 		var (
 			page     int
 			boardIds []int
+			groupIds []string
 		)
 		req := graphql.NewRequest(`
-			query ($page: Int!, $boardIds: [Int]) {
-				boards (ids: $boardIds){
-					items (limit: 10, page: $page) {
-						id group { id } name
-						column_values {
-							id title value
+			query ($page: Int!, $boardIds: [Int], $groupIds: [String]) {
+				boards (ids: $boardIds) {
+					groups (ids: $groupIds) {
+						id
+						items (limit: 10, page: $page) {
+							id name
+							column_values { id title value }
 						}
 					}
 				}
@@ -332,24 +354,28 @@ var GetItems = NewBinding[itemResponse, []Item](
 			page = args[0].(int)
 		}
 		if len(args) > 1 {
-			boardIds = slices.Comprehension[any, int](args[1:], func(idx int, value any, arr []any) int {
-				return value.(int)
-			})
+			boardIds = args[1].([]int)
+		}
+		if len(args) > 2 {
+			groupIds = args[2].([]string)
 		}
 		req.Var("page", page)
 		req.Var("boardIds", boardIds)
+		req.Var("groupIds", groupIds)
 		return req
 	},
-	func(response itemResponse) []Item {
+	func(response ItemResponse, args ...any) []Item {
 		items := make([]Item, 0)
 		for _, board := range response {
-			for _, item := range board.Items {
-				items = append(items, Item{
-					Id:           item.Id,
-					GroupId:      item.Group.Id,
-					Name:         item.Name,
-					ColumnValues: item.ColumnValues,
-				})
+			for _, group := range board.Groups {
+				for _, item := range group.Items {
+					items = append(items, Item{
+						Id:           item.Id,
+						GroupId:      group.Id,
+						Name:         item.Name,
+						ColumnValues: item.ColumnValues,
+					})
+				}
 			}
 		}
 		return items

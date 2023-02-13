@@ -235,8 +235,9 @@ func (t Text) Type() ColumnType    { return TextType }
 func (t Text) Value() (any, error) { return string(t), nil }
 
 const (
-	DateFormat = "2006-01-02"
-	TimeFormat = "15:04:05"
+	DateFormat     = "2006-01-02"
+	TimeFormat     = "15:04:05"
+	DateTimeFormat = DateFormat + " " + TimeFormat
 )
 
 type DateTime struct {
@@ -284,6 +285,15 @@ type StatusIndex struct {
 	Index int `json:"index"`
 }
 
+type StatusLabel struct {
+	Label string `json:"label"`
+}
+
+type Link struct {
+	URL  string `json:"url"`
+	Text string `json:"text"`
+}
+
 type Dropdown struct {
 	Ids []int `json:"ids"`
 }
@@ -326,8 +336,17 @@ type Votes struct {
 func (v Votes) Type() ColumnType    { return VotesType }
 func (v Votes) Value() (any, error) { return v.VoterIds, nil }
 
+type MappingConfig interface {
+	MappingModelName() string
+	MappingBoardID() int
+	MappingGroupID() string
+	MappingModelInstanceIDColumnID() string
+	ColumnValues(game any) (columnValues map[string]any, err error)
+}
+
 type Config interface {
 	MondayToken() string
+	MondayMappingForModel(model any) MappingConfig
 }
 
 type Client struct {
@@ -353,6 +372,14 @@ func BuildDateTime(date, time string) DateTime {
 
 func BuildStatusIndex(index int) StatusIndex {
 	return StatusIndex{index}
+}
+
+func BuildStatusLabel(label string) StatusLabel {
+	return StatusLabel{label}
+}
+
+func BuildLink(url, text string) Link {
+	return Link{url, text}
 }
 
 func BuildCheckbox(checked string) Checkbox {

@@ -50,8 +50,17 @@ func init() {
 
 func main() {
 	rand.Seed(time.Now().Unix())
-	// We set up the global DB instance...
+
+	// Compile any compilable configs in the globalConfig
 	start := time.Now().UTC()
+	log.INFO.Printf("Compiling config at %s", start.String())
+	if err := globalConfig.Compile(); err != nil {
+		panic(err)
+	}
+	log.INFO.Printf("Done compiling config in %s", time.Now().UTC().Sub(start).String())
+
+	// We set up the global DB instance...
+	start = time.Now().UTC()
 	log.INFO.Printf("Setting up DB at %s", start.String())
 	if err := db.Open(globalConfig.DB); err != nil {
 		panic(err)
@@ -67,6 +76,7 @@ func main() {
 	}
 	log.INFO.Printf("Done setting up Twitter client in %s", time.Now().UTC().Sub(start).String())
 
+	// Set up the default Monday client
 	start = time.Now().UTC()
 	log.INFO.Printf("Setting up Monday client at %s", start.String())
 	monday.CreateClient(globalConfig.Monday)
@@ -1073,6 +1083,9 @@ func main() {
 						return monday.GetBoards.Execute(monday.DefaultClient, args...)
 					}
 					if c.Bool("all") {
+						if len(args) > 0 {
+							args = args[1:]
+						}
 						execute = func() (any, error) {
 							if paginator, err := monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, monday.GetBoards, args...); err != nil {
 								return nil, err
@@ -1094,18 +1107,77 @@ func main() {
 						return monday.GetColumnMap.Execute(monday.DefaultClient, slices.Comprehension(c.StringSlice("arg"), argsToInts)...)
 					}
 				case "getitems":
-					args := slices.Comprehension(c.StringSlice("arg"), argsToInts)
+					args := slices.Comprehension[string, any](c.StringSlice("arg"), func(idx int, value string, arr []string) any {
+						switch idx {
+						case 0:
+							var intVal int64
+							if intVal, err = strconv.ParseInt(value, 10, 64); err != nil {
+								panic(err)
+							}
+							return int(intVal)
+						case 1:
+							var intArr []int
+							if err = json.Unmarshal([]byte(value), &intArr); err != nil {
+								panic(err)
+							}
+							return intArr
+						case 2:
+							var stringArr []string
+							if err = json.Unmarshal([]byte(value), &stringArr); err != nil {
+								panic(err)
+							}
+							return stringArr
+						default:
+							panic(fmt.Errorf("getitems takes 3 arguments: int, []int, and []string"))
+						}
+					})
 					execute = func() (any, error) {
 						return monday.GetItems.Execute(monday.DefaultClient, args...)
 					}
 					if c.Bool("all") {
 						execute = func() (any, error) {
+							if len(args) > 0 {
+								args = args[1:]
+							}
 							if paginator, err := monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, monday.GetItems, args...); err != nil {
 								return nil, err
 							} else {
 								return paginator.All()
 							}
 						}
+					}
+				case "addgame":
+					args := c.StringSlice("arg")
+					var gameInstance any
+					switch strings.ToLower(args[0]) {
+					case "games":
+						game := models.Game{}
+						var id uuid.UUID
+						if id, err = uuid.Parse(args[1]); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+
+						if err = db.DB.Find(&game, id).Error; err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+						gameInstance = &game
+					case "steam_apps":
+						app := models.SteamApp{}
+						var id int64
+						if id, err = strconv.ParseInt(args[1], 10, 64); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+
+						if err = db.DB.Find(&app, id).Error; err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+						gameInstance = &app
+					default:
+						return cli.NewExitError("no model of name "+args[0], 1)
+					}
+
+					execute = func() (any, error) {
+						return models.AddGameToMonday.Execute(monday.DefaultClient, gameInstance, globalConfig.Monday)
 					}
 				}
 

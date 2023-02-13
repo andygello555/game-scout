@@ -86,6 +86,9 @@ type SteamApp struct {
 	LastChangelistID uint64
 	// TimesHighlighted is the number of times this SteamApp has been highlighted by the measure command.
 	TimesHighlighted int32
+	// Watched indicates the Monday.com item Id, from the connected Monday board, for the SteamApp. If this is nil, then
+	// it can be assumed that this SteamApp is not being watched.
+	Watched *string `gorm:"default:null;type:varchar(32)"`
 	// WeightedScore is a weighted average comprised of the values taken from CreatedAt, Updates, ReleaseDate,
 	// Publisher, TotalReviews, ReviewScore, TotalUpvotes, TotalDownvotes, TotalComments, TagScore, AssetModifiedTime,
 	// and TimesHighlighted for the SteamApp. If SteamApp.CheckCalculateWeightedScore is false then this will be nil.
@@ -368,6 +371,18 @@ func (app *SteamApp) OnCreateOmit() []string {
 func (app *SteamApp) Update(db *gorm.DB, config ScrapeConfig) error {
 	ScrapeStorefrontForGameModel[uint64](app.ID, app.Wrapper().StorefrontScraper(SteamStorefront), config)
 	return db.Omit(app.OnCreateOmit()...).Save(app).Error
+}
+
+func (app *SteamApp) Website() string {
+	return browser.SteamAppPage.Fill(app.ID)
+}
+
+// VerifiedDeveloper returns the verified Developer for this SteamApp. If there is not one, we will return a nil pointer.
+func (app *SteamApp) VerifiedDeveloper(db *gorm.DB) *Developer {
+	if app.DeveloperID == nil {
+		return nil
+	}
+	return app.Developer
 }
 
 func (app *SteamApp) Wrapper() GameModelWrapper[uint64, GameModel[uint64]] {

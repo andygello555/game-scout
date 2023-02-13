@@ -7,11 +7,13 @@ import (
 	"github.com/anaskhan96/soup"
 	"github.com/andygello555/game-scout/browser"
 	myErrors "github.com/andygello555/game-scout/errors"
+	"github.com/andygello555/game-scout/monday"
 	"github.com/andygello555/game-scout/steamcmd"
 	"github.com/andygello555/gotils/v2/numbers"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+	"github.com/machinebox/graphql"
 	"github.com/pkg/errors"
 	"github.com/volatiletech/null/v9"
 	"gorm.io/gorm"
@@ -73,6 +75,9 @@ type Game struct {
 	// TagScore is average value of each tag. Each tag's value is calculated by multiplying the number of upvotes for
 	// that tag by the default value/override value for that tag. See TagConfig for more info.
 	TagScore null.Float64
+	// Watched indicates the Monday.com item Id, from the connected Monday board, for the Game. If this is nil, then it
+	// can be assumed that this Game is not being watched.
+	Watched *string `gorm:"default:null;type:varchar(32)"`
 	// WeightedScore is a weighted average comprised of the values taken from Publisher, TotalReviews, ReviewScore,
 	// TotalUpvotes, TotalDownvotes, TotalComments, TagScore, and Updates for this game. If
 	// Game.CheckCalculateWeightedScore is false then this will be nil. This is a computed field, no need to set it
@@ -195,12 +200,6 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 		return []float64{val}
 	case GameUpdates:
 		return []float64{float64(f.Uint()+1) / 1500.0}
-	//case GameDeveloperVerified:
-	//	val := -50000.0
-	//	if f.Bool() {
-	//		val = 4000.0
-	//	}
-	//	return []float64{val}
 	case GameReleaseDate:
 		nullTime := f.Interface().(null.Time)
 		var val float64
@@ -340,6 +339,71 @@ func (g *Game) OnCreateOmit() []string {
 func (g *Game) Update(db *gorm.DB, config ScrapeConfig) error {
 	ScrapeStorefrontForGameModel[string](g.Website.String, g.Wrapper().StorefrontScraper(g.Storefront), config)
 	return db.Omit(g.OnCreateOmit()...).Save(g).Error
+}
+
+var GetGamesFromMonday = monday.NewBinding[monday.ItemResponse, []*Game](
+	func(args ...any) *graphql.Request {
+		page := args[0].(int)
+		mapping := args[1].(monday.Config).MondayMappingForModel(Game{})
+		boardIds := []int{mapping.MappingBoardID()}
+		groupIds := []string{mapping.MappingGroupID()}
+		return monday.GetItems.Request(page, boardIds, groupIds)
+	},
+	func(response monday.ItemResponse, args ...any) []*Game {
+		items := monday.GetItems.Response(response)
+		mapping := args[1].(monday.Config).MondayMappingForModel(Game{})
+		db := args[2].(*gorm.DB)
+		games := make([]*Game, 0)
+		for _, item := range items {
+			for _, column := range item.ColumnValues {
+				if column.Id == mapping.MappingModelInstanceIDColumnID() {
+					game := Game{}
+					if err := db.Find(&game, column.Value); err == nil {
+						games = append(games, &game)
+					}
+					break
+				}
+			}
+		}
+		return games
+	},
+	"boards", true,
+)
+
+var AddGameToMonday = monday.NewBinding[monday.ItemId, string](
+	func(args ...any) *graphql.Request {
+		game := args[0].(*Game)
+		itemName := game.Website.String
+		if game.Name.IsValid() {
+			itemName = game.Name.String
+		}
+		mapping := args[1].(monday.Config).MondayMappingForModel(Game{})
+		columnValues, err := mapping.ColumnValues(game)
+		if err != nil {
+			panic(err)
+		}
+		return monday.AddItem.Request(
+			mapping.MappingBoardID(),
+			mapping.MappingGroupID(),
+			itemName,
+			columnValues,
+		)
+	},
+	monday.AddItem.Response, "create_item", false,
+)
+
+func (g *Game) GetVerifiedDeveloperUsernames() []string { return g.VerifiedDeveloperUsernames }
+
+// VerifiedDeveloper returns the verified Developer for this Game. If there are none, we will return a nil pointer.
+func (g *Game) VerifiedDeveloper(db *gorm.DB) *Developer {
+	if len(g.VerifiedDeveloperUsernames) == 0 {
+		return nil
+	}
+	developer := Developer{}
+	if err := db.Find(&developer, "username IN ?", g.VerifiedDeveloperUsernames).Error; err != nil {
+		return nil
+	}
+	return &developer
 }
 
 func (g *Game) Wrapper() GameModelWrapper[string, GameModel[string]] { return &GameWrapper{Game: g} }

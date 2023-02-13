@@ -14,6 +14,7 @@ require (
 	github.com/gorilla/websocket v1.5.0
 	github.com/hjson/hjson-go/v4 v4.2.0
 	github.com/lib/pq v1.10.2
+	github.com/machinebox/graphql v0.2.2
 	github.com/mocktools/go-smtp-mock/v2 v2.0.5
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/pkg/errors v0.9.1
@@ -34,6 +35,7 @@ require (
 	cloud.google.com/go/compute/metadata v0.2.1 // indirect
 	cloud.google.com/go/iam v0.7.0 // indirect
 	cloud.google.com/go/pubsub v1.10.0 // indirect
+	github.com/antonmedv/expr v1.12.0 // indirect
 	github.com/aws/aws-sdk-go v1.42.34 // indirect
 	github.com/blend/go-sdk v1.20220411.3 // indirect
 	github.com/bradfitz/gomemcache v0.0.0-20190913173617-a41fca850d0b // indirect
@@ -69,7 +71,7 @@ require (
 	github.com/kelseyhightower/envconfig v1.4.0 // indirect
 	github.com/klauspost/compress v1.11.7 // indirect
 	github.com/kr/pretty v0.3.0 // indirect
-	github.com/machinebox/graphql v0.2.2 // indirect
+	github.com/matryer/is v1.4.0 // indirect
 	github.com/mattn/go-runewidth v0.0.14 // indirect
 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
 	github.com/olekukonko/tablewriter v0.0.5 // indirect
