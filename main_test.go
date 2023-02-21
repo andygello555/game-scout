@@ -20,6 +20,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -241,6 +242,96 @@ func TestUpdatePhase(t *testing.T) {
 
 	if !(*keepState) {
 		state.Delete()
+	}
+}
+
+func TestSnapshotPhase(t *testing.T) {
+	clearDB(t)
+	developer := models.Developer{
+		ID:               "snapshotdevtest",
+		Name:             "Snapshot Dev",
+		Username:         "Snapshot",
+		TimesHighlighted: 5,
+	}
+	if err := db.DB.Create(&developer).Error; err != nil {
+		t.Errorf("Error was not expected to occur when creating %q test dev: %s", developer.ID, err.Error())
+	}
+
+	state := StateInMemory()
+	tweetPublicMetrics := &twitter.TweetMetricsObj{
+		Impressions:       10,
+		URLLinkClicks:     10,
+		UserProfileClicks: 10,
+		Likes:             10,
+		Replies:           10,
+		Retweets:          10,
+		Quotes:            10,
+	}
+	userPublicMetrics := &twitter.UserMetricsObj{
+		Followers: 10,
+		Following: 10,
+		Tweets:    10,
+		Listed:    10,
+	}
+	for i := 0; i < 5; i++ {
+		state.GetIterableCachedField(UserTweetTimesType).SetOrAdd(developer.ID, time.Now().Add(time.Duration(i+1)*time.Hour*24*-1))
+		state.GetIterableCachedField(DeveloperSnapshotsType).SetOrAdd(developer.ID, &models.DeveloperSnapshot{
+			CreatedAt:            time.Now(),
+			DeveloperID:          developer.ID,
+			Tweets:               1,
+			TweetIDs:             []string{strconv.Itoa(i)},
+			TweetsPublicMetrics:  tweetPublicMetrics,
+			UserPublicMetrics:    userPublicMetrics,
+			ContextAnnotationSet: myTwitter.NewContextAnnotationSet(),
+		})
+	}
+
+	if err := SnapshotPhase(state); err != nil {
+		t.Errorf("Error was not expected to occur in SnapshotPhase: %s", err.Error())
+	}
+
+	if snapshots, err := developer.DeveloperSnapshots(db.DB); err != nil {
+		t.Errorf("Error was not expected to occur when retrieving snapshots for %q: %s", developer.ID, err.Error())
+	} else {
+		if len(snapshots) != 1 {
+			t.Errorf("There are %d snapshots for %q instead of 1", len(snapshots), developer.ID)
+		} else {
+			first := snapshots[0]
+			for _, checkedMetric := range []struct {
+				name     string
+				actual   string
+				expected string
+			}{
+				{"Tweets", strconv.Itoa(int(first.Tweets)), "5"},
+				{
+					name: "TweetIDs",
+					actual: strconv.FormatBool(
+						mapset.NewSet(
+							slices.Comprehension[int, string](
+								numbers.Range[int](0, 4, 1),
+								func(idx int, value int, arr []int) string {
+									return strconv.Itoa(value)
+								},
+							)...,
+						).Equal(mapset.NewSet([]string(first.TweetIDs)...)),
+					),
+					expected: "true",
+				},
+				{"TweetsPublicMetrics", fmt.Sprintf("%v", *first.TweetsPublicMetrics), "{50 50 50 50 50 50 50}"},
+				{"UserPublicMetrics", fmt.Sprintf("%v", *first.UserPublicMetrics), "{10 10 10 10}"},
+				{"ContextAnnotationSet", first.ContextAnnotationSet.String(), "Set{}"},
+				{"TimesHighlighted", strconv.Itoa(int(first.TimesHighlighted)), "5"},
+			} {
+				if checkedMetric.actual != checkedMetric.expected {
+					t.Errorf(
+						"Only snapshot for %q has %s = %s (%v) not %s like we were expecting",
+						developer.ID, checkedMetric.name, checkedMetric.actual,
+						reflect.ValueOf(first).Elem().FieldByName(checkedMetric.name).Interface(),
+						checkedMetric.expected,
+					)
+				}
+			}
+		}
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
 	myTwitter "github.com/andygello555/game-scout/twitter"
+	"github.com/andygello555/gotils/v2/numbers"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/pkg/errors"
@@ -31,7 +32,7 @@ func SnapshotPhase(state *ScoutState) (err error) {
 
 		// Find the developer so that we can set the TimesHighlighted field appropriately
 		developer := models.Developer{}
-		if err = db.DB.Find(&developer, id).Error; err != nil {
+		if err = db.DB.Find(&developer, "id = ?", id).Error; err != nil {
 			log.ERROR.Printf("Could not find developer %s in the DB, TimesHighlighted will be set to 0", id)
 		}
 
@@ -88,10 +89,10 @@ func SnapshotPhase(state *ScoutState) (err error) {
 			aggregatedSnap.TweetsPublicMetrics.Replies += snapshot.TweetsPublicMetrics.Replies
 			aggregatedSnap.TweetsPublicMetrics.Retweets += snapshot.TweetsPublicMetrics.Retweets
 			aggregatedSnap.TweetsPublicMetrics.Quotes += snapshot.TweetsPublicMetrics.Quotes
-			aggregatedSnap.UserPublicMetrics.Followers += snapshot.UserPublicMetrics.Followers
-			aggregatedSnap.UserPublicMetrics.Following += snapshot.UserPublicMetrics.Following
-			aggregatedSnap.UserPublicMetrics.Tweets += snapshot.UserPublicMetrics.Tweets
-			aggregatedSnap.UserPublicMetrics.Listed += snapshot.UserPublicMetrics.Listed
+			aggregatedSnap.UserPublicMetrics.Followers = numbers.Max(aggregatedSnap.UserPublicMetrics.Followers, snapshot.UserPublicMetrics.Followers)
+			aggregatedSnap.UserPublicMetrics.Following = numbers.Max(aggregatedSnap.UserPublicMetrics.Following, snapshot.UserPublicMetrics.Following)
+			aggregatedSnap.UserPublicMetrics.Tweets = numbers.Max(aggregatedSnap.UserPublicMetrics.Tweets, snapshot.UserPublicMetrics.Tweets)
+			aggregatedSnap.UserPublicMetrics.Listed = numbers.Max(aggregatedSnap.UserPublicMetrics.Listed, snapshot.UserPublicMetrics.Listed)
 			it := snapshot.ContextAnnotationSet.Iterator()
 			for elem := range it.C {
 				aggregatedSnap.ContextAnnotationSet.Add(elem)

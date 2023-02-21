@@ -887,7 +887,7 @@ func main() {
 				for developerNo, id := range c.StringSlice("id") {
 					fmt.Printf("Performing commands on Developer: %s\n", id)
 					var developer models.Developer
-					if err = db.DB.Find(&developer, id).Error; err != nil {
+					if err = db.DB.Find(&developer, "id = ?", id).Error; err != nil {
 						return cli.NewExitError(err.Error(), 1)
 					}
 

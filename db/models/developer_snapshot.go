@@ -238,7 +238,7 @@ func (wf developerSnapshotWeightedField) Fields() []WeightedField {
 // calculateGameField calculates the Games and GameWeightedScoresSum fields for DeveloperSnapshot using the Game table.
 func (ds *DeveloperSnapshot) calculateGameField(tx *gorm.DB) (err error) {
 	var developer Developer
-	if err = tx.Find(&developer, ds.DeveloperID).Error; err != nil {
+	if err = tx.Find(&developer, "id = ?", ds.DeveloperID).Error; err != nil {
 		return errors.Wrapf(
 			err,
 			"could not find Developer with ID %s",
