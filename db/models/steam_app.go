@@ -367,6 +367,8 @@ func (app *SteamApp) OnConflict() clause.OnConflict {
 		"asset_modified_time",
 		"last_changelist_id",
 		"times_highlighted",
+		"watched",
+		"votes",
 		"weighted_score",
 	})...)
 	return clause.OnConflict{
@@ -442,24 +444,39 @@ var GetSteamAppsFromMonday = monday.NewBinding[monday.ItemResponse, []*SteamApp]
 			}
 
 			apps = append(apps, &app)
-			if column, ok = columnMap[mapping.MappingModelInstanceWatchedColumnID()]; !ok {
-				continue
+			if column, ok = columnMap[mapping.MappingModelInstanceWatchedColumnID()]; ok {
+				if column.Value != "null" {
+					var watches monday.Votes
+					if err = json.Unmarshal([]byte(column.Value), &watches); err == nil {
+						if len(watches.VoterIds) > 0 {
+							app.Watched = &item.Id
+						}
+					}
+				} else {
+					app.Watched = nil
+				}
 			}
 
-			if column.Value != "null" {
-				var watches monday.Votes
-				if err = json.Unmarshal([]byte(column.Value), &watches); err != nil {
-					fmt.Println("votes err", err)
+			voteValues := []int{0, 0}
+			for i, votesColumnID := range []string{
+				mapping.MappingModelInstanceUpvotesColumnID(),
+				mapping.MappingModelInstanceDownvotesColumnID(),
+			} {
+				var voteColumn monday.ColumnValue
+				if voteColumn, ok = columnMap[votesColumnID]; !ok {
 					continue
 				}
-				if len(watches.VoterIds) > 0 {
-					app.Watched = &item.Id
+				if voteColumn.Value == "null" {
+					continue
 				}
-			} else {
-				app.Watched = nil
+				var votes monday.Votes
+				if err = json.Unmarshal([]byte(voteColumn.Value), &votes); err != nil {
+					continue
+				}
+				voteValues[i] = len(votes.VoterIds)
 			}
+			app.Votes = int32(voteValues[0] - voteValues[1])
 		}
-
 		return apps
 	},
 	"boards", true,
@@ -495,7 +512,7 @@ var AddSteamAppToMonday = monday.NewBinding[monday.ItemId, string](
 	monday.AddItem.Response, "create_item", false,
 )
 
-// VerifiedDeveloper returns the verified Developer for this SteamApp. If there is not one, we will return a nil pointer.
+// VerifiedDeveloper returns the first verified Developer for this SteamApp. If there is not one, we will return a nil pointer.
 func (app *SteamApp) VerifiedDeveloper(db *gorm.DB) *Developer {
 	if app.DeveloperID == nil {
 		return nil

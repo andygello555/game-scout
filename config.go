@@ -358,8 +358,16 @@ type MondayMappingConfig struct {
 	// ModelInstanceIDColumnID is the Monday.com assigned ID of the column within the BoardID used to store the ID of
 	// the models.SteamApp/models.Game instance in game-scout.
 	ModelInstanceIDColumnID string `json:"model_instance_id_column_id"`
+	// ModelInstanceUpvotesColumnID is the Monday.com assigned ID of the column within the BoardID used to store the
+	// number of upvotes of the related models.SteamApp/models.Game.
+	ModelInstanceUpvotesColumnID string `json:"model_instance_upvotes_column_id"`
+	// ModelInstanceDownvotesColumnID is the Monday.com assigned ID of the column within the BoardID used to store the
+	// number of downvotes of the related models.SteamApp/models.Game.
+	ModelInstanceDownvotesColumnID string `json:"model_instance_downvotes_column_id"`
 	// ModelInstanceWatchedColumnID is the Monday.com assigned ID of the column within the BoardID used to store the
-	// value of the Watched field of the related models.SteamApp/models.Game.
+	// value of the Watched field of the related models.SteamApp/models.Game. If this is set for a
+	// models.SteamApp/models.Game, then the instance will be included in a separate section of the Measure email until
+	// this flag is unset.
 	ModelInstanceWatchedColumnID string `json:"model_instance_watched_column_id"`
 	// ModelFieldToColumnValueExpr represents a mapping from Monday column IDs to expressions that can be compiled using
 	// expr.Eval to convert a field from a given models.Game/models.SteamApp instance to a value that Monday can use.
@@ -373,6 +381,12 @@ func (mmc *MondayMappingConfig) MappingBoardID() int      { return mmc.BoardID }
 func (mmc *MondayMappingConfig) MappingGroupID() string   { return mmc.GroupID }
 func (mmc *MondayMappingConfig) MappingModelInstanceIDColumnID() string {
 	return mmc.ModelInstanceIDColumnID
+}
+func (mmc *MondayMappingConfig) MappingModelInstanceUpvotesColumnID() string {
+	return mmc.ModelInstanceUpvotesColumnID
+}
+func (mmc *MondayMappingConfig) MappingModelInstanceDownvotesColumnID() string {
+	return mmc.ModelInstanceDownvotesColumnID
 }
 func (mmc *MondayMappingConfig) MappingModelInstanceWatchedColumnID() string {
 	return mmc.ModelInstanceWatchedColumnID
@@ -455,11 +469,14 @@ func (mmc *MondayMappingConfig) ColumnValues(game any) (columnValues map[string]
 
 func (mmc *MondayMappingConfig) String() string {
 	return fmt.Sprintf(
-		`{ModelName: %v, BoardID: %v, GroupID: %v, ModelInstanceIDColumnID: %v, ModelFieldToColumnValueExpr: %v, modelFieldToColumnValueExprCompiled: %v}`,
+		`{ModelName: %v, BoardID: %v, GroupID: %v, ModelInstanceIDColumnID: %v, ModelInstanceUpvotesColumnID: %v, ModelInstanceDownvotesColumnID: %v, ModelInstanceWatchedColumnID: %v, ModelFieldToColumnValueExpr: %v, modelFieldToColumnValueExprCompiled: %v}`,
 		mmc.ModelName,
 		mmc.BoardID,
 		mmc.GroupID,
 		mmc.ModelInstanceIDColumnID,
+		mmc.ModelInstanceUpvotesColumnID,
+		mmc.ModelInstanceDownvotesColumnID,
+		mmc.ModelInstanceWatchedColumnID,
 		mmc.ModelFieldToColumnValueExpr,
 		mmc.modelFieldToColumnValueExprCompiled,
 	)

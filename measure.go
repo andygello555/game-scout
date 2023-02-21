@@ -9,6 +9,9 @@ import (
 	"github.com/andygello555/game-scout/email"
 	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/andygello555/game-scout/monday"
+	"github.com/andygello555/gotils/v2/slices"
+	mapset "github.com/deckarep/golang-set/v2"
+	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"math"
@@ -73,29 +76,65 @@ func trendFinder(jobs <-chan *models.Developer, results chan<- *trendFinderResul
 func MeasurePhase(state *ScoutState) (err error) {
 	// Before we do anything let us fetch the Games and SteamApps that are on the linked Monday board.
 	var (
-		mondayGames       []*models.Game
-		mondaySteamApps   []*models.SteamApp
-		gamePaginator     *monday.Paginator[monday.ItemResponse, []*models.Game]
-		steamAppPaginator *monday.Paginator[monday.ItemResponse, []*models.SteamApp]
+		mondayGames              []*models.Game
+		mondaySteamApps          []*models.SteamApp
+		gamePaginator            *monday.Paginator[monday.ItemResponse, []*models.Game]
+		steamAppPaginator        *monday.Paginator[monday.ItemResponse, []*models.SteamApp]
+		mondayGameIDs            mapset.Set[uuid.UUID]
+		mondayWatchedGameIDs     mapset.Set[uuid.UUID]
+		mondaySteamAppIDs        mapset.Set[uint64]
+		mondayWatchedSteamAppIDs mapset.Set[uint64]
 	)
 
-	if gamePaginator, err = monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, models.GetGamesFromMonday, globalConfig.Monday, db.DB); err != nil {
-		log.ERROR.Printf("Could not create paginator for GetGamesFromMonday: %v", err)
-	} else {
-		if mondayGames, err = gamePaginator.All(); err != nil {
-			log.ERROR.Printf("Could not find all Games using Paginator for GetGamesFromMonday: %v", err)
+	if globalConfig.Monday != nil {
+		if gamePaginator, err = monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, models.GetGamesFromMonday, globalConfig.Monday, db.DB); err != nil {
+			log.ERROR.Printf("Could not create paginator for GetGamesFromMonday: %v", err)
+		} else {
+			if mondayGames, err = gamePaginator.All(); err != nil {
+				log.ERROR.Printf("Could not find all Games using Paginator for GetGamesFromMonday: %v", err)
+			}
 		}
-	}
 
-	if steamAppPaginator, err = monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, models.GetSteamAppsFromMonday, globalConfig.Monday, db.DB); err != nil {
-		log.ERROR.Printf("Could not create paginator for GetSteamAppsFromMonday: %v", err)
-	} else {
-		if mondaySteamApps, err = steamAppPaginator.All(); err != nil {
-			log.ERROR.Printf("Could not find all SteamApps using Paginator for GetSteamAppsFromMonday: %v", err)
+		if steamAppPaginator, err = monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, models.GetSteamAppsFromMonday, globalConfig.Monday, db.DB); err != nil {
+			log.ERROR.Printf("Could not create paginator for GetSteamAppsFromMonday: %v", err)
+		} else {
+			if mondaySteamApps, err = steamAppPaginator.All(); err != nil {
+				log.ERROR.Printf("Could not find all SteamApps using Paginator for GetSteamAppsFromMonday: %v", err)
+			}
 		}
+
+		log.INFO.Printf("We have found %d Games on the linked Monday board/group. Saving...", len(mondayGames))
+		mondayGameIDs = mapset.NewSet(slices.Comprehension(mondayGames, func(idx int, value *models.Game, arr []*models.Game) uuid.UUID {
+			return value.ID
+		})...)
+		mondayWatchedGameIDs = mapset.NewSet[uuid.UUID]()
+		for _, game := range mondayGames {
+			if game.Watched != nil {
+				log.INFO.Printf("Game %q is watched", game.String())
+				mondayWatchedGameIDs.Add(game.ID)
+			}
+			if err = db.DB.Save(game).Error; err != nil {
+				log.ERROR.Printf("Could not save Game %q: %v", game.String(), err)
+			}
+		}
+
+		log.INFO.Printf("We have found %d SteamApps on the linked Monday board/group. Saving...", len(mondaySteamApps))
+		mondaySteamAppIDs = mapset.NewSet(slices.Comprehension(mondaySteamApps, func(idx int, value *models.SteamApp, arr []*models.SteamApp) uint64 {
+			return value.ID
+		})...)
+		mondayWatchedSteamAppIDs = mapset.NewSet[uint64]()
+		for _, app := range mondaySteamApps {
+			if app.Watched != nil {
+				log.INFO.Printf("SteamApp %q is watched", app.String())
+				mondayWatchedSteamAppIDs.Add(app.ID)
+			}
+			if err = db.DB.Save(app).Error; err != nil {
+				log.ERROR.Printf("Could not save Game %q: %v", app.String(), err)
+			}
+		}
+	} else {
+		log.WARNING.Println("There is no Monday config, so we will skip checking votes and watched status for Games and SteamApps")
 	}
-	log.INFO.Printf("We have found %d Games on the linked Monday board/group", len(mondayGames))
-	log.INFO.Printf("We have found %d SteamApps on the linked Monday board/group", len(mondaySteamApps))
 
 	startAny, _ := state.GetCachedField(StateType).Get("Start")
 	start := startAny.(time.Time)
@@ -119,6 +158,8 @@ func MeasurePhase(state *ScoutState) (err error) {
 		End:                    start,
 		TrendingDevs:           make([]*models.TrendingDev, 0),
 		DevelopersBeingDeleted: *state.GetIterableCachedField(DeletedDevelopersType).(*DeletedDevelopers),
+		WatchedDevelopers:      make([]*models.TrendingDev, 0),
+		WatchedSteamApps:       make([]*models.SteamApp, 0),
 		Config:                 globalConfig.Email,
 	}
 
@@ -193,6 +234,25 @@ func MeasurePhase(state *ScoutState) (err error) {
 			"%d: Adding Developer %v with trend %.10f to email context...",
 			i+1, topDeveloper.Developer, topDeveloper.Trend.GetCoeffs()[1],
 		)
+
+		if globalConfig.Monday != nil && len(topDeveloper.Games) > 0 {
+			log.INFO.Printf(
+				"Developer %v has tweeted about %d Games, adding these to linked Monday org",
+				topDeveloper.Developer, len(topDeveloper.Games),
+			)
+			for _, game := range topDeveloper.Games {
+				if !mondayGameIDs.Contains(game.ID) {
+					if _, err = models.AddGameToMonday.Execute(monday.DefaultClient, game, globalConfig.Monday); err != nil {
+						log.ERROR.Printf("\tCould not add Game %q to Monday: %v", game.String(), err)
+					} else {
+						log.INFO.Printf("\tAdded Game %q to Monday board/group", game.String())
+					}
+				} else {
+					log.WARNING.Printf("\tGame %q already exists on the linked Monday board/group. Skipping...", game.String())
+				}
+			}
+		}
+
 		if !debug {
 			// Update the number of times this developer has been highlighted
 			if err = db.DB.Model(topDeveloper.Developer).Update("times_highlighted", gorm.Expr("times_highlighted + 1")).Error; err != nil {
@@ -224,9 +284,19 @@ func MeasurePhase(state *ScoutState) (err error) {
 	measureContext.TopSteamApps = steamApps
 
 	if !debug {
+		log.INFO.Printf("Updating times highlighted and adding %d SteamApps to Monday", len(steamApps))
 		for _, steamApp := range steamApps {
 			if err = db.DB.Model(steamApp).Update("times_highlighted", gorm.Expr("times_highlighted + 1")).Error; err != nil {
-				log.ERROR.Printf("Could not increment TimesHighlighted for %s (%d): %v", steamApp.Name, steamApp.ID, err)
+				log.ERROR.Printf("\tCould not increment TimesHighlighted for %s (%d): %v", steamApp.Name, steamApp.ID, err)
+			}
+			if globalConfig.Monday != nil && !mondaySteamAppIDs.Contains(steamApp.ID) {
+				if _, err = models.AddSteamAppToMonday.Execute(monday.DefaultClient, steamApp, globalConfig.Monday); err != nil {
+					log.ERROR.Printf("\tCould not add SteamApp %q to Monday: %v", steamApp.String(), err)
+				} else {
+					log.INFO.Printf("\tAdded SteamApp %q to Monday board/group", steamApp.String())
+				}
+			} else {
+				log.WARNING.Printf("\tSteamApp %q already exists on the linked Monday board/group. Skipping...", steamApp.String())
 			}
 		}
 	} else {
@@ -234,6 +304,68 @@ func MeasurePhase(state *ScoutState) (err error) {
 			"ScoutState.Debug is set, so we are skipping incrementing times_highlighted on %d SteamApps",
 			len(steamApps),
 		)
+	}
+
+	// We then find fill out the fields in the MeasureContext pertaining to Watched SteamApps and Games
+	if globalConfig.Monday != nil {
+		var watchedGames []*models.Game
+		if err = db.DB.Find(&watchedGames, "watched is not null").Error; err != nil {
+			log.ERROR.Printf("Could not find Watched Games: %v", err)
+		}
+		log.INFO.Println("There are %d Games that are marked as Watched in the DB", len(watchedGames))
+		for _, watchedGame := range watchedGames {
+			if !mondayWatchedGameIDs.Contains(watchedGame.ID) {
+				log.WARNING.Printf("\tGame %q is no longer being watched on Monday. Updating...", watchedGame.String())
+				watchedGame.Watched = nil
+				if err = db.DB.Save(watchedGame).Error; err != nil {
+					log.ERROR.Printf("\tCould not save Game %q after setting Watched to nil: %v", watchedGame.String(), err)
+				}
+			} else {
+				log.INFO.Printf("\tGame %q is still being watched on Monday getting TrendingDev", watchedGame.String())
+				watchedTrendingDev := models.TrendingDev{
+					Games: []*models.Game{watchedGame},
+				}
+				developer := models.Developer{}
+				if err = db.DB.Limit(1).Find(&developer, "username IN ?", watchedGame.VerifiedDeveloperUsernames).Error; err != nil {
+					log.WARNING.Printf("\tCould not find verified developer for Game %q: %v", watchedGame.String(), err)
+				} else {
+					log.INFO.Printf("\tFound verified Developer for Game %q: %v", watchedGame.String(), developer)
+					watchedTrendingDev.Developer = &developer
+					if watchedTrendingDev.Snapshots, err = developer.DeveloperSnapshots(db.DB); err != nil {
+						log.WARNING.Printf(
+							"\tCould not find snapshots for Developer %v, who is verified for Game %q: %v",
+							developer, watchedGame.String(), err,
+						)
+					}
+
+					if watchedTrendingDev.Trend, err = developer.Trend(db.DB); err != nil {
+						log.WARNING.Printf(
+							"\tCould not find trend for Developer %v, who is verified for Game %q: %v",
+							developer, watchedGame.String(), err,
+						)
+					}
+					measureContext.WatchedDevelopers = append(measureContext.WatchedDevelopers, &watchedTrendingDev)
+				}
+			}
+		}
+
+		var watchedSteamApps []*models.SteamApp
+		if err = db.DB.Find(&watchedSteamApps, "watched is not null").Error; err != nil {
+			log.ERROR.Printf("Could not find Watched SteamApps: %v", err)
+		}
+		log.INFO.Println("There are %d SteamApps that are marked as Watched in the DB", len(watchedGames))
+		for _, watchedApp := range watchedSteamApps {
+			if !mondayWatchedSteamAppIDs.Contains(watchedApp.ID) {
+				log.WARNING.Printf("\tSteamApp %q is no longer being watched on Monday. Updating...", watchedApp.String())
+				watchedApp.Watched = nil
+				if err = db.DB.Save(watchedApp).Error; err != nil {
+					log.ERROR.Printf("\tCould not save SteamApp %q after setting Watched to nil: %v", watchedApp.String(), err)
+				}
+			} else {
+				log.INFO.Printf("\tSteamApp %q is still being watched on Monday adding to MeasureContext", watchedApp.String())
+				measureContext.WatchedSteamApps = append(measureContext.WatchedSteamApps, watchedApp)
+			}
+		}
 	}
 
 	// Finally, we construct the email and send it

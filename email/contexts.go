@@ -35,6 +35,8 @@ type MeasureContext struct {
 	TrendingDevs           []*models.TrendingDev
 	TopSteamApps           []*models.SteamApp
 	DevelopersBeingDeleted []*models.TrendingDev
+	WatchedDevelopers      []*models.TrendingDev
+	WatchedSteamApps       []*models.SteamApp
 	EnabledDevelopers      int64
 	Config                 Config
 }

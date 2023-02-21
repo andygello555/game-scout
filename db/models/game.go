@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/gob"
+	"encoding/json"
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/anaskhan96/soup"
@@ -78,6 +79,8 @@ type Game struct {
 	// Watched indicates the Monday.com item Id, from the connected Monday board, for the Game. If this is nil, then it
 	// can be assumed that this Game is not being watched.
 	Watched *string `gorm:"default:null;type:varchar(32)"`
+	// Votes is the number of upvotes for the Game on the linked Monday board/group minus the number of downvotes.
+	Votes int32 `gorm:"default:0"`
 	// WeightedScore is a weighted average comprised of the values taken from Publisher, TotalReviews, ReviewScore,
 	// TotalUpvotes, TotalDownvotes, TotalComments, TagScore, and Updates for this game. If
 	// Game.CheckCalculateWeightedScore is false then this will be nil. This is a computed field, no need to set it
@@ -99,6 +102,7 @@ const (
 	GameTagScoreWeight       gameWeight = 0.25
 	GameUpdatesWeight        gameWeight = -0.15
 	GameReleaseDateWeight    gameWeight = 0.7
+	GameVotesWeight          gameWeight = 0.8
 )
 
 // gameWeightedField represents a field that can have a weighting calculation applied to it in Game.
@@ -114,6 +118,7 @@ const (
 	GameTagScore       gameWeightedField = "TagScore"
 	GameUpdates        gameWeightedField = "Updates"
 	GameReleaseDate    gameWeightedField = "ReleaseDate"
+	GameVotes          gameWeightedField = "Votes"
 )
 
 // String returns the string value of the gameWeightedField.
@@ -141,6 +146,8 @@ func (gf gameWeightedField) Weight() (w float64, inverse bool) {
 		w = float64(GameUpdatesWeight)
 	case GameReleaseDate:
 		w = float64(GameReleaseDateWeight)
+	case GameVotes:
+		w = float64(GameVotesWeight)
 	default:
 		panic(fmt.Errorf("\"%s\" is not a gameWeightedField", gf))
 	}
@@ -215,6 +222,8 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 			val = timeDiff.Hours()
 		}
 		return []float64{val}
+	case GameVotes:
+		return []float64{float64(f.Int() * 100000)}
 	default:
 		panic(fmt.Errorf("gameWeightedField %s is not recognized, and cannot be converted to []float64", gf))
 	}
@@ -231,6 +240,7 @@ func (gf gameWeightedField) Fields() []WeightedField {
 		GameTagScore,
 		GameUpdates,
 		GameReleaseDate,
+		GameVotes,
 	}
 }
 
@@ -318,6 +328,8 @@ func (g *Game) OnConflict() clause.OnConflict {
 		"total_downvotes",
 		"total_comments",
 		"tag_score",
+		"watched",
+		"votes",
 		"weighted_score",
 	})...)
 	return clause.OnConflict{
@@ -368,17 +380,63 @@ var GetGamesFromMonday = monday.NewBinding[monday.ItemResponse, []*Game](
 		db := args[2].(*gorm.DB)
 		games := make([]*Game, 0)
 		for _, item := range items {
+			columnMap := make(map[string]monday.ColumnValue)
 			for _, column := range item.ColumnValues {
-				if column.Id == mapping.MappingModelInstanceIDColumnID() {
-					game := Game{}
-					if id, err := uuid.Parse(column.Value); err == nil {
-						if err := db.Find(&game, "id = ?", id).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
-							games = append(games, &game)
+				columnMap[column.Id] = column
+			}
+
+			var (
+				id     uuid.UUID
+				column monday.ColumnValue
+				err    error
+				ok     bool
+			)
+			if column, ok = columnMap[mapping.MappingModelInstanceIDColumnID()]; !ok {
+				continue
+			}
+
+			game := Game{}
+			if id, err = uuid.Parse(strings.Trim(column.Value, `"`)); err != nil {
+				continue
+			}
+
+			if err := db.Find(&game, "id = ?", id).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+
+			games = append(games, &game)
+			if column, ok = columnMap[mapping.MappingModelInstanceWatchedColumnID()]; ok {
+				if column.Value != "null" {
+					var watches monday.Votes
+					if err = json.Unmarshal([]byte(column.Value), &watches); err == nil {
+						if len(watches.VoterIds) > 0 {
+							game.Watched = &item.Id
 						}
 					}
-					break
+				} else {
+					game.Watched = nil
 				}
 			}
+
+			voteValues := []int{0, 0}
+			for i, votesColumnID := range []string{
+				mapping.MappingModelInstanceUpvotesColumnID(),
+				mapping.MappingModelInstanceDownvotesColumnID(),
+			} {
+				var voteColumn monday.ColumnValue
+				if voteColumn, ok = columnMap[votesColumnID]; !ok {
+					continue
+				}
+				if voteColumn.Value == "null" {
+					continue
+				}
+				var votes monday.Votes
+				if err = json.Unmarshal([]byte(voteColumn.Value), &votes); err != nil {
+					continue
+				}
+				voteValues[i] = len(votes.VoterIds)
+			}
+			game.Votes = int32(voteValues[0] - voteValues[1])
 		}
 		return games
 	},
@@ -420,13 +478,13 @@ var AddGameToMonday = monday.NewBinding[monday.ItemId, string](
 
 func (g *Game) GetVerifiedDeveloperUsernames() []string { return g.VerifiedDeveloperUsernames }
 
-// VerifiedDeveloper returns the verified Developer for this Game. If there are none, we will return a nil pointer.
+// VerifiedDeveloper returns the first verified Developer for this Game. If there are none, we will return a nil pointer.
 func (g *Game) VerifiedDeveloper(db *gorm.DB) *Developer {
 	if len(g.VerifiedDeveloperUsernames) == 0 {
 		return nil
 	}
 	developer := Developer{}
-	if err := db.Find(&developer, "username IN ?", g.VerifiedDeveloperUsernames).Error; err != nil {
+	if err := db.Limit(1).Find(&developer, "username IN ?", g.VerifiedDeveloperUsernames).Error; err != nil {
 		return nil
 	}
 	return &developer
