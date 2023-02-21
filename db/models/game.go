@@ -341,6 +341,19 @@ func (g *Game) Update(db *gorm.DB, config ScrapeConfig) error {
 	return db.Omit(g.OnCreateOmit()...).Save(g).Error
 }
 
+// GetGamesFromMonday is a monday.Binding to retrieve multiple Game from the mapped board and group. Arguments provided
+// to Execute:
+//
+// • page (int): The page of results to retrieve. This means that GetGamesFromMonday can be passed to a monday.Paginator.
+//
+// • config (monday.Config): The monday.Config to use to find the monday.MappingConfig for the Game model.
+//
+// • db (*gorm.DB): The gorm.DB instance to use to search for the Game's of the IDs found in the Monday items. This is
+// only used in the Response method.
+//
+// Execute returns a list of Game instances within their mapped board and group combination for the given page of
+// results. It does this by retrieving the Game.ID from the appropriate column from each item and then searching the
+// gorm.DB instance which is provided in the 3rd argument.
 var GetGamesFromMonday = monday.NewBinding[monday.ItemResponse, []*Game](
 	func(args ...any) *graphql.Request {
 		page := args[0].(int)
@@ -358,8 +371,10 @@ var GetGamesFromMonday = monday.NewBinding[monday.ItemResponse, []*Game](
 			for _, column := range item.ColumnValues {
 				if column.Id == mapping.MappingModelInstanceIDColumnID() {
 					game := Game{}
-					if err := db.Find(&game, column.Value); err == nil {
-						games = append(games, &game)
+					if id, err := uuid.Parse(column.Value); err == nil {
+						if err := db.Find(&game, "id = ?", id).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
+							games = append(games, &game)
+						}
 					}
 					break
 				}
@@ -370,6 +385,17 @@ var GetGamesFromMonday = monday.NewBinding[monday.ItemResponse, []*Game](
 	"boards", true,
 )
 
+// AddGameToMonday adds a Game to the mapped board and group by constructing column values using the
+// monday.MappingConfig.ColumnValues method for the monday.MappingConfig for Game. Arguments provided to Execute:
+//
+// • game (*Game): The Game to add to the mapped board and group combination.
+//
+// • config (monday.Config): The monday.Config used to fetch the monday.MappingConfig for Game from. This
+// monday.MappingConfig is then used to generate the column values that are posted to the Monday API to construct a new
+// item on the mapped board and group combination.
+//
+// Execute returns the item ID of the newly created item. This can then be used to set the Game.Watched field
+// appropriately if necessary.
 var AddGameToMonday = monday.NewBinding[monday.ItemId, string](
 	func(args ...any) *graphql.Request {
 		game := args[0].(*Game)

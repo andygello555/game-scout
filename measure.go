@@ -8,6 +8,7 @@ import (
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/game-scout/email"
 	myErrors "github.com/andygello555/game-scout/errors"
+	"github.com/andygello555/game-scout/monday"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"math"
@@ -70,6 +71,32 @@ func trendFinder(jobs <-chan *models.Developer, results chan<- *trendFinderResul
 }
 
 func MeasurePhase(state *ScoutState) (err error) {
+	// Before we do anything let us fetch the Games and SteamApps that are on the linked Monday board.
+	var (
+		mondayGames       []*models.Game
+		mondaySteamApps   []*models.SteamApp
+		gamePaginator     *monday.Paginator[monday.ItemResponse, []*models.Game]
+		steamAppPaginator *monday.Paginator[monday.ItemResponse, []*models.SteamApp]
+	)
+
+	if gamePaginator, err = monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, models.GetGamesFromMonday, globalConfig.Monday, db.DB); err != nil {
+		log.ERROR.Printf("Could not create paginator for GetGamesFromMonday: %v", err)
+	} else {
+		if mondayGames, err = gamePaginator.All(); err != nil {
+			log.ERROR.Printf("Could not find all Games using Paginator for GetGamesFromMonday: %v", err)
+		}
+	}
+
+	if steamAppPaginator, err = monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, models.GetSteamAppsFromMonday, globalConfig.Monday, db.DB); err != nil {
+		log.ERROR.Printf("Could not create paginator for GetSteamAppsFromMonday: %v", err)
+	} else {
+		if mondaySteamApps, err = steamAppPaginator.All(); err != nil {
+			log.ERROR.Printf("Could not find all SteamApps using Paginator for GetSteamAppsFromMonday: %v", err)
+		}
+	}
+	log.INFO.Printf("We have found %d Games on the linked Monday board/group", len(mondayGames))
+	log.INFO.Printf("We have found %d SteamApps on the linked Monday board/group", len(mondaySteamApps))
+
 	startAny, _ := state.GetCachedField(StateType).Get("Start")
 	start := startAny.(time.Time)
 	start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())

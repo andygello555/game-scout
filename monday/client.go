@@ -341,6 +341,7 @@ type MappingConfig interface {
 	MappingBoardID() int
 	MappingGroupID() string
 	MappingModelInstanceIDColumnID() string
+	MappingModelInstanceWatchedColumnID() string
 	ColumnValues(game any) (columnValues map[string]any, err error)
 }
 

@@ -1148,7 +1148,6 @@ func main() {
 					}
 				case "addgame":
 					args := c.StringSlice("arg")
-					var gameInstance any
 					switch strings.ToLower(args[0]) {
 					case "games":
 						game := models.Game{}
@@ -1160,7 +1159,9 @@ func main() {
 						if err = db.DB.Find(&game, id).Error; err != nil {
 							return cli.NewExitError(err.Error(), 1)
 						}
-						gameInstance = &game
+						execute = func() (any, error) {
+							return models.AddGameToMonday.Execute(monday.DefaultClient, &game, globalConfig.Monday)
+						}
 					case "steam_apps":
 						app := models.SteamApp{}
 						var id int64
@@ -1171,13 +1172,48 @@ func main() {
 						if err = db.DB.Find(&app, id).Error; err != nil {
 							return cli.NewExitError(err.Error(), 1)
 						}
-						gameInstance = &app
+						execute = func() (any, error) {
+							return models.AddSteamAppToMonday.Execute(monday.DefaultClient, &app, globalConfig.Monday)
+						}
 					default:
 						return cli.NewExitError("no model of name "+args[0], 1)
 					}
+				case "getgames":
+					args := slices.Comprehension(c.StringSlice("arg")[1:], argsToInts)
+					page := 0
+					if len(args) > 0 {
+						page = args[0].(int)
+					}
 
-					execute = func() (any, error) {
-						return models.AddGameToMonday.Execute(monday.DefaultClient, gameInstance, globalConfig.Monday)
+					switch strings.ToLower(c.StringSlice("arg")[0]) {
+					case "games":
+						execute = func() (any, error) {
+							return models.GetGamesFromMonday.Execute(monday.DefaultClient, page, globalConfig.Monday, db.DB)
+						}
+						if c.Bool("all") {
+							execute = func() (any, error) {
+								if paginator, err := monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, models.GetGamesFromMonday, globalConfig.Monday, db.DB); err != nil {
+									return nil, err
+								} else {
+									return paginator.All()
+								}
+							}
+						}
+					case "steam_apps":
+						execute = func() (any, error) {
+							return models.GetSteamAppsFromMonday.Execute(monday.DefaultClient, page, globalConfig.Monday, db.DB)
+						}
+						if c.Bool("all") {
+							execute = func() (any, error) {
+								if paginator, err := monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, models.GetSteamAppsFromMonday, globalConfig.Monday, db.DB); err != nil {
+									return nil, err
+								} else {
+									return paginator.All()
+								}
+							}
+						}
+					default:
+						return cli.NewExitError("no model of name "+c.StringSlice("arg")[0], 1)
 					}
 				}
 

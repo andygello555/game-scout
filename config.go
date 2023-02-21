@@ -357,7 +357,10 @@ type MondayMappingConfig struct {
 	GroupID string `json:"group_id"`
 	// ModelInstanceIDColumnID is the Monday.com assigned ID of the column within the BoardID used to store the ID of
 	// the models.SteamApp/models.Game instance in game-scout.
-	ModelInstanceIDColumnID string `json:"model_instance_column_id"`
+	ModelInstanceIDColumnID string `json:"model_instance_id_column_id"`
+	// ModelInstanceWatchedColumnID is the Monday.com assigned ID of the column within the BoardID used to store the
+	// value of the Watched field of the related models.SteamApp/models.Game.
+	ModelInstanceWatchedColumnID string `json:"model_instance_watched_column_id"`
 	// ModelFieldToColumnValueExpr represents a mapping from Monday column IDs to expressions that can be compiled using
 	// expr.Eval to convert a field from a given models.Game/models.SteamApp instance to a value that Monday can use.
 	// This is used when creating models.Game/models.SteamApp in their BoardID in the Measure Phase.
@@ -370,6 +373,9 @@ func (mmc *MondayMappingConfig) MappingBoardID() int      { return mmc.BoardID }
 func (mmc *MondayMappingConfig) MappingGroupID() string   { return mmc.GroupID }
 func (mmc *MondayMappingConfig) MappingModelInstanceIDColumnID() string {
 	return mmc.ModelInstanceIDColumnID
+}
+func (mmc *MondayMappingConfig) MappingModelInstanceWatchedColumnID() string {
+	return mmc.ModelInstanceWatchedColumnID
 }
 
 var mondayMappingExprFunctions = []expr.Option{
