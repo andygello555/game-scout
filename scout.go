@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
@@ -46,8 +47,31 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 		return errors.Wrapf(err, "could not load/create ScoutState when starting Scout procedure")
 	}
 
+	timer := time.AfterFunc(globalConfig.Scrape.Constants.ScoutTimeout.Duration, func() {
+		panic(fmt.Errorf(
+			"scout procedure has been running for longer than %s, shutting it down",
+			globalConfig.Scrape.Constants.ScoutTimeout.String(),
+		))
+	})
+
 	defer func() {
-		// If an error occurs we'll always attempt to save the state
+		// Stop the timer as we have exited the Scout procedure. This will either be because:
+		// • The Scout procedure has completed successfully
+		// • An error has bubbled up
+		// • A panic has occurred. Hopefully, from the timer above.
+		timer.Stop()
+
+		// Check if a panic has occurred. If so, we will merge it into the currently set error return parameter.
+		p := recover()
+		if p != nil {
+			if pErr, ok := p.(error); ok {
+				err = myErrors.MergeErrors(err, pErr)
+			} else {
+				err = myErrors.MergeErrors(err, fmt.Errorf("%v", p))
+			}
+		}
+
+		// If an error exists, we will send the Error email Template.
 		if err != nil {
 			err = myErrors.MergeErrors(err, state.Save())
 			log.ERROR.Printf("Error occurred in Scout procedure, sending error email: %v", err)
