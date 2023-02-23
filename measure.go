@@ -171,6 +171,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 	// 5: Increment each developer's TimesHighlighted field
 	// 6. Add the collected trending developers to the MeasureContext instance
 	var enabledDevelopers []*models.Developer
+	var enabledDevelopersNo int64
 	// select developers.*
 	// from developers
 	// left join developer_snapshots on developers.id = developer_id
@@ -191,12 +192,12 @@ func MeasurePhase(state *ScoutState) (err error) {
 		return myErrors.TemporaryWrap(false, err, "cannot fetch enabled developers in Measure")
 	}
 
-	if err = db.DB.Model(&models.Developer{}).Where("not disabled").Count(&measureContext.EnabledDevelopers).Error; err != nil {
+	if err = db.DB.Model(&models.Developer{}).Where("not disabled").Count(&enabledDevelopersNo).Error; err != nil {
 		log.ERROR.Printf("Could not find the number of enabled developers: %v", err)
 	}
 	log.INFO.Printf(
 		"There are %d enabled developers, we are going to find the trend of %d developers",
-		measureContext.EnabledDevelopers, len(enabledDevelopers),
+		enabledDevelopersNo, len(enabledDevelopers),
 	)
 
 	jobs := make(chan *models.Developer, len(enabledDevelopers))
@@ -230,6 +231,8 @@ func MeasurePhase(state *ScoutState) (err error) {
 	log.INFO.Printf("Adding top %d developers to the MeasureContext", topDevelopersNo)
 	for i := 0; i < topDevelopersNo; i++ {
 		topDeveloper := heap.Pop(&topDevelopers).(*trendFinderResult)
+		topDeveloper.SetPosition(i + 1)
+		topDeveloper.SetOutOf(int(enabledDevelopersNo))
 		log.INFO.Printf(
 			"%d: Adding Developer %v with trend %.10f to email context...",
 			i+1, topDeveloper.Developer, topDeveloper.Trend.GetCoeffs()[1],

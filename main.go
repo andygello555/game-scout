@@ -858,6 +858,16 @@ func main() {
 					Required: false,
 				},
 				cli.BoolFlag{
+					Name:     "measureWatchedDevelopers",
+					Usage:    "execute the Measure template for this Developer but treat it as though it's Games are being watched",
+					Required: false,
+				},
+				cli.BoolFlag{
+					Name:     "measureWatchedGames",
+					Usage:    "execute the Measure template for this Developer but treat it as though it's Games are being watched, and that it doesn't exist",
+					Required: false,
+				},
+				cli.BoolFlag{
 					Name:     "measureDelete",
 					Usage:    "execute the Measure template for this Developer but treat it as though it is being deleted",
 					Required: false,
@@ -888,7 +898,8 @@ func main() {
 					Start:                  time.Now(),
 					End:                    time.Now(),
 					TrendingDevs:           make([]*models.TrendingDev, len(c.StringSlice("id"))),
-					DevelopersBeingDeleted: make([]*models.TrendingDev, len(c.StringSlice("id"))),
+					DevelopersBeingDeleted: make([]*models.TrendingDev, 0),
+					WatchedDevelopers:      make([]*models.TrendingDev, 0),
 					Config:                 globalConfig.Email,
 				}
 
@@ -972,14 +983,28 @@ func main() {
 						fmt.Printf("\tCoefficients for the trend of Developer %v: %v\n", developer, trend.GetCoeffs())
 					}
 
-					if c.Bool("measure") || c.Bool("measureDelete") || c.Bool("deletedDevelopers") {
+					if c.Bool("measure") || c.Bool("measureWatchedDevelopers") || c.Bool("measureWatchedGames") || c.Bool("measureDelete") || c.Bool("deletedDevelopers") {
 						if measureContext.TrendingDevs[developerNo], err = developer.TrendingDev(db.DB); err != nil {
 							return cli.NewExitError(err.Error(), 1)
+						}
+						measureContext.TrendingDevs[developerNo].SetPosition(developerNo + 1)
+						measureContext.TrendingDevs[developerNo].SetOutOf(len(c.StringSlice("id")))
+
+						if c.Bool("measureWatchedDevelopers") {
+							measureContext.WatchedDevelopers = append(measureContext.WatchedDevelopers, measureContext.TrendingDevs[developerNo])
+						}
+
+						if c.Bool("measureWatchedGames") {
+							for _, game := range measureContext.TrendingDevs[developerNo].Games {
+								measureContext.WatchedDevelopers = append(measureContext.WatchedDevelopers, &models.TrendingDev{
+									Games: []*models.Game{game},
+								})
+							}
 						}
 
 						// Also add the TrendingDev to the DevelopersBeingDeleted slice if measureDelete is given
 						if c.Bool("measureDelete") {
-							measureContext.DevelopersBeingDeleted[developerNo] = measureContext.TrendingDevs[developerNo]
+							measureContext.DevelopersBeingDeleted = append(measureContext.DevelopersBeingDeleted, measureContext.TrendingDevs[developerNo])
 						}
 
 						if c.Bool("deletedDevelopers") {
@@ -1250,6 +1275,11 @@ func main() {
 					Required: false,
 				},
 				cli.BoolFlag{
+					Name:     "measureWatched",
+					Usage:    "execute the Measure template for this SteamApp but treat it as though it has been Watched",
+					Required: false,
+				},
+				cli.BoolFlag{
 					Name:     "printAfter",
 					Usage:    "print the SteamApp after all the flags have been run",
 					Required: false,
@@ -1257,10 +1287,11 @@ func main() {
 			},
 			Action: func(c *cli.Context) (err error) {
 				measureContext := email.MeasureContext{
-					Start:        time.Now(),
-					End:          time.Now(),
-					TopSteamApps: make([]*models.SteamApp, len(c.IntSlice("id"))),
-					Config:       globalConfig.Email,
+					Start:            time.Now(),
+					End:              time.Now(),
+					TopSteamApps:     make([]*models.SteamApp, len(c.IntSlice("id"))),
+					WatchedSteamApps: make([]*models.SteamApp, len(c.IntSlice("id"))),
+					Config:           globalConfig.Email,
 				}
 
 				for steamAppNo, id := range c.IntSlice("id") {
@@ -1282,6 +1313,10 @@ func main() {
 
 					if c.Bool("measure") {
 						measureContext.TopSteamApps[steamAppNo] = &steamApp
+					}
+
+					if c.Bool("measureWatched") {
+						measureContext.WatchedSteamApps[steamAppNo] = &steamApp
 					}
 
 					if c.Bool("printAfter") {
