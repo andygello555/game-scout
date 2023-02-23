@@ -162,6 +162,7 @@ func UpdateDeveloper(
 
 // updateDeveloperJob represents a job that is sent to an updateDeveloperWorker.
 type updateDeveloperJob struct {
+	id          uuid.UUID
 	developerNo int
 	developer   *models.Developer
 	totalTweets int
@@ -169,6 +170,7 @@ type updateDeveloperJob struct {
 
 // updateDeveloperResult represents a result that is produced by an updateDeveloperWorker.
 type updateDeveloperResult struct {
+	id          uuid.UUID
 	developerNo int
 	developer   *models.Developer
 	tempState   *ScoutState
@@ -186,6 +188,7 @@ func updateDeveloperWorker(
 	defer wg.Done()
 	for job := range jobs {
 		result := &updateDeveloperResult{
+			id:          job.id,
 			developerNo: job.developerNo,
 			developer:   job.developer,
 			tempState:   StateInMemory(),
@@ -282,7 +285,7 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 		// Indicated when the consumer has finished (as well as with what error)
 		consumerDone := make(chan error)
 		// Indicates which jobs have finished in the current producer batch
-		finishedJobs := make(chan int, len(unscrapedDevelopers))
+		finishedJobs := make(chan uuid.UUID, len(unscrapedDevelopers))
 
 		// For each unscraped developer we will execute a query on RecentSearch for the developer for tweets after the
 		// latest developer snapshot's LastTweetTime. We decide how many tweets to request for each developer by dividing
@@ -333,16 +336,20 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 			)
 		}
 
-		queueDeveloperRange := func(low int, high int) {
+		queueDeveloperRange := func(low int, high int) mapset.Set[uuid.UUID] {
+			jobIds := mapset.NewSet[uuid.UUID]()
 			slicedUnscrapedDevelopers := unscrapedDevelopers[low:high]
 			currentBatchQueue := 0
 			for d, developer := range slicedUnscrapedDevelopers {
 				log.INFO.Printf("Queued update for Developer no. %d: %v", d, developer)
-				jobs <- &updateDeveloperJob{
+				job := &updateDeveloperJob{
+					id:          uuid.New(),
 					developerNo: d,
 					developer:   developer,
 					totalTweets: totalTweetsForEachDeveloper,
 				}
+				jobIds.Add(job.id)
+				jobs <- job
 				currentBatchQueue++
 				// When the current number jobs sent to the updateDeveloperWorkers has reached batchSize, we will wait
 				// for a bit before continuing to send them
@@ -355,6 +362,7 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 					sleepBar(globalConfig.Scrape.Constants.SecondsBetweenUpdateBatches.Duration)
 				}
 			}
+			return jobIds
 		}
 
 		// Start the workers for scraping games.
@@ -431,12 +439,16 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 				batchNo := 0
 				for left > 0 {
 					// Queue up all the jobs from ranges low -> high
-					finishedJobs = make(chan int, high-low)
+					finishedJobs = make(chan uuid.UUID, high-low)
 					log.INFO.Printf(
-						"batchNo: %d) There are %d developers left to queue up for updating. Queueing developers %d -> %d",
-						batchNo, left, low, high,
+						"batchNo: %d) There are %d developers left to queue up for updating. Queueing developers %d -> %d (%d total)",
+						batchNo, left, low, high, high-low,
 					)
-					queueDeveloperRange(low, high)
+					jobIds := queueDeveloperRange(low, high)
+					totalJobs := jobIds.Cardinality()
+					if totalJobs != high-low {
+						log.ERROR.Printf("queueDeveloperRange could only queue up %d jobs instead of %d", totalJobs, high-low)
+					}
 					left -= high - low
 
 					// We don't need to sleep if there are no jobs left
@@ -456,13 +468,12 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 					}
 
 					// We wait until all the results have been processed by the consumer
-					developerNumbersSeen := mapset.NewThreadUnsafeSet[int]()
-					for developerNumbersSeen.Cardinality() != high-low {
-						log.INFO.Printf("Developers seen %d/%d", developerNumbersSeen.Cardinality(), high-low)
+					for jobIds.Cardinality() != 0 {
+						log.INFO.Printf("Developers seen %d/%d", totalJobs-jobIds.Cardinality(), totalJobs)
 						select {
-						case developerNo := <-finishedJobs:
-							log.INFO.Printf("Consumer has been notified that job %d has finished. Adding to set...", developerNo)
-							developerNumbersSeen.Add(developerNo)
+						case id := <-finishedJobs:
+							log.INFO.Printf("Consumer has been notified that job %s has finished. Ticking off...", id.String())
+							jobIds.Remove(id)
 						case <-time.After(2 * time.Second):
 							log.INFO.Printf("Did not get any finished jobs in 2s, trying again...")
 						}
@@ -508,7 +519,7 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 			var consumerErr error
 			for result := range results {
 				if result.error != nil && !myErrors.IsTemporary(result.error) {
-					finishedJobs <- result.developerNo
+					finishedJobs <- result.id
 					log.ERROR.Printf(
 						"Permanent error in result for Developer %v contains an error: %s",
 						result.developer, result.error.Error(),
@@ -520,7 +531,7 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 					))
 					return
 				} else if result.error != nil {
-					finishedJobs <- result.developerNo
+					finishedJobs <- result.id
 					log.ERROR.Printf("UpdateDeveloper result for %v contains an error: %s", result.developer, result.error.Error())
 					continue
 				} else {
@@ -552,7 +563,7 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 					resultBatchCount = 0
 				}
 
-				finishedJobs <- result.developerNo
+				finishedJobs <- result.id
 			}
 
 			// Push the error into the done channel if there is one

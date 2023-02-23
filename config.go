@@ -568,6 +568,9 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 }
 
 type ScrapeConstants struct {
+	// ScoutTimeout is the maximum duration that the Scout procedure should be run for. If it runs longer than this it
+	// will be stopped using a panic.
+	ScoutTimeout Duration `json:"scout_timeout"`
 	// TransformTweetWorkers is the number of transformTweetWorker that will be spun up in the DiscoveryBatch.
 	TransformTweetWorkers int `json:"transform_tweet_workers"`
 	// UpdateDeveloperWorkers is the number of updateDeveloperWorker that will be spun up in the update phase.
