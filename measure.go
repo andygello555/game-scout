@@ -237,7 +237,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 
 		if globalConfig.Monday != nil && len(topDeveloper.Games) > 0 {
 			log.INFO.Printf(
-				"Developer %v has tweeted about %d Games, adding these to linked Monday org",
+				"Developer %v has tweeted about %d Games, adding these to linked Monday board/group",
 				topDeveloper.Developer, len(topDeveloper.Games),
 			)
 			for _, game := range topDeveloper.Games {
@@ -283,27 +283,28 @@ func MeasurePhase(state *ScoutState) (err error) {
 	}
 	measureContext.TopSteamApps = steamApps
 
-	if !debug {
-		log.INFO.Printf("Updating times highlighted and adding %d SteamApps to Monday", len(steamApps))
-		for _, steamApp := range steamApps {
+	log.INFO.Printf("Updating times highlighted and adding %d SteamApps to Monday", len(steamApps))
+	for _, steamApp := range steamApps {
+		if !debug {
 			if err = db.DB.Model(steamApp).Update("times_highlighted", gorm.Expr("times_highlighted + 1")).Error; err != nil {
 				log.ERROR.Printf("\tCould not increment TimesHighlighted for %s (%d): %v", steamApp.Name, steamApp.ID, err)
 			}
-			if globalConfig.Monday != nil && !mondaySteamAppIDs.Contains(steamApp.ID) {
-				if _, err = models.AddSteamAppToMonday.Execute(monday.DefaultClient, steamApp, globalConfig.Monday); err != nil {
-					log.ERROR.Printf("\tCould not add SteamApp %q to Monday: %v", steamApp.String(), err)
-				} else {
-					log.INFO.Printf("\tAdded SteamApp %q to Monday board/group", steamApp.String())
-				}
-			} else {
-				log.WARNING.Printf("\tSteamApp %q already exists on the linked Monday board/group. Skipping...", steamApp.String())
-			}
+		} else {
+			log.WARNING.Printf(
+				"ScoutState.Debug is set, so we are skipping incrementing times_highlighted on SteamApp %q",
+				steamApp.String(),
+			)
 		}
-	} else {
-		log.WARNING.Printf(
-			"ScoutState.Debug is set, so we are skipping incrementing times_highlighted on %d SteamApps",
-			len(steamApps),
-		)
+
+		if globalConfig.Monday != nil && !mondaySteamAppIDs.Contains(steamApp.ID) {
+			if _, err = models.AddSteamAppToMonday.Execute(monday.DefaultClient, steamApp, globalConfig.Monday); err != nil {
+				log.ERROR.Printf("\tCould not add SteamApp %q to Monday: %v", steamApp.String(), err)
+			} else {
+				log.INFO.Printf("\tAdded SteamApp %q to Monday board/group", steamApp.String())
+			}
+		} else {
+			log.WARNING.Printf("\tSteamApp %q already exists on the linked Monday board/group. Skipping...", steamApp.String())
+		}
 	}
 
 	// We then find fill out the fields in the MeasureContext pertaining to Watched SteamApps and Games
@@ -316,9 +317,22 @@ func MeasurePhase(state *ScoutState) (err error) {
 		for _, watchedGame := range watchedGames {
 			if !mondayWatchedGameIDs.Contains(watchedGame.ID) {
 				log.WARNING.Printf("\tGame %q is no longer being watched on Monday. Updating...", watchedGame.String())
-				watchedGame.Watched = nil
-				if err = db.DB.Save(watchedGame).Error; err != nil {
-					log.ERROR.Printf("\tCould not save Game %q after setting Watched to nil: %v", watchedGame.String(), err)
+				if len(watchedGame.Developers) == 0 {
+					log.WARNING.Printf(
+						"\tGame %q is no longer being watched AND has no referenced \"developers\" so it will be deleted",
+						watchedGame.String(),
+					)
+					if err = db.DB.Delete(watchedGame).Error; err != nil {
+						log.ERROR.Printf(
+							"\t\tCould not delete Game %q that is no longer being watched and has no referenced \"developers\"",
+							watchedGame.String(),
+						)
+					}
+				} else {
+					watchedGame.Watched = nil
+					if err = db.DB.Save(watchedGame).Error; err != nil {
+						log.ERROR.Printf("\tCould not save Game %q after setting Watched to nil: %v", watchedGame.String(), err)
+					}
 				}
 			} else {
 				log.INFO.Printf("\tGame %q is still being watched on Monday getting TrendingDev", watchedGame.String())
