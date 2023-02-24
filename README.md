@@ -121,7 +121,7 @@ All configuration variables for game-scout exist in a `config.json` file that mu
     "api_key": "<TWITTER_API_KEY>",
     "api_key_secret": "<TWITTER_API_SECRET>",
     "bearer_token": "<TWITTER_API_BEARER_TOKEN>",
-    "username": "lordandygello@gmail.com",
+    "username": "<TWITTER_USERNAME/EMAIL>",
     "password": "<TWITTER_PASSWORD>",
     "hashtags": [],
     "blacklisted_hashtags": [],
