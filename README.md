@@ -189,6 +189,14 @@ All configuration variables for game-scout exist in a `config.json` file that mu
           "upvotes_threshold": 25,
           "values": {}
         }
+      },
+      {
+        "storefront": "I",
+        "tags": {
+          "default_value": 500,
+          "upvotes_threshold": 0,
+          "values": {}
+        }
       }
     ],
     "constants": {
@@ -382,7 +390,7 @@ The [`monday`](monday) package contains all the types and bindings that are used
 
 ### Scrape
 
-This contains the settings for the scrape procedures that are run for the different supported Storefronts, as well as general configuration settings/constants for game-scout. At the moment, the only supported Storefront is [Steam](https://store.steampowered.com/).
+This contains the settings for the scrape procedures that are run for the different supported Storefronts, as well as general configuration settings/constants for game-scout. At the moment, the only supported Storefronts are [Steam](https://store.steampowered.com/) and [Itch.IO](https://itch.io/).
 
 | Key           | Type                             | Description                                                                                                                |
 |---------------|----------------------------------|----------------------------------------------------------------------------------------------------------------------------|

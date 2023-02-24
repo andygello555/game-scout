@@ -14,6 +14,7 @@ import (
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/google/uuid"
+	"github.com/pkg/errors"
 	"github.com/schollz/progressbar/v3"
 	"github.com/volatiletech/null/v9"
 	"gorm.io/gorm"
@@ -22,6 +23,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -172,12 +174,22 @@ func TestUpdatePhase(t *testing.T) {
 			t.Errorf("Cannot create Developer %s: %s", developer.ID, err.Error())
 		}
 		if testing.Verbose() {
-			fmt.Printf("Created Developer no. %d: %s\n", developerNo+1, developer.ID)
+			t.Logf("Created Developer no. %d: %s\n", developerNo+1, developer.ID)
+		}
+
+		var storefront models.Storefront
+		switch {
+		case models.SteamStorefront.ScrapeURL().Match(gameWebsites[developerNo].String):
+			storefront = models.SteamStorefront
+		case models.ItchIOStorefront.ScrapeURL().Match(gameWebsites[developerNo].String):
+			storefront = models.ItchIOStorefront
+		default:
+			storefront = models.UnknownStorefront
 		}
 
 		if err = db.DB.Create(&models.Game{
 			Name:       null.StringFrom(fmt.Sprintf("Game for Developer: %d", developerNo)),
-			Storefront: models.SteamStorefront,
+			Storefront: storefront,
 			Website:    gameWebsites[developerNo],
 			Developers: []string{developer.Username},
 		}).Error; err != nil {
@@ -212,14 +224,16 @@ func TestUpdatePhase(t *testing.T) {
 		query,
 		twitter.TweetRecentSearchOpts{MaxResults: 10},
 	); err != nil {
-		t.Fatalf("Error occurred whilst making a test RecentSearch request: %s", err.Error())
+		var errorResponse *twitter.ErrorResponse
+		if errors.As(err, &errorResponse) && strings.Contains(errorResponse.Error(), "429 Too Many Requests") {
+			sleepBar(errorResponse.RateLimit.Reset.Time().UTC().Sub(time.Now().UTC()))
+		} else {
+			t.Fatalf("Error occurred whilst making a test RecentSearch request: %s", err.Error())
+		}
 	}
 
 	// Create a brand new ScoutState
-	var state *ScoutState
-	if state, err = StateLoadOrCreate(true); err != nil {
-		t.Errorf("Error occurred when creating ScoutState: %s", err.Error())
-	}
+	state := StateInMemory()
 	state.GetCachedField(StateType).SetOrAdd("Phase", Update)
 	state.GetCachedField(StateType).SetOrAdd("BatchSize", batchSize)
 	state.GetCachedField(StateType).SetOrAdd("DiscoveryTweets", discoveryTweets)
@@ -238,10 +252,6 @@ func TestUpdatePhase(t *testing.T) {
 			"There are only %d gameIDs, expected >=%d",
 			state.GetIterableCachedField(GameIDsType).Len(), developerNo,
 		)
-	}
-
-	if !(*keepState) {
-		state.Delete()
 	}
 }
 
