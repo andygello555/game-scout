@@ -27,9 +27,9 @@ import (
 // finding the trend for each, and sorting it by the value of the first coefficient for each regression in ascending order.
 // The top percentageOfDisabledDevelopersToDelete of this set will be deleted.
 //
-// All games that reference these deleted developers will have the developer's username removed from its developers
-// field. If any games after this procedure are left with no developers within their developers field, they also will be
-// deleted.
+// All games that reference these deleted developers will have the developer's username removed from its "developers"
+// field. If any unwatched games after this procedure are left with no developers within their developers field, they also
+// will be deleted.
 //
 // The deleted developers are stored within the DeletedDevelopers cached field of the given ScoutState, along with all
 // their snapshots and games, so that they can be mentioned in the Measure Phase.
@@ -322,9 +322,9 @@ func DeletePhase(state *ScoutState) (err error) {
 				)
 			}
 
-			// Delete any Games that now have no referenced developers
+			// Delete any Games that now have no referenced developers and are not being watched
 			deleteQuery := db.DB.Model(&models.Game{}).Where(
-				"id IN ? AND cardinality(developers) = 0",
+				"id IN ? AND cardinality(developers) = 0 AND watched IS NULL",
 				gameIDs,
 			)
 

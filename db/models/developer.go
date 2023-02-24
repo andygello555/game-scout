@@ -46,6 +46,11 @@ func (d *Developer) String() string {
 	}[d.Disabled])
 }
 
+// Link returns the URL link to the Developer's Twitter page.
+func (d *Developer) Link() string {
+	return fmt.Sprintf("https://twitter.com/%s", d.Username)
+}
+
 func (d *Developer) GetObservedName() string { return "Snapshot Weighted Score" }
 
 func (d *Developer) GetVariableNames() []string { return []string{"Snapshot Date"} }
@@ -106,11 +111,21 @@ func (d *Developer) Trend(db *gorm.DB) (trend *Trend, err error) {
 }
 
 type TrendingDev struct {
+	position  *int
+	outOf     *int
 	Developer *Developer
 	Snapshots []*DeveloperSnapshot
 	Games     []*Game
 	Trend     *Trend
 }
+
+func (td *TrendingDev) SetPosition(pos int) { td.position = &pos }
+func (td *TrendingDev) GetPosition() int    { return *td.position }
+func (td *TrendingDev) HasPosition() bool   { return td.position != nil }
+
+func (td *TrendingDev) SetOutOf(outOf int) { td.outOf = &outOf }
+func (td *TrendingDev) GetOutOf() int      { return *td.outOf }
+func (td *TrendingDev) HasOutOf() bool     { return td.outOf != nil }
 
 // TrendingDev returns the TrendingDev that is comprised from the Developer's Games, DeveloperSnapshots, and Trend.
 func (d *Developer) TrendingDev(db *gorm.DB) (trendingDev *TrendingDev, err error) {

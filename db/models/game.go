@@ -8,11 +8,13 @@ import (
 	"github.com/anaskhan96/soup"
 	"github.com/andygello555/game-scout/browser"
 	myErrors "github.com/andygello555/game-scout/errors"
+	"github.com/andygello555/game-scout/monday"
 	"github.com/andygello555/game-scout/steamcmd"
 	"github.com/andygello555/gotils/v2/numbers"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+	"github.com/machinebox/graphql"
 	"github.com/pkg/errors"
 	"github.com/volatiletech/null/v9"
 	"gorm.io/gorm"
@@ -74,6 +76,11 @@ type Game struct {
 	// TagScore is average value of each tag. Each tag's value is calculated by multiplying the number of upvotes for
 	// that tag by the default value/override value for that tag. See TagConfig for more info.
 	TagScore null.Float64
+	// Watched indicates the Monday.com item Id, from the connected Monday board, for the Game. If this is nil, then it
+	// can be assumed that this Game is not being watched.
+	Watched *string `gorm:"default:null;type:varchar(32)"`
+	// Votes is the number of upvotes for the Game on the linked Monday board/group minus the number of downvotes.
+	Votes int32 `gorm:"default:0"`
 	// WeightedScore is a weighted average comprised of the values taken from Publisher, TotalReviews, ReviewScore,
 	// TotalUpvotes, TotalDownvotes, TotalComments, TagScore, and Updates for this game. If
 	// Game.CheckCalculateWeightedScore is false then this will be nil. This is a computed field, no need to set it
@@ -95,6 +102,7 @@ const (
 	GameTagScoreWeight       gameWeight = 0.25
 	GameUpdatesWeight        gameWeight = -0.15
 	GameReleaseDateWeight    gameWeight = 0.7
+	GameVotesWeight          gameWeight = 0.8
 )
 
 // gameWeightedField represents a field that can have a weighting calculation applied to it in Game.
@@ -110,6 +118,7 @@ const (
 	GameTagScore       gameWeightedField = "TagScore"
 	GameUpdates        gameWeightedField = "Updates"
 	GameReleaseDate    gameWeightedField = "ReleaseDate"
+	GameVotes          gameWeightedField = "Votes"
 )
 
 // String returns the string value of the gameWeightedField.
@@ -137,6 +146,8 @@ func (gf gameWeightedField) Weight() (w float64, inverse bool) {
 		w = float64(GameUpdatesWeight)
 	case GameReleaseDate:
 		w = float64(GameReleaseDateWeight)
+	case GameVotes:
+		w = float64(GameVotesWeight)
 	default:
 		panic(fmt.Errorf("\"%s\" is not a gameWeightedField", gf))
 	}
@@ -196,12 +207,6 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 		return []float64{val}
 	case GameUpdates:
 		return []float64{float64(f.Uint()+1) / 1500.0}
-	//case GameDeveloperVerified:
-	//	val := -50000.0
-	//	if f.Bool() {
-	//		val = 4000.0
-	//	}
-	//	return []float64{val}
 	case GameReleaseDate:
 		nullTime := f.Interface().(null.Time)
 		var val float64
@@ -217,6 +222,8 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 			val = timeDiff.Hours()
 		}
 		return []float64{val}
+	case GameVotes:
+		return []float64{float64(f.Int() * 100000)}
 	default:
 		panic(fmt.Errorf("gameWeightedField %s is not recognized, and cannot be converted to []float64", gf))
 	}
@@ -233,6 +240,7 @@ func (gf gameWeightedField) Fields() []WeightedField {
 		GameTagScore,
 		GameUpdates,
 		GameReleaseDate,
+		GameVotes,
 	}
 }
 
@@ -320,6 +328,8 @@ func (g *Game) OnConflict() clause.OnConflict {
 		"total_downvotes",
 		"total_comments",
 		"tag_score",
+		"watched",
+		"votes",
 		"weighted_score",
 	})...)
 	return clause.OnConflict{
@@ -341,6 +351,143 @@ func (g *Game) OnCreateOmit() []string {
 func (g *Game) Update(db *gorm.DB, config ScrapeConfig) error {
 	ScrapeStorefrontForGameModel[string](g.Website.String, g.Wrapper().StorefrontScraper(g.Storefront), config)
 	return db.Omit(g.OnCreateOmit()...).Save(g).Error
+}
+
+// GetGamesFromMonday is a monday.Binding to retrieve multiple Game from the mapped board and group. Arguments provided
+// to Execute:
+//
+// • page (int): The page of results to retrieve. This means that GetGamesFromMonday can be passed to a monday.Paginator.
+//
+// • config (monday.Config): The monday.Config to use to find the monday.MappingConfig for the Game model.
+//
+// • db (*gorm.DB): The gorm.DB instance to use to search for the Game's of the IDs found in the Monday items. This is
+// only used in the Response method.
+//
+// Execute returns a list of Game instances within their mapped board and group combination for the given page of
+// results. It does this by retrieving the Game.ID from the appropriate column from each item and then searching the
+// gorm.DB instance which is provided in the 3rd argument.
+var GetGamesFromMonday = monday.NewBinding[monday.ItemResponse, []*Game](
+	func(args ...any) *graphql.Request {
+		page := args[0].(int)
+		mapping := args[1].(monday.Config).MondayMappingForModel(Game{})
+		boardIds := []int{mapping.MappingBoardID()}
+		groupIds := []string{mapping.MappingGroupID()}
+		return monday.GetItems.Request(page, boardIds, groupIds)
+	},
+	func(response monday.ItemResponse, args ...any) []*Game {
+		items := monday.GetItems.Response(response)
+		mapping := args[1].(monday.Config).MondayMappingForModel(Game{})
+		db := args[2].(*gorm.DB)
+		games := make([]*Game, 0)
+		for _, item := range items {
+			columnMap := make(map[string]monday.ColumnValue)
+			for _, column := range item.ColumnValues {
+				columnMap[column.Id] = column
+			}
+
+			var (
+				id     uuid.UUID
+				column monday.ColumnValue
+				err    error
+				ok     bool
+			)
+			if column, ok = columnMap[mapping.MappingModelInstanceIDColumnID()]; !ok {
+				continue
+			}
+
+			game := Game{}
+			if id, err = uuid.Parse(strings.Trim(column.Value, `"`)); err != nil {
+				continue
+			}
+
+			if err := db.Find(&game, "id = ?", id).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+
+			games = append(games, &game)
+			if column, ok = columnMap[mapping.MappingModelInstanceWatchedColumnID()]; ok {
+				if column.Value != "null" {
+					var watches monday.Votes
+					if err = json.Unmarshal([]byte(column.Value), &watches); err == nil {
+						if len(watches.VoterIds) > 0 {
+							game.Watched = &item.Id
+						}
+					}
+				} else {
+					game.Watched = nil
+				}
+			}
+
+			voteValues := []int{0, 0}
+			for i, votesColumnID := range []string{
+				mapping.MappingModelInstanceUpvotesColumnID(),
+				mapping.MappingModelInstanceDownvotesColumnID(),
+			} {
+				var voteColumn monday.ColumnValue
+				if voteColumn, ok = columnMap[votesColumnID]; !ok {
+					continue
+				}
+				if voteColumn.Value == "null" {
+					continue
+				}
+				var votes monday.Votes
+				if err = json.Unmarshal([]byte(voteColumn.Value), &votes); err != nil {
+					continue
+				}
+				voteValues[i] = len(votes.VoterIds)
+			}
+			game.Votes = int32(voteValues[0] - voteValues[1])
+		}
+		return games
+	},
+	"boards", true,
+)
+
+// AddGameToMonday adds a Game to the mapped board and group by constructing column values using the
+// monday.MappingConfig.ColumnValues method for the monday.MappingConfig for Game. Arguments provided to Execute:
+//
+// • game (*Game): The Game to add to the mapped board and group combination.
+//
+// • config (monday.Config): The monday.Config used to fetch the monday.MappingConfig for Game from. This
+// monday.MappingConfig is then used to generate the column values that are posted to the Monday API to construct a new
+// item on the mapped board and group combination.
+//
+// Execute returns the item ID of the newly created item. This can then be used to set the Game.Watched field
+// appropriately if necessary.
+var AddGameToMonday = monday.NewBinding[monday.ItemId, string](
+	func(args ...any) *graphql.Request {
+		game := args[0].(*Game)
+		itemName := game.Website.String
+		if game.Name.IsValid() {
+			itemName = game.Name.String
+		}
+		mapping := args[1].(monday.Config).MondayMappingForModel(Game{})
+		columnValues, err := mapping.ColumnValues(game)
+		if err != nil {
+			panic(err)
+		}
+		return monday.AddItem.Request(
+			mapping.MappingBoardID(),
+			mapping.MappingGroupID(),
+			itemName,
+			columnValues,
+		)
+	},
+	monday.AddItem.Response, "create_item", false,
+)
+
+func (g *Game) GetVerifiedDeveloperUsernames() []string { return g.VerifiedDeveloperUsernames }
+
+// VerifiedDeveloper returns the first verified Developer for this Game. If there are none, we will return a nil pointer.
+func (g *Game) VerifiedDeveloper(db *gorm.DB) *Developer {
+	if len(g.VerifiedDeveloperUsernames) == 0 {
+		return nil
+	}
+	developer := Developer{}
+	if err := db.Limit(1).Find(&developer, "username IN ?", g.VerifiedDeveloperUsernames).Error; err != nil {
+		return nil
+	}
+	return &developer
 }
 
 func (g *Game) Wrapper() GameModelWrapper[string, GameModel[string]] { return &GameWrapper{Game: g} }

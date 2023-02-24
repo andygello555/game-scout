@@ -10,6 +10,10 @@ A tool that tracks indie developers on Twitter and highlights up and coming deve
   * [Tasks](#tasks)
     * [Periodic task signature](#periodic-task-signature)
   * [Twitter](#twitter)
+    * [Rate limits](#rate-limits)
+  * [Monday](#monday)
+    * [MondayConfig](#mondayconfig)
+    * [MondayMappingConfig](#mondaymappingconfig)
   * [Scrape](#scrape)
     * [Storefront config](#storefront-config)
       * [Tag config](#tag-config)
@@ -137,6 +141,43 @@ All configuration variables for game-scout exist in a `config.json` file that mu
       "https://api.twitter.com/2/problems/resource-not-found",
       "https://api.twitter.com/2/problems/not-authorized-for-resource"
     ]
+  },
+  "monday": {
+    "token": "<MONDAY_API_KEY>",
+    "mapping": {
+      "models.Game": {
+        "model_name": "models.Game",
+        "board_id": 0,
+        "group_id": "games_from_twitter",
+        "model_instance_id_column_id": "id",
+        "model_instance_upvotes_column_id": "upvotes",
+        "model_instance_downvotes_column_id": "downvotes",
+        "model_instance_watched_column_id": "watched",
+        "model_field_to_column_value_expr": {
+          "storefront": "build_status_label(game.Storefront.String())",
+          "developer_website": "build_link(len(game.VerifiedDeveloperUsernames) > 0 ? sprintf(\"https://twitter.com/%s\", game.GetVerifiedDeveloperUsernames()[0]) : \"\")",
+          "created_at": "build_date(now())",
+          "website": "build_link(game.Website.IsValid() ? game.Website.String : \"\")",
+          "id": "game.ID.String()"
+        }
+      },
+      "models.SteamApp": {
+        "model_name": "models.SteamApp",
+        "board_id": 0,
+        "group_id": "steam_apps",
+        "model_instance_id_column_id": "id",
+        "model_instance_upvotes_column_id": "upvotes",
+        "model_instance_downvotes_column_id": "downvotes",
+        "model_instance_watched_column_id": "watched",
+        "model_field_to_column_value_expr": {
+          "storefront": "build_status_label(\"Steam\")",
+          "developer_website": "build_link(game.VerifiedDeveloper(db()) != nil ? game.VerifiedDeveloper(db()).Link() : \"\")",
+          "created_at": "build_date(now())",
+          "website": "build_link(game.Website())",
+          "id": "str(game.ID)"
+        }
+      }
+    }
   },
   "scrape": {
     "debug": true,
@@ -309,6 +350,43 @@ One thing to note when setting your rate limits is that it is better to be pessi
 | `tweets_per_second` | `uint64`                    | The number of Tweets that can safely be requested per-second. I set this to the maximum number of Tweets that can be requested by an endpoint that returns Tweets (100), divided by `time_per_request / 1s`. | `100 / (time_per_request / 1s) = 200`                                                     |
 | `time_per_request`  | `time.Duration` as `string` | The average time that a request to the Twitter API should be completed. Set this to something that is more towards the end of "worst-case".                                                                  | `500ms`                                                                                   |
 
+### Monday
+
+game-scout has a Monday integration to mirror over each [Game](db/models/game.go) and [SteamApp](db/models/steam_app.go) mentioned in the reports sent out by the Measure phase to a chosen board/group combo. This procedure uses the [expr](https://github.com/antonmedv/expr) library to map the fields in each Game/SteamApp to a column value that can be posted by the Monday API. These expressions are contained in separate mappings for each [GameModel](db/models/scrape.go) (i.e. [Game](db/models/game.go) and [SteamApp](db/models/steam_app.go)) from their Monday column ID, to the expression that will generate the column value to POST to the Monday API. These expressions are compiled on start, and are passed a `game` variable that contains either a `*models.Game` or a `*models.SteamApp`, as well as the set of following function signatures:
+
+| Signature                                             | Description                                                                                                                                                                                                                                                               | Example                                                                                                                                                                                                                                                    |
+|-------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `db() *gorm.DB`                                       | Returns the default DB connection used by game-scout to connect to the PostgreSQL ORM.                                                                                                                                                                                    | `game.VerifiedDeveloper(db())`: Calls the VerifiedDeveloper method for a Game/SteamApp which requires a `*gorm.DB` instance.                                                                                                                               |
+| `str(v any) string)`                                  | Returns the string representation of the given value. This is done using `fmt.Sprintf` and the `%v` verb.                                                                                                                                                                 | `str(game.ID)`: Converts the `uint64` ID of a SteamApp to a string.                                                                                                                                                                                        |
+| `sprintf(format string, a ...any)`                    | `fmt.Sprintf` function.                                                                                                                                                                                                                                                   | `sprintf("https://twitter.com/%s", game.GetVerifiedDeveloperUsernames()[0])`: Constructs a URL for the Twitter handle for a Game.                                                                                                                          |
+| `now()`                                               | `time.Now` function.                                                                                                                                                                                                                                                      | `build_date(now())`: Builds a `monday.DateTime` for _**_today_**_.                                                                                                                                                                                         |
+| `build_date(t time.Time) monday.DateTime`             | Returns a `monday.DateTime` that can be used when POSTing to the Monday API to set Date columns on Monday. The time segment of the given time will be zeroed so just the date, month and year is set.                                                                     | `build_date(now())`: Builds a `monday.DateTime` for _**_today_**_.                                                                                                                                                                                         |
+| `build_date_time(t time.Time) monday.DateTime`        | Returns a `monday.DateTime` that can be used when POSTing to the Monday API to set DateTime columns on Monday.                                                                                                                                                            | `build_date_time(now())`: Builds a `monday.DateTime` for **_now_**.                                                                                                                                                                                        |
+| `build_status_index(index int) monday.StatusIndex`    | Returns a `monday.StatusIndex` that can be used when POSTing to the Monday API to set Status columns by index on Monday. The given integer should be an index of an existing label for the mapped status column.                                                          | `build_status_index(0)`: Builds a `monday.StatusIndex` for the first label.                                                                                                                                                                                |
+| `build_status_label(label string) monday.StatusLabel` | Returns a `monday.StatusLabel` that can be used when POSTing to the Monday API to set Status columns by label name on Monday. The given string should be the name of an existing label for the mapped status column.                                                      | `build_status_label(game.Storefront.String())` Builds a `monday.StatusLabel` for a Game's Storefront.                                                                                                                                                      |
+| `build_link(...string) monday.Link`                   | Returns a `monday.Link` that can be used when POSTing to the Monday API to set Link columns. If one string is given then the link will not be named, if two are given then the link will have the URL of the first argument and be named whatever the second argument is. | `build_link(game.Website.IsValid() ? game.Website.String : "")`: Builds a `monday.Link` for a Game's Website, or the empty string if Website is null. Note that here the text displayed for this link will be the same as the URL to which the link links. |
+
+The [`monday`](monday) package contains all the types and bindings that are used by game-scout to interact with the Monday API, so if you need further information on the types mentioned above as well as the specifics behind adding items to Monday boards, this is a good place to start.
+
+#### MondayConfig
+
+| Key       | Type                                          | Description                                                                                                                     |
+|-----------|-----------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------|
+| `token`   | `string`                                      | The bearer token used to authenticate for your linked Monday organisation.                                                      |
+| `mapping` | `map[string]*MondayMappingConfig` as `object` | A mapping of GameModel Model names (i.e. `models.Game` or `models.SteamApp`) to [`MondayMappingConfig`s.](#mondaymappingconfig) |
+
+#### MondayMappingConfig
+
+| Key                                  | Type                            | Description                                                                                                                                                                                                                                                                                                    | Example |
+|--------------------------------------|---------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------|
+| `model_name`                         | `string`                        | The name of the model that this `MondayMappingConfig` is for. This should either be "models.SteamApp" or "models.Game".                                                                                                                                                                                        |         |
+| `board_id`                           | `int`                           | The Monday.com assigned ID of the board used to track models.SteamApp/models.Game from the Measure Phase.                                                                                                                                                                                                      |         |
+| `group_id`                           | `string`                        | The Monday.com assigned ID of the group within the BoardID used to track models.SteamApp/models.Game from the Measure Phase                                                                                                                                                                                    |         |
+| `model_instance_id_column_id`        | `string`                        | The Monday.com assigned ID of the column within the BoardID used to store the ID of the models.SteamApp/models.Game instance in game-scout.                                                                                                                                                                    |         |
+| `model_instance_upvotes_column_id`   | `string`                        | The Monday.com assigned ID of the column within the BoardID used to store the number of upvotes of the related models.SteamApp/models.Game.                                                                                                                                                                    |         |
+| `model_instance_downvotes_column_id` | `string`                        | The Monday.com assigned ID of the column within the BoardID used to store the number of downvotes of the related models.SteamApp/models.Game.                                                                                                                                                                  |         |
+| `model_instance_watched_column_id`   | `string`                        | The Monday.com assigned ID of the column within the BoardID used to store the value of the Watched field of the related models.SteamApp/models.Game. If this is set for a models.SteamApp/models.Game, then the instance will be included in a separate section of the Measure email until this flag is unset. |         |
+| `model_field_to_column_value_expr`   | `map[string]string` as `object` | Represents a mapping from Monday column IDs to expressions that can be compiled using `expr.Eval` to convert a field from a given models.Game/models.SteamApp instance to a value that Monday can use. This is used when creating models.Game/models.SteamApp in their BoardID in the Measure Phase.           |         |
 
 ### Scrape
 

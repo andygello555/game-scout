@@ -2,14 +2,17 @@ package models
 
 import (
 	"encoding/gob"
+	"encoding/json"
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/anaskhan96/soup"
 	"github.com/andygello555/game-scout/browser"
 	myErrors "github.com/andygello555/game-scout/errors"
+	"github.com/andygello555/game-scout/monday"
 	"github.com/andygello555/game-scout/steamcmd"
 	"github.com/andygello555/gotils/v2/numbers"
 	mapset "github.com/deckarep/golang-set/v2"
+	"github.com/machinebox/graphql"
 	"github.com/pkg/errors"
 	"github.com/volatiletech/null/v9"
 	"gorm.io/gorm"
@@ -86,6 +89,11 @@ type SteamApp struct {
 	LastChangelistID uint64
 	// TimesHighlighted is the number of times this SteamApp has been highlighted by the measure command.
 	TimesHighlighted int32
+	// Watched indicates the Monday.com item Id, from the connected Monday board, for the SteamApp. If this is nil, then
+	// it can be assumed that this SteamApp is not being watched.
+	Watched *string `gorm:"default:null;type:varchar(32)"`
+	// Votes is the number of upvotes for the SteamApp on the linked Monday board/group minus the number of downvotes.
+	Votes int32 `gorm:"default:0"`
 	// WeightedScore is a weighted average comprised of the values taken from CreatedAt, Updates, ReleaseDate,
 	// Publisher, TotalReviews, ReviewScore, TotalUpvotes, TotalDownvotes, TotalComments, TagScore, AssetModifiedTime,
 	// and TimesHighlighted for the SteamApp. If SteamApp.CheckCalculateWeightedScore is false then this will be nil.
@@ -112,6 +120,7 @@ const (
 	SteamAppTimesHighlightedWeight  steamAppWeight = 0.9
 	SteamAppOwnersOnlyWeight        steamAppWeight = 0.7
 	SteamAppHasStorepageWeight      steamAppWeight = 0.7
+	SteamAppVotesWeight             steamAppWeight = 0.8
 )
 
 // steamAppWeightedField represents a field that can have a weighting calculation applied to it in SteamApp.
@@ -132,6 +141,7 @@ const (
 	SteamAppTimesHighlighted  steamAppWeightedField = "TimesHighlighted"
 	SteamAppOwnersOnly        steamAppWeightedField = "OwnersOnly"
 	SteamAppHasStorepage      steamAppWeightedField = "HasStorepage"
+	SteamAppVotes             steamAppWeightedField = "Votes"
 )
 
 // String returns the string value of the gameWeightedField.
@@ -169,6 +179,8 @@ func (sf steamAppWeightedField) Weight() (w float64, inverse bool) {
 		w = float64(SteamAppOwnersOnlyWeight)
 	case SteamAppHasStorepage:
 		w = float64(SteamAppHasStorepageWeight)
+	case SteamAppVotes:
+		w = float64(SteamAppVotesWeight)
 	default:
 		panic(fmt.Errorf("\"%s\" is not a steamAppWeightedField", sf))
 	}
@@ -253,6 +265,8 @@ func (sf steamAppWeightedField) GetValueFromWeightedModel(model WeightedModel) [
 			true:  100.0,
 			false: -50000.0,
 		}[f.Bool()]}
+	case SteamAppVotes:
+		return []float64{float64(f.Int() * 100000)}
 	default:
 		panic(fmt.Errorf("steamAppWeightedField \"%s\" is not recognized, and cannot be converted to []float64", sf))
 	}
@@ -274,6 +288,7 @@ func (sf steamAppWeightedField) Fields() []WeightedField {
 		SteamAppTimesHighlighted,
 		SteamAppOwnersOnly,
 		SteamAppHasStorepage,
+		SteamAppVotes,
 	}
 }
 
@@ -352,6 +367,8 @@ func (app *SteamApp) OnConflict() clause.OnConflict {
 		"asset_modified_time",
 		"last_changelist_id",
 		"times_highlighted",
+		"watched",
+		"votes",
 		"weighted_score",
 	})...)
 	return clause.OnConflict{
@@ -368,6 +385,139 @@ func (app *SteamApp) OnCreateOmit() []string {
 func (app *SteamApp) Update(db *gorm.DB, config ScrapeConfig) error {
 	ScrapeStorefrontForGameModel[uint64](app.ID, app.Wrapper().StorefrontScraper(SteamStorefront), config)
 	return db.Omit(app.OnCreateOmit()...).Save(app).Error
+}
+
+func (app *SteamApp) Website() string {
+	return browser.SteamAppPage.Fill(app.ID)
+}
+
+// GetSteamAppsFromMonday is a monday.Binding that retrieves all the SteamApp from the mapped board and group. Arguments
+// provided to execute:
+//
+// • page (int): The page of results to retrieve. This means that GetSteamAppsFromMonday can be passed to a
+// monday.Paginator.
+//
+// • config (monday.Config): The monday.Config to use to find the monday.MappingConfig for the SteamApp model.
+//
+// • db (*gorm.DB): The gorm.DB instance to use to search for the SteamApp's of the IDs found in the Monday items. This
+// is only used in the Response method.
+//
+// Execute returns a list of SteamApp instances within their mapped board and group combination for the given page of
+// results. It does this by retrieving the SteamApp.ID from the appropriate column from each item and then searching the
+// gorm.DB instance which is provided in the 3rd argument.
+var GetSteamAppsFromMonday = monday.NewBinding[monday.ItemResponse, []*SteamApp](
+	func(args ...any) *graphql.Request {
+		page := args[0].(int)
+		mapping := args[1].(monday.Config).MondayMappingForModel(SteamApp{})
+		boardIds := []int{mapping.MappingBoardID()}
+		groupIds := []string{mapping.MappingGroupID()}
+		return monday.GetItems.Request(page, boardIds, groupIds)
+	},
+	func(response monday.ItemResponse, args ...any) []*SteamApp {
+		items := monday.GetItems.Response(response)
+		mapping := args[1].(monday.Config).MondayMappingForModel(SteamApp{})
+		db := args[2].(*gorm.DB)
+		apps := make([]*SteamApp, 0)
+		for _, item := range items {
+			columnMap := make(map[string]monday.ColumnValue)
+			for _, column := range item.ColumnValues {
+				columnMap[column.Id] = column
+			}
+
+			var (
+				appID  uint64
+				column monday.ColumnValue
+				err    error
+				ok     bool
+			)
+			if column, ok = columnMap[mapping.MappingModelInstanceIDColumnID()]; !ok {
+				continue
+			}
+
+			app := SteamApp{}
+			if appID, err = strconv.ParseUint(strings.Trim(column.Value, `"`), 10, 64); err != nil {
+				continue
+			}
+
+			if err := db.Find(&app, "id = ?", appID).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+
+			apps = append(apps, &app)
+			if column, ok = columnMap[mapping.MappingModelInstanceWatchedColumnID()]; ok {
+				if column.Value != "null" {
+					var watches monday.Votes
+					if err = json.Unmarshal([]byte(column.Value), &watches); err == nil {
+						if len(watches.VoterIds) > 0 {
+							app.Watched = &item.Id
+						}
+					}
+				} else {
+					app.Watched = nil
+				}
+			}
+
+			voteValues := []int{0, 0}
+			for i, votesColumnID := range []string{
+				mapping.MappingModelInstanceUpvotesColumnID(),
+				mapping.MappingModelInstanceDownvotesColumnID(),
+			} {
+				var voteColumn monday.ColumnValue
+				if voteColumn, ok = columnMap[votesColumnID]; !ok {
+					continue
+				}
+				if voteColumn.Value == "null" {
+					continue
+				}
+				var votes monday.Votes
+				if err = json.Unmarshal([]byte(voteColumn.Value), &votes); err != nil {
+					continue
+				}
+				voteValues[i] = len(votes.VoterIds)
+			}
+			app.Votes = int32(voteValues[0] - voteValues[1])
+		}
+		return apps
+	},
+	"boards", true,
+)
+
+// AddSteamAppToMonday adds a SteamApp to the mapped board and group by constructing column values using the
+// monday.MappingConfig.ColumnValues method for the monday.MappingConfig for SteamApp. Arguments provided to Execute:
+//
+// • game (*SteamApp): The SteamApp to add to the mapped board and group combination.
+//
+// • config (monday.Config): The monday.Config used to fetch the monday.MappingConfig for SteamApp from. This
+// monday.MappingConfig is then used to generate the column values that are posted to the Monday API to construct a new
+// item on the mapped board and group combination.
+//
+// Execute returns the item ID of the newly created item. This can then be used to set the SteamApp.Watched field
+// appropriately if necessary.
+var AddSteamAppToMonday = monday.NewBinding[monday.ItemId, string](
+	func(args ...any) *graphql.Request {
+		app := args[0].(*SteamApp)
+		itemName := app.Name
+		mapping := args[1].(monday.Config).MondayMappingForModel(SteamApp{})
+		columnValues, err := mapping.ColumnValues(app)
+		if err != nil {
+			panic(err)
+		}
+		return monday.AddItem.Request(
+			mapping.MappingBoardID(),
+			mapping.MappingGroupID(),
+			itemName,
+			columnValues,
+		)
+	},
+	monday.AddItem.Response, "create_item", false,
+)
+
+// VerifiedDeveloper returns the first verified Developer for this SteamApp. If there is not one, we will return a nil pointer.
+func (app *SteamApp) VerifiedDeveloper(db *gorm.DB) *Developer {
+	if app.DeveloperID == nil {
+		return nil
+	}
+	return app.Developer
 }
 
 func (app *SteamApp) Wrapper() GameModelWrapper[uint64, GameModel[uint64]] {

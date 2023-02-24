@@ -21,6 +21,18 @@ const (
 	ItchIOStorefront  Storefront = "I"
 )
 
+// Index returns the index of the Storefront.
+func (sf Storefront) Index() int {
+	switch sf {
+	case SteamStorefront:
+		return 1
+	case ItchIOStorefront:
+		return 2
+	default:
+		return 0
+	}
+}
+
 // String returns the formal name of the Storefront.
 func (sf Storefront) String() string {
 	switch sf {
@@ -29,7 +41,7 @@ func (sf Storefront) String() string {
 	case SteamStorefront:
 		return "Steam"
 	case ItchIOStorefront:
-		return "itch.io"
+		return "Itch.io"
 	default:
 		return "<nil>"
 	}

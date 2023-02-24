@@ -13,6 +13,7 @@ import (
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/game-scout/email"
 	myErrors "github.com/andygello555/game-scout/errors"
+	"github.com/andygello555/game-scout/monday"
 	"github.com/andygello555/game-scout/steamcmd"
 	task "github.com/andygello555/game-scout/tasks"
 	myTwitter "github.com/andygello555/game-scout/twitter"
@@ -49,8 +50,17 @@ func init() {
 
 func main() {
 	rand.Seed(time.Now().Unix())
-	// We set up the global DB instance...
+
+	// Compile any compilable configs in the globalConfig
 	start := time.Now().UTC()
+	log.INFO.Printf("Compiling config at %s", start.String())
+	if err := globalConfig.Compile(); err != nil {
+		panic(err)
+	}
+	log.INFO.Printf("Done compiling config in %s", time.Now().UTC().Sub(start).String())
+
+	// We set up the global DB instance...
+	start = time.Now().UTC()
 	log.INFO.Printf("Setting up DB at %s", start.String())
 	if err := db.Open(globalConfig.DB); err != nil {
 		panic(err)
@@ -65,6 +75,12 @@ func main() {
 		panic(err)
 	}
 	log.INFO.Printf("Done setting up Twitter client in %s", time.Now().UTC().Sub(start).String())
+
+	// Set up the default Monday client
+	start = time.Now().UTC()
+	log.INFO.Printf("Setting up Monday client at %s", start.String())
+	monday.CreateClient(globalConfig.Monday)
+	log.INFO.Printf("Done setting up Monday client in %s", time.Now().UTC().Sub(start).String())
 
 	// Set up the default email client
 	start = time.Now().UTC()
@@ -874,6 +890,16 @@ func main() {
 					Required: false,
 				},
 				cli.BoolFlag{
+					Name:     "measureWatchedDevelopers",
+					Usage:    "execute the Measure template for this Developer but treat it as though it's Games are being watched",
+					Required: false,
+				},
+				cli.BoolFlag{
+					Name:     "measureWatchedGames",
+					Usage:    "execute the Measure template for this Developer but treat it as though it's Games are being watched, and that it doesn't exist",
+					Required: false,
+				},
+				cli.BoolFlag{
 					Name:     "measureDelete",
 					Usage:    "execute the Measure template for this Developer but treat it as though it is being deleted",
 					Required: false,
@@ -904,7 +930,8 @@ func main() {
 					Start:                  time.Now(),
 					End:                    time.Now(),
 					TrendingDevs:           make([]*models.TrendingDev, len(c.StringSlice("id"))),
-					DevelopersBeingDeleted: make([]*models.TrendingDev, len(c.StringSlice("id"))),
+					DevelopersBeingDeleted: make([]*models.TrendingDev, 0),
+					WatchedDevelopers:      make([]*models.TrendingDev, 0),
 					Config:                 globalConfig.Email,
 				}
 
@@ -988,14 +1015,28 @@ func main() {
 						fmt.Printf("\tCoefficients for the trend of Developer %v: %v\n", developer, trend.GetCoeffs())
 					}
 
-					if c.Bool("measure") || c.Bool("measureDelete") || c.Bool("deletedDevelopers") {
+					if c.Bool("measure") || c.Bool("measureWatchedDevelopers") || c.Bool("measureWatchedGames") || c.Bool("measureDelete") || c.Bool("deletedDevelopers") {
 						if measureContext.TrendingDevs[developerNo], err = developer.TrendingDev(db.DB); err != nil {
 							return cli.NewExitError(err.Error(), 1)
+						}
+						measureContext.TrendingDevs[developerNo].SetPosition(developerNo + 1)
+						measureContext.TrendingDevs[developerNo].SetOutOf(len(c.StringSlice("id")))
+
+						if c.Bool("measureWatchedDevelopers") {
+							measureContext.WatchedDevelopers = append(measureContext.WatchedDevelopers, measureContext.TrendingDevs[developerNo])
+						}
+
+						if c.Bool("measureWatchedGames") {
+							for _, game := range measureContext.TrendingDevs[developerNo].Games {
+								measureContext.WatchedDevelopers = append(measureContext.WatchedDevelopers, &models.TrendingDev{
+									Games: []*models.Game{game},
+								})
+							}
 						}
 
 						// Also add the TrendingDev to the DevelopersBeingDeleted slice if measureDelete is given
 						if c.Bool("measureDelete") {
-							measureContext.DevelopersBeingDeleted[developerNo] = measureContext.TrendingDevs[developerNo]
+							measureContext.DevelopersBeingDeleted = append(measureContext.DevelopersBeingDeleted, measureContext.TrendingDevs[developerNo])
 						}
 
 						if c.Bool("deletedDevelopers") {
@@ -1051,6 +1092,197 @@ func main() {
 			},
 		},
 		{
+			Name:  "monday",
+			Usage: "run a Monday Client Binding",
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:  "binding",
+					Usage: "the name of the binding to execute",
+				},
+				cli.StringSliceFlag{
+					Name:  "arg",
+					Usage: "an arg to execute the binding with",
+					Value: &cli.StringSlice{},
+				},
+				cli.BoolFlag{
+					Name:  "all",
+					Usage: "fetch all the resources from the binding using a Paginator",
+				},
+				cli.BoolFlag{
+					Name:  "log",
+					Usage: "whether to enable logging for the Monday API Client",
+				},
+			},
+			Action: func(c *cli.Context) (err error) {
+				if c.Bool("log") {
+					monday.DefaultClient.Log = func(s string) {
+						log.INFO.Println(s)
+					}
+				}
+
+				argsToInts := func(idx int, value string, arr []string) any {
+					var intVal int64
+					if intVal, err = strconv.ParseInt(value, 10, 64); err != nil {
+						panic(err)
+					}
+					return int(intVal)
+				}
+
+				var execute func() (any, error)
+				switch strings.ToLower(c.String("binding")) {
+				case "getusers":
+					execute = func() (any, error) {
+						return monday.GetUsers.Execute(monday.DefaultClient)
+					}
+				case "getboards":
+					args := slices.Comprehension(c.StringSlice("arg"), argsToInts)
+					execute = func() (any, error) {
+						return monday.GetBoards.Execute(monday.DefaultClient, args...)
+					}
+					if c.Bool("all") {
+						if len(args) > 0 {
+							args = args[1:]
+						}
+						execute = func() (any, error) {
+							if paginator, err := monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, monday.GetBoards, args...); err != nil {
+								return nil, err
+							} else {
+								return paginator.All()
+							}
+						}
+					}
+				case "getgroups":
+					execute = func() (any, error) {
+						return monday.GetGroups.Execute(monday.DefaultClient, slices.Comprehension(c.StringSlice("arg"), argsToInts)...)
+					}
+				case "getcolumns":
+					execute = func() (any, error) {
+						return monday.GetColumns.Execute(monday.DefaultClient, slices.Comprehension(c.StringSlice("arg"), argsToInts)...)
+					}
+				case "getcolumnmap":
+					execute = func() (any, error) {
+						return monday.GetColumnMap.Execute(monday.DefaultClient, slices.Comprehension(c.StringSlice("arg"), argsToInts)...)
+					}
+				case "getitems":
+					args := slices.Comprehension[string, any](c.StringSlice("arg"), func(idx int, value string, arr []string) any {
+						switch idx {
+						case 0:
+							var intVal int64
+							if intVal, err = strconv.ParseInt(value, 10, 64); err != nil {
+								panic(err)
+							}
+							return int(intVal)
+						case 1:
+							var intArr []int
+							if err = json.Unmarshal([]byte(value), &intArr); err != nil {
+								panic(err)
+							}
+							return intArr
+						case 2:
+							var stringArr []string
+							if err = json.Unmarshal([]byte(value), &stringArr); err != nil {
+								panic(err)
+							}
+							return stringArr
+						default:
+							panic(fmt.Errorf("getitems takes 3 arguments: int, []int, and []string"))
+						}
+					})
+					execute = func() (any, error) {
+						return monday.GetItems.Execute(monday.DefaultClient, args...)
+					}
+					if c.Bool("all") {
+						execute = func() (any, error) {
+							if len(args) > 0 {
+								args = args[1:]
+							}
+							if paginator, err := monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, monday.GetItems, args...); err != nil {
+								return nil, err
+							} else {
+								return paginator.All()
+							}
+						}
+					}
+				case "addgame":
+					args := c.StringSlice("arg")
+					switch strings.ToLower(args[0]) {
+					case "games":
+						game := models.Game{}
+						var id uuid.UUID
+						if id, err = uuid.Parse(args[1]); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+
+						if err = db.DB.Find(&game, id).Error; err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+						execute = func() (any, error) {
+							return models.AddGameToMonday.Execute(monday.DefaultClient, &game, globalConfig.Monday)
+						}
+					case "steam_apps":
+						app := models.SteamApp{}
+						var id int64
+						if id, err = strconv.ParseInt(args[1], 10, 64); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+
+						if err = db.DB.Find(&app, id).Error; err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+						execute = func() (any, error) {
+							return models.AddSteamAppToMonday.Execute(monday.DefaultClient, &app, globalConfig.Monday)
+						}
+					default:
+						return cli.NewExitError("no model of name "+args[0], 1)
+					}
+				case "getgames":
+					args := slices.Comprehension(c.StringSlice("arg")[1:], argsToInts)
+					page := 0
+					if len(args) > 0 {
+						page = args[0].(int)
+					}
+
+					switch strings.ToLower(c.StringSlice("arg")[0]) {
+					case "games":
+						execute = func() (any, error) {
+							return models.GetGamesFromMonday.Execute(monday.DefaultClient, page, globalConfig.Monday, db.DB)
+						}
+						if c.Bool("all") {
+							execute = func() (any, error) {
+								if paginator, err := monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, models.GetGamesFromMonday, globalConfig.Monday, db.DB); err != nil {
+									return nil, err
+								} else {
+									return paginator.All()
+								}
+							}
+						}
+					case "steam_apps":
+						execute = func() (any, error) {
+							return models.GetSteamAppsFromMonday.Execute(monday.DefaultClient, page, globalConfig.Monday, db.DB)
+						}
+						if c.Bool("all") {
+							execute = func() (any, error) {
+								if paginator, err := monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, models.GetSteamAppsFromMonday, globalConfig.Monday, db.DB); err != nil {
+									return nil, err
+								} else {
+									return paginator.All()
+								}
+							}
+						}
+					default:
+						return cli.NewExitError("no model of name "+c.StringSlice("arg")[0], 1)
+					}
+				}
+
+				var resource any
+				if resource, err = execute(); err != nil {
+					return cli.NewExitError(err.Error(), 1)
+				}
+				fmt.Printf("%+v\n", resource)
+				return
+			},
+		},
+		{
 			Name:  "steamapp",
 			Usage: "subcommand for viewing resources related to a SteamApp in the DB",
 			Flags: []cli.Flag{
@@ -1075,6 +1307,11 @@ func main() {
 					Required: false,
 				},
 				cli.BoolFlag{
+					Name:     "measureWatched",
+					Usage:    "execute the Measure template for this SteamApp but treat it as though it has been Watched",
+					Required: false,
+				},
+				cli.BoolFlag{
 					Name:     "printAfter",
 					Usage:    "print the SteamApp after all the flags have been run",
 					Required: false,
@@ -1082,10 +1319,11 @@ func main() {
 			},
 			Action: func(c *cli.Context) (err error) {
 				measureContext := email.MeasureContext{
-					Start:        time.Now(),
-					End:          time.Now(),
-					TopSteamApps: make([]*models.SteamApp, len(c.IntSlice("id"))),
-					Config:       globalConfig.Email,
+					Start:            time.Now(),
+					End:              time.Now(),
+					TopSteamApps:     make([]*models.SteamApp, len(c.IntSlice("id"))),
+					WatchedSteamApps: make([]*models.SteamApp, len(c.IntSlice("id"))),
+					Config:           globalConfig.Email,
 				}
 
 				for steamAppNo, id := range c.IntSlice("id") {
@@ -1107,6 +1345,10 @@ func main() {
 
 					if c.Bool("measure") {
 						measureContext.TopSteamApps[steamAppNo] = &steamApp
+					}
+
+					if c.Bool("measureWatched") {
+						measureContext.WatchedSteamApps[steamAppNo] = &steamApp
 					}
 
 					if c.Bool("printAfter") {

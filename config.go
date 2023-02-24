@@ -8,11 +8,16 @@ import (
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/game-scout/email"
+	"github.com/andygello555/game-scout/monday"
 	task "github.com/andygello555/game-scout/tasks"
 	myTwitter "github.com/andygello555/game-scout/twitter"
+	"github.com/antonmedv/expr"
+	"github.com/antonmedv/expr/vm"
 	"github.com/pkg/errors"
+	"gorm.io/gorm"
 	"jaytaylor.com/html2text"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -340,6 +345,161 @@ func (c *TwitterConfig) TwitterQuery() string {
 	return fmt.Sprintf("%s (%s)", query, strings.Join(hashtags, " OR "))
 }
 
+type MondayMappingConfig struct {
+	// ModelName is the name of the model that this MondayMappingConfig is for. This should either be "models.SteamApp"
+	// or "models.Game".
+	ModelName string `json:"model_name"`
+	// BoardID is the Monday.com assigned ID of the board used to track models.SteamApp/models.Game from the Measure
+	// Phase.
+	BoardID int `json:"board_id"`
+	// GroupID is the Monday.com assigned ID of the group within the BoardID used to track models.SteamApp/models.Game
+	// from the Measure Phase
+	GroupID string `json:"group_id"`
+	// ModelInstanceIDColumnID is the Monday.com assigned ID of the column within the BoardID used to store the ID of
+	// the models.SteamApp/models.Game instance in game-scout.
+	ModelInstanceIDColumnID string `json:"model_instance_id_column_id"`
+	// ModelInstanceUpvotesColumnID is the Monday.com assigned ID of the column within the BoardID used to store the
+	// number of upvotes of the related models.SteamApp/models.Game.
+	ModelInstanceUpvotesColumnID string `json:"model_instance_upvotes_column_id"`
+	// ModelInstanceDownvotesColumnID is the Monday.com assigned ID of the column within the BoardID used to store the
+	// number of downvotes of the related models.SteamApp/models.Game.
+	ModelInstanceDownvotesColumnID string `json:"model_instance_downvotes_column_id"`
+	// ModelInstanceWatchedColumnID is the Monday.com assigned ID of the column within the BoardID used to store the
+	// value of the Watched field of the related models.SteamApp/models.Game. If this is set for a
+	// models.SteamApp/models.Game, then the instance will be included in a separate section of the Measure email until
+	// this flag is unset.
+	ModelInstanceWatchedColumnID string `json:"model_instance_watched_column_id"`
+	// ModelFieldToColumnValueExpr represents a mapping from Monday column IDs to expressions that can be compiled using
+	// expr.Eval to convert a field from a given models.Game/models.SteamApp instance to a value that Monday can use.
+	// This is used when creating models.Game/models.SteamApp in their BoardID in the Measure Phase.
+	ModelFieldToColumnValueExpr         map[string]string `json:"model_field_to_column_value_expr"`
+	modelFieldToColumnValueExprCompiled map[string]*vm.Program
+}
+
+func (mmc *MondayMappingConfig) MappingModelName() string { return mmc.ModelName }
+func (mmc *MondayMappingConfig) MappingBoardID() int      { return mmc.BoardID }
+func (mmc *MondayMappingConfig) MappingGroupID() string   { return mmc.GroupID }
+func (mmc *MondayMappingConfig) MappingModelInstanceIDColumnID() string {
+	return mmc.ModelInstanceIDColumnID
+}
+func (mmc *MondayMappingConfig) MappingModelInstanceUpvotesColumnID() string {
+	return mmc.ModelInstanceUpvotesColumnID
+}
+func (mmc *MondayMappingConfig) MappingModelInstanceDownvotesColumnID() string {
+	return mmc.ModelInstanceDownvotesColumnID
+}
+func (mmc *MondayMappingConfig) MappingModelInstanceWatchedColumnID() string {
+	return mmc.ModelInstanceWatchedColumnID
+}
+
+var mondayMappingExprFunctions = []expr.Option{
+	expr.Function("db", func(params ...interface{}) (interface{}, error) {
+		return db.DB, nil
+	}, new(func() *gorm.DB)),
+	expr.Function("str", func(params ...interface{}) (interface{}, error) {
+		return fmt.Sprintf("%v", params[0]), nil
+	}, new(func(any) string)),
+	expr.Function("sprintf", func(params ...interface{}) (interface{}, error) {
+		return fmt.Sprintf(params[0].(string), params[1:]...), nil
+	}, fmt.Sprintf),
+	expr.Function("now", func(params ...interface{}) (interface{}, error) {
+		return time.Now(), nil
+	}, time.Now),
+	expr.Function("build_date", func(params ...interface{}) (interface{}, error) {
+		date := params[0].(time.Time)
+		date = time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+		return monday.BuildDate(date.Format(monday.DateFormat)), nil
+	}, new(func(t time.Time) monday.DateTime)),
+	expr.Function("build_date_time", func(params ...interface{}) (interface{}, error) {
+		dateTime := params[0].(time.Time)
+		return monday.BuildDateTime(dateTime.Format(monday.DateFormat), dateTime.Format(monday.TimeFormat)), nil
+	}, new(func(t time.Time) monday.DateTime)),
+	expr.Function("build_status_index", func(params ...interface{}) (interface{}, error) {
+		return monday.BuildStatusIndex(params[0].(int)), nil
+	}, monday.BuildStatusIndex),
+	expr.Function("build_status_label", func(params ...interface{}) (interface{}, error) {
+		return monday.BuildStatusLabel(params[0].(string)), nil
+	}, monday.BuildStatusLabel),
+	expr.Function("build_link", func(params ...interface{}) (interface{}, error) {
+		url := params[0].(string)
+		if len(params) > 1 {
+			return monday.BuildLink(url, params[1].(string)), nil
+		}
+		return monday.BuildLink(url, url), nil
+	}, new(func(...string) monday.Link)),
+}
+
+func (mmc *MondayMappingConfig) Compile() (err error) {
+	mmc.modelFieldToColumnValueExprCompiled = make(map[string]*vm.Program)
+	env := make(map[string]any)
+	switch mmc.ModelName {
+	case "models.Game":
+		env["game"] = &models.Game{}
+	case "models.SteamApp":
+		env["game"] = &models.SteamApp{}
+	default:
+		err = fmt.Errorf("%s model name for MondayMappingConfig is not supported", mmc.ModelName)
+		return
+	}
+
+	options := []expr.Option{expr.Env(env)}
+	options = append(options, mondayMappingExprFunctions...)
+	for columnID, exprString := range mmc.ModelFieldToColumnValueExpr {
+		if mmc.modelFieldToColumnValueExprCompiled[columnID], err = expr.Compile(exprString, options...); err != nil {
+			err = errors.Wrapf(
+				err, "could not compile expression for %s MondayMappingConfig for column %q",
+				mmc.ModelName, columnID,
+			)
+			return
+		}
+	}
+	return
+}
+
+func (mmc *MondayMappingConfig) ColumnValues(game any) (columnValues map[string]any, err error) {
+	columnValues = make(map[string]any)
+	for columnID, program := range mmc.modelFieldToColumnValueExprCompiled {
+		if columnValues[columnID], err = expr.Run(program, map[string]any{"game": game}); err != nil {
+			err = errors.Wrapf(err, "could not find column value for %q on %s", columnID, reflect.TypeOf(game).String())
+			return
+		}
+	}
+	return
+}
+
+func (mmc *MondayMappingConfig) String() string {
+	return fmt.Sprintf(
+		`{ModelName: %v, BoardID: %v, GroupID: %v, ModelInstanceIDColumnID: %v, ModelInstanceUpvotesColumnID: %v, ModelInstanceDownvotesColumnID: %v, ModelInstanceWatchedColumnID: %v, ModelFieldToColumnValueExpr: %v, modelFieldToColumnValueExprCompiled: %v}`,
+		mmc.ModelName,
+		mmc.BoardID,
+		mmc.GroupID,
+		mmc.ModelInstanceIDColumnID,
+		mmc.ModelInstanceUpvotesColumnID,
+		mmc.ModelInstanceDownvotesColumnID,
+		mmc.ModelInstanceWatchedColumnID,
+		mmc.ModelFieldToColumnValueExpr,
+		mmc.modelFieldToColumnValueExprCompiled,
+	)
+}
+
+type MondayConfig struct {
+	// Token is the API token used to connect to a Monday organisation so that the Measure Phase can add the highlighted
+	// models.SteamApp/models.Game to it, and update the games that are being watched.
+	Token string `json:"token"`
+	// Mapping is a map of game model names (i.e. "models.SteamApp"/"models.Game") to MondayMappingConfig that represents
+	// the transformation from items in the board of BoardID to either a models.SteamApp or a models.Game instance.
+	Mapping map[string]*MondayMappingConfig `json:"mapping"`
+}
+
+func (mc *MondayConfig) MondayToken() string { return mc.Token }
+func (mc *MondayConfig) MondayMappingForModel(model any) monday.MappingConfig {
+	return mc.Mapping[reflect.TypeOf(model).String()]
+}
+
+func (mc *MondayConfig) String() string {
+	return fmt.Sprintf(`{Token: %v, Mapping: %v}`, mc.Token, mc.Mapping)
+}
+
 type TagConfig struct {
 	// DefaultValue is the default value for tags that are not included in the Values map. The value of each tag for a
 	// models.Game (on the models.SteamStorefront) will be multiplied by the number of upvotes it has then accumulated.
@@ -579,6 +739,7 @@ type Config struct {
 	Email         *EmailConfig         `json:"email"`
 	Tasks         *TaskConfig          `json:"tasks"`
 	Twitter       *TwitterConfig       `json:"twitter"`
+	Monday        *MondayConfig        `json:"monday,omitempty"`
 	Scrape        *ScrapeConfig        `json:"scrape"`
 	SteamWebPipes *SteamWebPipesConfig `json:"SteamWebPipes"`
 }
@@ -609,4 +770,54 @@ func (c *Config) ToJSON() (jsonData []byte, err error) {
 		return jsonData, errors.Wrap(err, "could not Marshal Config to JSON")
 	}
 	return
+}
+
+type compilable interface {
+	Compile() (err error)
+}
+
+func compile(value reflect.Value, rootFlag bool) (err error) {
+	if !value.IsZero() && value.CanInterface() {
+		if c, ok := value.Interface().(compilable); ok && !rootFlag {
+			if err = c.Compile(); err != nil {
+				return
+			}
+		}
+	} else {
+		return
+	}
+
+	switch value.Kind() {
+	case reflect.Pointer:
+		if err = compile(value.Elem(), false); err != nil {
+			return
+		}
+	case reflect.Array, reflect.Slice:
+		for i := 0; i < value.Len(); i++ {
+			if err = compile(value.Index(i), false); err != nil {
+				return
+			}
+		}
+	case reflect.Map:
+		for _, key := range value.MapKeys() {
+			if err = compile(value.MapIndex(key), false); err != nil {
+				return
+			}
+		}
+	case reflect.Struct:
+		for i := 0; i < value.NumField(); i++ {
+			if err = compile(value.Field(i), false); err != nil {
+				return
+			}
+		}
+	default:
+		break
+	}
+	return
+}
+
+// Compile will recursively find all fields within the Config that have a Compile method. All values that do, we will call
+// that method.
+func (c *Config) Compile() (err error) {
+	return compile(reflect.ValueOf(c), true)
 }

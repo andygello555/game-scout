@@ -35,7 +35,8 @@ type MeasureContext struct {
 	TrendingDevs           []*models.TrendingDev
 	TopSteamApps           []*models.SteamApp
 	DevelopersBeingDeleted []*models.TrendingDev
-	EnabledDevelopers      int64
+	WatchedDevelopers      []*models.TrendingDev
+	WatchedSteamApps       []*models.SteamApp
 	Config                 Config
 }
 
@@ -127,6 +128,41 @@ func (m *MeasureContext) Funcs() template.FuncMap {
 		"float": func(f float64) string {
 			return strconv.FormatFloat(f, 'G', 12, 64)
 		},
+		"devContainer": func(trendingDev *models.TrendingDev, hrefPrefix string, config Config, gameLimit int) struct {
+			*models.TrendingDev
+			HrefPrefix string
+			Config     Config
+			GameLimit  int
+		} {
+			return struct {
+				*models.TrendingDev
+				HrefPrefix string
+				Config     Config
+				GameLimit  int
+			}{TrendingDev: trendingDev, HrefPrefix: hrefPrefix, Config: config, GameLimit: gameLimit}
+		},
+		"gameContainer": func(game *models.Game, trendingDev *models.TrendingDev, hrefPrefix string) struct {
+			Game        *models.Game
+			TrendingDev *models.TrendingDev
+			HrefPrefix  string
+		} {
+			return struct {
+				Game        *models.Game
+				TrendingDev *models.TrendingDev
+				HrefPrefix  string
+			}{Game: game, TrendingDev: trendingDev, HrefPrefix: hrefPrefix}
+		},
+		"steamAppContainer": func(app *models.SteamApp, hrefPrefix string, position int) struct {
+			*models.SteamApp
+			HrefPrefix string
+			Position   int
+		} {
+			return struct {
+				*models.SteamApp
+				HrefPrefix string
+				Position   int
+			}{SteamApp: app, HrefPrefix: hrefPrefix, Position: position}
+		},
 	}
 }
 
@@ -136,6 +172,54 @@ func (m *MeasureContext) DeletedDevelopersWithGames() []*models.TrendingDev {
 	s := make([]*models.TrendingDev, 0)
 	for _, dev := range m.DevelopersBeingDeleted {
 		if len(dev.Games) > 0 {
+			s = append(s, dev)
+		}
+	}
+	return s
+}
+
+// HasWatched returns true when there are WatchedDevelopers or WatchedSteamApps.
+func (m *MeasureContext) HasWatched() bool {
+	return len(m.WatchedDevelopers) > 0 || len(m.WatchedSteamApps) > 0
+}
+
+// WatchedGames filters out all models.TrendingDev in WatchedDevelopers that contain a models.Developer.
+func (m *MeasureContext) WatchedGames() []*models.Game {
+	s := make([]*models.Game, 0)
+	for _, dev := range m.WatchedDevelopers {
+		if dev.Developer == nil {
+			s = append(s, dev.Games...)
+		}
+	}
+	return s
+}
+
+func (m *MeasureContext) WatchedGamesWithDummyDevs() []*models.TrendingDev {
+	s := make([]*models.TrendingDev, 0)
+	for _, dev := range m.WatchedDevelopers {
+		if dev.Developer == nil {
+			for _, game := range dev.Games {
+				s = append(s, &models.TrendingDev{
+					Developer: &models.Developer{
+						ID:          "N/A",
+						Name:        "N/A",
+						Username:    "N/A",
+						Description: "N/A",
+					},
+					Games: []*models.Game{game},
+				})
+			}
+		}
+	}
+	return s
+}
+
+// WatchedDevelopersWithGames filters out all models.TrendingDev in WatchedDevelopers that don't contain a
+// models.Developer.
+func (m *MeasureContext) WatchedDevelopersWithGames() []*models.TrendingDev {
+	s := make([]*models.TrendingDev, 0)
+	for _, dev := range m.WatchedDevelopers {
+		if dev.Developer != nil {
 			s = append(s, dev)
 		}
 	}
