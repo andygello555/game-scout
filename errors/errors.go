@@ -146,8 +146,14 @@ func (rrt RetryReturnType) Error() string {
 }
 
 // Retry will retry the given function the given number of times. The function will be retried only if it returns an
-// error (that is not a RetryReturnType error) or a panic occurs within it. If the error is a RetryReturnType then the
-// following actions will be carried out, depending on which RetryReturnType is returned:
+// error (that is not a RetryReturnType error) or a panic occurs within it and there are tries remaining. Each time this
+// happens the tryNo variable is decremented and the following formula is used to determine the sleep duration that
+// occurs after a failed try:
+//
+//	minDelay * time.Duration(maxTries+1-tryNo)
+//
+// This results in a smaller delay in early tries relative to later tries. If the error returned by the function is a
+// RetryReturnType then the following actions will be carried out, depending on which RetryReturnType is returned:
 //
 //   - Continue: will proceed to the next try of the RetryFunction without waiting. The output error for Retry is also
 //     set to nil, faking the success scenario. Note: this will still use up a try. This is to avoid infinite loops.

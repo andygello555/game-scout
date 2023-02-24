@@ -552,7 +552,7 @@ func (s *SteamAppSteamStorefront) ScrapeReviews(config ScrapeConfig, maxTries in
 	}
 
 	// Fetch reviews to gather headline stats on the number of reviews
-	return browser.SteamAppReviews.RetryJSON(maxTries, minDelay, func(jsonBody map[string]any, resp *http.Response) error {
+	return browser.SteamAppReviews.RetryJSON(nil, maxTries, minDelay, func(jsonBody map[string]any, resp *http.Response) error {
 		querySummary, ok := jsonBody["query_summary"].(map[string]any)
 		if ok {
 			s.SteamApp.TotalReviews = int32(querySummary["total_reviews"].(float64))
@@ -604,7 +604,7 @@ func (s *SteamAppSteamStorefront) ScrapeCommunity(config ScrapeConfig, maxTries 
 			}()
 
 			var jsonBody map[string]any
-			if jsonBody, _, err = browser.SteamCommunityPosts.JSON(appID, 0, batchSize, gidEvent, gidAnnouncement); err != nil {
+			if jsonBody, _, err = browser.SteamCommunityPosts.JSON(nil, appID, 0, batchSize, gidEvent, gidAnnouncement); err != nil {
 				log.WARNING.Printf("Could not get SteamCommunityPosts JSON for %d: %s. Tries left: %d", appID, err.Error(), tries)
 				if tries > 0 {
 					tries--
@@ -675,7 +675,7 @@ func (s *SteamAppSteamStorefront) ScrapeTags(config ScrapeConfig, maxTries int, 
 	// Use SteamSpy to find the accumulated TagScore for the game
 	storefrontConfig := config.ScrapeGetStorefront(SteamStorefront)
 	tagConfig := storefrontConfig.StorefrontTags()
-	return browser.SteamSpyAppDetails.RetryJSON(maxTries, minDelay, func(jsonBody map[string]any, resp *http.Response) (err error) {
+	return browser.SteamSpyAppDetails.RetryJSON(nil, maxTries, minDelay, func(jsonBody map[string]any, resp *http.Response) (err error) {
 		// We fall back to SteamSpy for fetching the game's name and publisher if we haven't got them yet
 		if s.SteamApp.Name == "" || !s.SteamApp.Publisher.IsValid() {
 			log.INFO.Printf(
@@ -779,7 +779,16 @@ func (s *SteamAppSteamStorefront) ScrapeExtra(config ScrapeConfig, maxTries int,
 	}
 
 	twitterUserURLPattern := regexp.MustCompile(`^https?://(?:www\.)?twitter\.com/(?:#!/)?@?([^/?#]*)(?:[?#].*)?$`)
-	return browser.SteamAppPage.RetrySoup(maxTries, minDelay, func(doc *soup.Root, resp *http.Response) (err error) {
+
+	// We will get around the agecheck by setting the following cookies
+	var req *http.Request
+	if _, req, err = browser.SteamAppPage.Request(appID); err != nil {
+		return
+	}
+	req.AddCookie(&http.Cookie{Name: "birthtime", Value: "568022401"})
+	req.AddCookie(&http.Cookie{Name: "mature_content", Value: "1"})
+
+	return browser.SteamAppPage.RetrySoup(req, maxTries, minDelay, func(doc *soup.Root, resp *http.Response) (err error) {
 		url := resp.Request.URL.String()
 		if s.SteamApp.HasStorepage, err = regexp.MatchString(`^https?://store\.steampowered\.com/app/\d+(/\w+)?/?$`, url); err != nil {
 			err = errors.Wrapf(err, "could not execute regex on URL %s", url)
@@ -876,7 +885,7 @@ func CreateInitialSteamApps(db *gorm.DB) (err error) {
 
 	if count == 0 {
 		apps := make(map[uint64]*SteamApp)
-		if err = browser.SteamGetAppList.RetryJSON(3, time.Second*20, func(jsonBody map[string]any, resp *http.Response) (err error) {
+		if err = browser.SteamGetAppList.RetryJSON(nil, 3, time.Second*20, func(jsonBody map[string]any, resp *http.Response) (err error) {
 			var (
 				appObjs []any
 				ok      bool
