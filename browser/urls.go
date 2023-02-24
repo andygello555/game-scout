@@ -217,7 +217,7 @@ func (su ScrapeURL) Name() string {
 
 // String returns the name of the ScrapeURL along with the URL in the format: "<Name>(<URL>)".
 func (su ScrapeURL) String() string {
-	return fmt.Sprintf("%s(%s)", su.Name(), string(su))
+	return fmt.Sprintf("%s(%q)", su.Name(), string(su))
 }
 
 // Fill will apply string interpolation to the ScrapeURL. The protocol does not need to be included as "https" is always

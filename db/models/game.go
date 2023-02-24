@@ -19,7 +19,6 @@ import (
 	"gorm.io/gorm/clause"
 	"math"
 	"net/http"
-	"os"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -1013,7 +1012,19 @@ func (g *GameItchIOStorefront) ScrapeCommunity(config ScrapeConfig, maxTries int
 			// RetrySoup method.
 			if url := devlog.Attrs()["href"]; browser.ItchIOGameDevlog.Match(url) {
 				devlogArgs := browser.ItchIOGameDevlog.ExtractArgs(url)
-				if err = browser.ItchIOGameDevlog.RetrySoup(nil, maxTries, minDelay, func(doc *soup.Root, resp *http.Response) (err error) {
+				if err = browser.ItchIOGameDevlog.RetrySoup(nil, maxTries, time.Second*10, func(doc *soup.Root, resp *http.Response) (err error) {
+					// Check if 429 occurred, if so, we will skip all other checks and return an appropriate error.
+					if resp.StatusCode == 429 {
+						log.WARNING.Printf(
+							"Fetch for devlog %d: %v, for Itch.IO title %s (dev: %s) has returned 429",
+							devlogNo+1, devlogArgs, gameSlug, developer,
+						)
+						return fmt.Errorf(
+							"fetch for devlog %d: %v, for Itch.IO title %s (dev: %s) has returned 429",
+							devlogNo+1, devlogArgs, gameSlug, developer,
+						)
+					}
+
 					// We first check if this devlog needs to be moderated so that we don't retry this a bunch of times.
 					if pageMessage := doc.Find("div", "class", "user_needs_review_page"); pageMessage.Error == nil {
 						log.WARNING.Printf(
@@ -1025,7 +1036,6 @@ func (g *GameItchIOStorefront) ScrapeCommunity(config ScrapeConfig, maxTries int
 
 					var likesCountEl soup.Root
 					if likesCountEl = doc.Find("div", "class", "like_button_drop"); likesCountEl.Error != nil {
-						_ = os.WriteFile(fmt.Sprintf("%s-%s-devlog-%d-%s.html", devlogArgs...), []byte(doc.HTML()), 0666)
 						log.ERROR.Printf(
 							"Could not find likes for devlog %v for Itch.IO title %s (dev: %s): %v",
 							devlogArgs, gameSlug, developer, likesCountEl.Error,
@@ -1071,6 +1081,9 @@ func (g *GameItchIOStorefront) ScrapeCommunity(config ScrapeConfig, maxTries int
 						url, gameSlug, developer,
 					)
 				}
+				// Wait a little after scraping each dev-log so that there is less likely-hood of running over the
+				// rate-limit
+				time.Sleep(time.Second)
 			}
 		}
 		return
