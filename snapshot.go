@@ -102,7 +102,10 @@ func SnapshotPhase(state *ScoutState) (err error) {
 			return errors.Wrapf(err, "could not save aggregation of %d DeveloperSnapshots for dev. %s", len(snapshots), id)
 		}
 		state.GetCachedField(StateType).SetOrAdd("Result", "SnapshotStats", "SnapshotsCreated", models.SetOrAddInc.Func())
-		log.INFO.Printf("\tSaved DeveloperSnapshot aggregation for %s which is comprised of %d partial snapshots", id, len(snapshots))
+		log.INFO.Printf(
+			"\tSaved DeveloperSnapshot %d/%d aggregation for %s which is comprised of %d partial snapshots",
+			dsIter.I()+1, state.GetIterableCachedField(DeveloperSnapshotsType).Len(), id, len(snapshots),
+		)
 		dsIter.Next()
 	}
 	return
