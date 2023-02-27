@@ -11,11 +11,13 @@ import (
 	"github.com/andygello555/game-scout/monday"
 	task "github.com/andygello555/game-scout/tasks"
 	myTwitter "github.com/andygello555/game-scout/twitter"
+	"github.com/andygello555/gotils/v2/numbers"
 	"github.com/antonmedv/expr"
 	"github.com/antonmedv/expr/vm"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"jaytaylor.com/html2text"
+	"math"
 	"os"
 	"reflect"
 	"strings"
@@ -678,13 +680,208 @@ func (c *ScrapeConstants) maxTotalUpdateTweets() float64 {
 func (c *ScrapeConstants) DefaultMaxTries() int           { return c.ScrapeMaxTries }
 func (c *ScrapeConstants) DefaultMinDelay() time.Duration { return c.ScrapeMinDelay.Duration }
 
+type WeightedModelFieldEvaluator struct {
+	// ModelName is the name of the models.WeightedModel that this WeightedModelFieldEvaluator is for. This is not
+	// prefixed by the package name.
+	ModelName string `json:"model_name"`
+	// Field is the name of the Field within the models.WeightedModel instance that this WeightedModelFieldEvaluator
+	// will evaluate.
+	Field string `json:"field"`
+	// Weight is the weight of this Field, which affects how much it influences the weighted score for each
+	// models.WeightedModel instance. If this is negative, then the value produced by the evaluated Expression will have
+	// its inverse taken before multiplying by the weight.
+	Weight float64 `json:"weight"`
+	// Expression is the raw source code for the expression that will be compiled by Compile to produce a vm.Program
+	// that is used to calculate the weighted value for this Field for a models.WeightedModel. The Expression is passed
+	// two variables:
+	//
+	// • "model": The models.WeightedModel instance.
+	//
+	// • "field": The value of the appropriate Field from the models.WeightModel instance.
+	//
+	// • "fieldPtr": A pointer to the value of "field". This is useful when the field value has pointer receiver methods.
+	// This is only set if the "field" value can be addressed by reflect.
+	//
+	// This Expression should return a float64 value, or a list of float64 values, that have not yet had the Weight
+	// applied to it
+	Expression string `json:"expression"`
+	// expression stores the compiled form of the Expression. This is compiled on startup by the Compile method.
+	expression *vm.Program
+}
+
+func (wmf *WeightedModelFieldEvaluator) EvaluatorModelName() string  { return wmf.ModelName }
+func (wmf *WeightedModelFieldEvaluator) EvaluatorField() string      { return wmf.Field }
+func (wmf *WeightedModelFieldEvaluator) EvaluatorWeight() float64    { return wmf.Weight }
+func (wmf *WeightedModelFieldEvaluator) EvaluatorExpression() string { return wmf.Expression }
+func (wmf *WeightedModelFieldEvaluator) EvaluatorCompiledExpression() *vm.Program {
+	return wmf.expression
+}
+
+func (wmf *WeightedModelFieldEvaluator) WeightAndInverse() (weight float64, inverse bool) {
+	inverse = wmf.EvaluatorWeight() < 0.0
+	weight = math.Abs(wmf.EvaluatorWeight())
+	return
+}
+
+func (wmf *WeightedModelFieldEvaluator) ModelType() reflect.Type {
+	return reflect.TypeOf(db.GetModelByName(wmf.ModelName).Model).Elem()
+}
+
+func (wmf *WeightedModelFieldEvaluator) ModelField(modelInstance any) any {
+	return reflect.ValueOf(modelInstance).Elem().FieldByName(wmf.Field).Interface()
+}
+
+var weightedModelEvaluatorFunctions = []expr.Option{
+	expr.Function("float", func(params ...interface{}) (interface{}, error) {
+		v := reflect.ValueOf(params[0])
+		switch {
+		case v.CanInt():
+			return float64(v.Int()), nil
+		case v.CanUint():
+			return float64(v.Uint()), nil
+		case v.CanFloat():
+			return v.Float(), nil
+		default:
+			return 0.0, fmt.Errorf("cannot convert %v (type %s) to float64", v.Interface(), v.Type().String())
+		}
+	}, new(func(x int) float64), new(func(x int8) float64), new(func(x int16) float64), new(func(x int32) float64),
+		new(func(x int64) float64), new(func(x uint) float64), new(func(x uint8) float64), new(func(x uint16) float64),
+		new(func(x uint32) float64), new(func(x uint64) float64), new(func(x float32) float64), new(func(x float64) float64)),
+	expr.Function("int", func(params ...interface{}) (interface{}, error) {
+		v := reflect.ValueOf(params[0])
+		switch {
+		case v.CanInt():
+			return v.Int(), nil
+		case v.CanUint():
+			return int64(v.Uint()), nil
+		case v.CanFloat():
+			return int64(v.Float()), nil
+		default:
+			return int64(0), fmt.Errorf("cannot convert %v (type %s) to int64", v.Interface(), v.Type().String())
+		}
+	}, new(func(x int) int64), new(func(x int8) int64), new(func(x int16) int64), new(func(x int32) int64),
+		new(func(x int64) int64), new(func(x uint) int64), new(func(x uint8) int64), new(func(x uint16) int64),
+		new(func(x uint32) int64), new(func(x uint64) int64), new(func(x float32) int64), new(func(x float64) int64)),
+	expr.Function("scale_range", func(params ...interface{}) (interface{}, error) {
+		return numbers.ScaleRange(params[0].(float64), params[1].(float64), params[2].(float64), params[3].(float64), params[4].(float64)), nil
+	}, new(func(x, xMin, xMax, yMin, yMax float64) float64)),
+	expr.Function("clamp", func(params ...interface{}) (interface{}, error) {
+		return numbers.Clamp(params[0].(float64), params[1].(float64)), nil
+	}, new(func(x, max float64) float64)),
+	expr.Function("clamp_min_max", func(params ...interface{}) (interface{}, error) {
+		return numbers.ClampMinMax(params[0].(float64), params[1].(float64), params[2].(float64)), nil
+	}, new(func(x, min, max float64) float64)),
+}
+
+func (wmf *WeightedModelFieldEvaluator) Env(modelInstance any) map[string]any {
+	env := make(map[string]any)
+	model := reflect.Zero(wmf.ModelType())
+	if modelInstance != nil {
+		model = reflect.ValueOf(modelInstance)
+		if model.Kind() == reflect.Interface || model.Kind() == reflect.Pointer {
+			model = model.Elem()
+		}
+	}
+	fieldValue := model.FieldByName(wmf.Field)
+	field := reflect.New(reflect.StructOf([]reflect.StructField{
+		{
+			Name: "Val",
+			Type: fieldValue.Type(),
+		},
+		{
+			Name: "Ptr",
+			Type: reflect.PointerTo(fieldValue.Type()),
+		},
+	}))
+	fieldPtr := reflect.New(fieldValue.Type())
+	fieldPtr.Elem().Set(fieldValue)
+	field.Elem().FieldByName("Val").Set(fieldValue)
+	field.Elem().FieldByName("Ptr").Set(fieldPtr)
+	env["model"] = model.Interface()
+	env["field"] = field.Elem().Interface()
+	return env
+}
+
+func (wmf *WeightedModelFieldEvaluator) Compile() (err error) {
+	if wmf.Expression != "" {
+		env := wmf.Env(nil)
+		fmt.Printf(
+			"%s.%s: %q - model = %s, field = %#+v\n",
+			wmf.ModelName, wmf.Field, wmf.Expression, reflect.TypeOf(env["model"]).String(), env["field"],
+		)
+		options := []expr.Option{expr.Env(env)}
+		options = append(options, weightedModelEvaluatorFunctions...)
+		if wmf.expression, err = expr.Compile(wmf.Expression, options...); err != nil {
+			err = errors.Wrapf(
+				err, "could not compile expression for %s.%s (%q)",
+				wmf.ModelName, wmf.Field, wmf.Expression,
+			)
+			return
+		}
+	}
+	return
+}
+
+func (wmf *WeightedModelFieldEvaluator) Eval(modelInstance any) (values []float64, err error) {
+	var valAny any
+	if expression := wmf.EvaluatorCompiledExpression(); expression != nil {
+		if valAny, err = expr.Run(
+			wmf.EvaluatorCompiledExpression(),
+			wmf.Env(modelInstance),
+		); err != nil {
+			err = errors.Wrapf(
+				err, "error occurred whilst trying to calculate weighted value for %s.%s",
+				wmf.ModelName, wmf.Field,
+			)
+			return
+		}
+	} else {
+		err = fmt.Errorf("expression for %s.%s is empty", wmf.ModelName, wmf.Field)
+		return
+	}
+
+	switch valAny.(type) {
+	case float64:
+		values = []float64{valAny.(float64)}
+	case []interface{}:
+		values = make([]float64, len(valAny.([]any)))
+		for i, value := range valAny.([]any) {
+			var ok bool
+			if values[i], ok = value.(float64); !ok {
+				err = fmt.Errorf(
+					"element %d of %v, evaluation of %s.%s, is a non-float64 value",
+					i, valAny, wmf.ModelName, wmf.Field,
+				)
+				return
+			}
+		}
+	default:
+		err = fmt.Errorf(
+			"calculation of weighted value for %s.%s resulted in non-float64 value (%s)",
+			wmf.ModelName, wmf.Field, reflect.TypeOf(valAny).String(),
+		)
+	}
+	return
+}
+
+func (wmf *WeightedModelFieldEvaluator) String() string {
+	return fmt.Sprintf(
+		"{ModelName: %v, Field: %v, Weight: %v, Expression: %v}",
+		wmf.ModelName, wmf.Field, wmf.Weight, wmf.Expression,
+	)
+}
+
 type ScrapeConfig struct {
 	// Debug is the value for the State.Debug field.
 	Debug bool `json:"debug"`
 	// Storefronts is a list of StorefrontConfig that contains the configs for each models.Storefront.
 	Storefronts []*StorefrontConfig `json:"storefronts"`
+	// WeightedModelExpressions is a mapping of models.WeightedModel names (with no package prefix) to an array of
+	// WeightedModelFieldEvaluator that are used to calculate each the value of each field which contributes to the
+	// weighted score of a models.WeightedModel instance.
+	WeightedModelExpressions map[string][]*WeightedModelFieldEvaluator `json:"weighted_model_expressions"`
 	// Constants are all the constants used throughout the Scout procedure as well as the ScoutWebPipes co-process.
-	Constants *ScrapeConstants
+	Constants *ScrapeConstants `json:"constants"`
 }
 
 func (sc *ScrapeConfig) ScrapeDebug() bool { return sc.Debug }
@@ -695,6 +892,82 @@ func (sc *ScrapeConfig) ScrapeStorefronts() []models.StorefrontConfig {
 		storefronts[i] = storefront
 	}
 	return storefronts
+}
+
+func (sc *ScrapeConfig) checkWeightedModelExists(model any) (t reflect.Type, err error) {
+	t = reflect.TypeOf(model)
+	if t.Kind() == reflect.Interface || t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+
+	if _, ok := model.(models.WeightedModel); !ok {
+		err = fmt.Errorf("%s instance is not a WeightedModel", t.Name())
+		return
+	}
+
+	if _, ok := sc.WeightedModelExpressions[t.Name()]; !ok {
+		err = fmt.Errorf("there aren't any WeightedModelFieldEvaluators for model %s", t.Name())
+	}
+	return
+}
+
+func (sc *ScrapeConfig) ScrapeFieldEvaluatorForWeightedModelField(model any, field string) (evaluator models.EvaluatorConfig, err error) {
+	var t reflect.Type
+	if t, err = sc.checkWeightedModelExists(model); err != nil {
+		return
+	}
+
+	for _, evaluator = range sc.WeightedModelExpressions[t.Name()] {
+		if evaluator.EvaluatorField() == field {
+			return
+		}
+	}
+
+	err = fmt.Errorf(
+		"could not find WeightedModelFieldEvaluator for field %q for %s instance",
+		field, t.Name(),
+	)
+	return
+}
+
+func (sc *ScrapeConfig) ScrapeEvalForWeightedModelField(modelInstance any, field string) (values []float64, err error) {
+	var evaluator models.EvaluatorConfig
+	if evaluator, err = sc.ScrapeFieldEvaluatorForWeightedModelField(modelInstance, field); err != nil {
+		return
+	}
+	return evaluator.Eval(modelInstance)
+}
+
+func (sc *ScrapeConfig) ScrapeWeightedModelCalc(modelInstance any) (weightedAverage float64, err error) {
+	var t reflect.Type
+	if t, err = sc.checkWeightedModelExists(modelInstance); err != nil {
+		return
+	}
+
+	weightSum := 0.0
+	weightFactorSum := 0.0
+	for _, evaluator := range sc.WeightedModelExpressions[t.Name()] {
+		var values []float64
+		if values, err = evaluator.Eval(modelInstance); err != nil {
+			return
+		}
+
+		weight, inverse := evaluator.WeightAndInverse()
+		weightFactorSum += weight
+		valueSum := 0.0
+		for _, value := range values {
+			valueSum += value
+		}
+
+		// We inverse the valueSum if this field requires it
+		if inverse && valueSum != 0.0 {
+			valueSum = 1 / valueSum
+		}
+		// Then we calculate the weighted value and add it to the sum of the weighted values
+		weightSum += valueSum * weight
+		//fmt.Printf("\t%s.%s = %v\n", evaluator.ModelName, evaluator.Field, valueSum)
+	}
+	return weightSum / weightFactorSum, nil
 }
 
 func (sc *ScrapeConfig) ScrapeConstants() models.ScrapeConstants { return sc.Constants }
@@ -714,7 +987,7 @@ func (sc *ScrapeConfig) ScrapeGetStorefront(storefront models.Storefront) (store
 }
 
 func (sc *ScrapeConfig) String() string {
-	return fmt.Sprintf("{Debug: %v, Storefronts: %v, Constants: %v}", sc.Debug, sc.Storefronts, sc.Constants)
+	return fmt.Sprintf("{Debug: %v, Storefronts: %v, WeightedModelExpressions: %v, Constants: %v}", sc.Debug, sc.Storefronts, sc.WeightedModelExpressions, sc.Constants)
 }
 
 // SteamWebPipesConfig stores the configuration for the SteamWebPipes co-process that's started when the machinery workers

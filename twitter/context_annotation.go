@@ -353,6 +353,18 @@ func (ContextAnnotationSet) GormDBDataType(db *gorm.DB, field *schema.Field) str
 	return ""
 }
 
+// ToSlice creates a slice of ContextAnnotation from the Context
+func (cas ContextAnnotationSet) ToSlice() []ContextAnnotation {
+	slice := make([]ContextAnnotation, cas.Cardinality())
+	iterator := cas.Set.Iterator()
+	i := 0
+	for contextAnnotation := range iterator.C {
+		slice[i] = contextAnnotation
+		i++
+	}
+	return slice
+}
+
 // NewContextAnnotationSet creates a ContextAnnotationSet. If twitter.TweetContextAnnotationObj objects are provided,
 // these will be converted to ContextAnnotation using ContextAnnotation.FromTweetContextAnnotationObj, then added to the
 // ContextAnnotationSet.

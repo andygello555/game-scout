@@ -875,6 +875,11 @@ func main() {
 					Required: false,
 				},
 				cli.BoolFlag{
+					Name:     "snapshots",
+					Usage:    "snapshots for the developer",
+					Required: false,
+				},
+				cli.BoolFlag{
 					Name:     "trend",
 					Usage:    "find the trend of a Developer's snapshots",
 					Required: false,
@@ -1045,6 +1050,24 @@ func main() {
 							if err = state.Save(); err != nil {
 								return cli.NewExitError(err.Error(), 1)
 							}
+						}
+					}
+
+					if c.Bool("snapshots") {
+						var snapshots []*models.DeveloperSnapshot
+						if snapshots, err = developer.DeveloperSnapshots(db.DB); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+						for i, snapshot := range snapshots {
+							fmt.Printf("Snapshot %d for Developer %v: %+v\n", i+1, developer, snapshot)
+							var weightedAverage float64
+							if weightedAverage, err = globalConfig.Scrape.ScrapeWeightedModelCalc(snapshot); err != nil {
+								return cli.NewExitError(err.Error(), 1)
+							}
+							fmt.Printf(
+								"Calculated score = %f vs. existing score = %f (match = %t)\n",
+								weightedAverage, snapshot.WeightedScore, weightedAverage == snapshot.WeightedScore,
+							)
 						}
 					}
 

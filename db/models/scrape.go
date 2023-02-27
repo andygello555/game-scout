@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/browser"
+	"github.com/antonmedv/expr/vm"
 	mapset "github.com/deckarep/golang-set/v2"
 	"gorm.io/gorm"
 	"math/rand"
@@ -128,12 +129,27 @@ type ScrapeConstants interface {
 	DefaultMinDelay() time.Duration
 }
 
+type EvaluatorConfig interface {
+	EvaluatorModelName() string
+	EvaluatorField() string
+	EvaluatorExpression() string
+	EvaluatorCompiledExpression() *vm.Program
+	WeightAndInverse() (float64, bool)
+	ModelType() reflect.Type
+	ModelField(modelInstance any) any
+	Env(modelInstance any) map[string]any
+	Eval(modelInstance any) ([]float64, error)
+}
+
 // ScrapeConfig contains the configuration for the scrape.
 type ScrapeConfig interface {
 	ScrapeDebug() bool
 	ScrapeStorefronts() []StorefrontConfig
 	ScrapeGetStorefront(storefront Storefront) StorefrontConfig
 	ScrapeConstants() ScrapeConstants
+	ScrapeFieldEvaluatorForWeightedModelField(model any, field string) (evaluator EvaluatorConfig, err error)
+	ScrapeEvalForWeightedModelField(modelInstance any, field string) (values []float64, err error)
+	ScrapeWeightedModelCalc(modelInstance any) (weightedAverage float64, err error)
 }
 
 // ScrapableGameSource represents a source that can be scraped for a GameModelStorefrontScraper for a Storefront.

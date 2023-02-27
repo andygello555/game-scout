@@ -371,6 +371,12 @@ func GetModel(model any) *DBModel {
 	return models[reflect.TypeOf(model).Elem().Name()]
 }
 
+// GetModelByName will return the DBModel from the models mapping that matches the given name. Remember that names
+// should not be prefixed with their package name.
+func GetModelByName(name string) *DBModel {
+	return models[name]
+}
+
 // connectPostgres connects to the postgres DB via GORM. It returns the gorm.DB as well as a function to close the
 // connection
 func connectPostgres(config Config) (db *gorm.DB, close func(), err error) {
