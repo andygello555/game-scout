@@ -147,8 +147,8 @@ All configuration variables for game-scout exist in a `config.json` file that mu
     "mapping": {
       "models.Game": {
         "model_name": "models.Game",
-        "board_id": 0,
-        "group_id": "games_from_twitter",
+        "board_ids": [0],
+        "group_ids": ["games_from_twitter"],
         "model_instance_id_column_id": "id",
         "model_instance_upvotes_column_id": "upvotes",
         "model_instance_downvotes_column_id": "downvotes",
@@ -158,13 +158,15 @@ All configuration variables for game-scout exist in a `config.json` file that mu
           "developer_website": "build_link(len(game.VerifiedDeveloperUsernames) > 0 ? sprintf(\"https://twitter.com/%s\", game.GetVerifiedDeveloperUsernames()[0]) : \"\")",
           "created_at": "build_date(now())",
           "website": "build_link(game.Website.IsValid() ? game.Website.String : \"\")",
-          "id": "game.ID.String()"
-        }
+          "id": "game.ID.String()",
+          "last_fetched": "build_date(now())"
+        },
+        "columns_to_update": ["last_fetched"]
       },
       "models.SteamApp": {
         "model_name": "models.SteamApp",
-        "board_id": 0,
-        "group_id": "steam_apps",
+        "board_ids": [0],
+        "group_ids": ["steam_apps"],
         "model_instance_id_column_id": "id",
         "model_instance_upvotes_column_id": "upvotes",
         "model_instance_downvotes_column_id": "downvotes",
@@ -174,8 +176,10 @@ All configuration variables for game-scout exist in a `config.json` file that mu
           "developer_website": "build_link(game.VerifiedDeveloper(db()) != nil ? game.VerifiedDeveloper(db()).Link() : \"\")",
           "created_at": "build_date(now())",
           "website": "build_link(game.Website())",
-          "id": "str(game.ID)"
-        }
+          "id": "str(game.ID)",
+          "last_fetched": "build_date(now())"
+        },
+        "columns_to_update": ["last_fetched"]
       }
     }
   },
@@ -377,16 +381,17 @@ The [`monday`](monday) package contains all the types and bindings that are used
 
 #### MondayMappingConfig
 
-| Key                                  | Type                            | Description                                                                                                                                                                                                                                                                                                    | Example |
-|--------------------------------------|---------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------|
-| `model_name`                         | `string`                        | The name of the model that this `MondayMappingConfig` is for. This should either be "models.SteamApp" or "models.Game".                                                                                                                                                                                        |         |
-| `board_id`                           | `int`                           | The Monday.com assigned ID of the board used to track models.SteamApp/models.Game from the Measure Phase.                                                                                                                                                                                                      |         |
-| `group_id`                           | `string`                        | The Monday.com assigned ID of the group within the BoardID used to track models.SteamApp/models.Game from the Measure Phase                                                                                                                                                                                    |         |
-| `model_instance_id_column_id`        | `string`                        | The Monday.com assigned ID of the column within the BoardID used to store the ID of the models.SteamApp/models.Game instance in game-scout.                                                                                                                                                                    |         |
-| `model_instance_upvotes_column_id`   | `string`                        | The Monday.com assigned ID of the column within the BoardID used to store the number of upvotes of the related models.SteamApp/models.Game.                                                                                                                                                                    |         |
-| `model_instance_downvotes_column_id` | `string`                        | The Monday.com assigned ID of the column within the BoardID used to store the number of downvotes of the related models.SteamApp/models.Game.                                                                                                                                                                  |         |
-| `model_instance_watched_column_id`   | `string`                        | The Monday.com assigned ID of the column within the BoardID used to store the value of the Watched field of the related models.SteamApp/models.Game. If this is set for a models.SteamApp/models.Game, then the instance will be included in a separate section of the Measure email until this flag is unset. |         |
-| `model_field_to_column_value_expr`   | `map[string]string` as `object` | Represents a mapping from Monday column IDs to expressions that can be compiled using `expr.Eval` to convert a field from a given models.Game/models.SteamApp instance to a value that Monday can use. This is used when creating models.Game/models.SteamApp in their BoardID in the Measure Phase.           |         |
+| Key                                  | Type                            | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Example                                    |
+|--------------------------------------|---------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------|
+| `model_name`                         | `string`                        | The name of the model that this `MondayMappingConfig` is for. This should either be "models.SteamApp" or "models.Game".                                                                                                                                                                                                                                                                                                                                            | `models.Game`/`models.SteamApp`            |
+| `board_ids`                          | `[]int`                         | The Monday.com assigned IDs of the boards used to track `models.SteamApp`/`models.Game` from the Measure Phase. Newly created Monday-ified `models.Game`/`models.SteamApp` will always be added to the **first board in this list**.                                                                                                                                                                                                                               | `[1234567890]`                             |
+| `group_ids`                          | `[]string`                      | The Monday.com assigned IDs of the groups within the `board_ids` used to track `models.SteamApp`/`models.Game` from the Measure Phase. _Groups that `models.Game` are in should never intersect with the boards that `models.SteamApp` are in_, **or if this is not possible**, _boards between the two `models.GameModel` should be unique_. Newly created Monday-ified `models.Game`/`models.SteamApp` will always be added to the **first group in this list**. | `["games", "downvoted_games"]`             |
+| `model_instance_id_column_id`        | `string`                        | The Monday.com assigned ID of the column within the BoardID used to store the ID of the models.SteamApp/models.Game instance in game-scout.                                                                                                                                                                                                                                                                                                                        | `id`                                       |
+| `model_instance_upvotes_column_id`   | `string`                        | The Monday.com assigned ID of the column within the BoardID used to store the number of upvotes of the related models.SteamApp/models.Game.                                                                                                                                                                                                                                                                                                                        | `upvotes`                                  |
+| `model_instance_downvotes_column_id` | `string`                        | The Monday.com assigned ID of the column within the BoardID used to store the number of downvotes of the related models.SteamApp/models.Game.                                                                                                                                                                                                                                                                                                                      | `downvotes`                                |
+| `model_instance_watched_column_id`   | `string`                        | The Monday.com assigned ID of the column within the BoardID used to store the value of the Watched field of the related models.SteamApp/models.Game. If this is set for a models.SteamApp/models.Game, then the instance will be included in a separate section of the Measure email until this flag is unset.                                                                                                                                                     | `watched`                                  |
+| `model_field_to_column_value_expr`   | `map[string]string` as `object` | Represents a mapping from Monday column IDs to expressions that can be compiled using `expr.Eval` to convert a field from a given models.Game/models.SteamApp instance to a value that Monday can use. This is used when creating models.Game/models.SteamApp in their BoardID in the Measure Phase.                                                                                                                                                               | See [example config](#configuration) above |
+| `columns_to_update`                  | `[]string`                      | A list of Monday column IDs to update for existing `models.SteamApp`/`models.Game` within the linked Monday `board_ids` or `group_ids`. `models.SteamApp`/`models.Game` instances that exist in the linked Monday `board_ids` or `group_ids` will be **updated at the start of the Measure Phase** using their mapped expressions in `model_field_to_column_value_expr`.                                                                                           | `["last_fetched", "link"]`                 |
 
 ### Scrape
 

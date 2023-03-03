@@ -352,7 +352,7 @@ type MondayMappingConfig struct {
 	// BoardIDs is the Monday.com assigned IDs of the boards used to track models.SteamApp/models.Game from the Measure
 	// Phase. Newly created Monday-ified models.Game/models.SteamApp will always be added to the first board in this list.
 	BoardIDs []int `json:"board_ids"`
-	// GroupIDs is the Monday.com assigned IDs of the groups within the BoardID used to track
+	// GroupIDs is the Monday.com assigned IDs of the groups within the BoardIDs used to track
 	// models.SteamApp/models.Game from the Measure Phase. Groups that models.Game are in should never intersect with
 	// the boards that models.SteamApp are in, or if this is not possible, boards between the two models.GameModel
 	// should be unique. Newly created Monday-ified models.Game/models.SteamApp will always be added to the first group in
@@ -378,7 +378,9 @@ type MondayMappingConfig struct {
 	ModelFieldToColumnValueExpr         map[string]string `json:"model_field_to_column_value_expr"`
 	modelFieldToColumnValueExprCompiled map[string]*vm.Program
 	// ColumnsToUpdate is a list of Monday column IDs to update for existing models.SteamApp/models.Game within the
-	// linked Monday BoardID or GroupID.
+	// linked Monday BoardIDs or GroupIDs. models.SteamApp/models.Game instances that exist in the linked Monday
+	// BoardIDs or GroupIDs will be updated at the start of the Measure Phase. using their mapped expressions in
+	// ModelFieldToColumnValueExpr.
 	ColumnsToUpdate []string `json:"columns_to_update"`
 }
 
