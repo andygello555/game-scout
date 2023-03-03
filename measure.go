@@ -117,13 +117,13 @@ func MeasurePhase(state *ScoutState) (err error) {
 						"\tCould not parse board ID %q for linked item %d for Game %q: %v",
 						game.MondayBoardID, game.MondayItemID, game.String(), err,
 					)
-				}
-
-				if _, err = models.UpdateGameInMonday.Execute(monday.DefaultClient, game, game.MondayItemID, boardID, globalConfig.Monday); err != nil {
-					log.ERROR.Printf(
-						"\tCould not update linked item %d for Game %q: %v",
-						game.MondayItemID, game.String(), err,
-					)
+				} else {
+					if _, err = models.UpdateGameInMonday.Execute(monday.DefaultClient, game, game.MondayItemID, boardID, globalConfig.Monday); err != nil {
+						log.ERROR.Printf(
+							"\tCould not update linked item %d for Game %q: %v",
+							game.MondayItemID, game.String(), err,
+						)
+					}
 				}
 			}
 
@@ -150,13 +150,13 @@ func MeasurePhase(state *ScoutState) (err error) {
 						"\tCould not parse board ID %q for linked item %d for SteamApp %q: %v",
 						app.MondayBoardID, app.MondayItemID, app.String(), err,
 					)
-				}
-
-				if _, err = models.UpdateSteamAppInMonday.Execute(monday.DefaultClient, app, app.MondayItemID, boardID, globalConfig.Monday); err != nil {
-					log.ERROR.Printf(
-						"\tCould not update linked item %d for SteamApp %q: %v",
-						app.MondayItemID, app.String(), err,
-					)
+				} else {
+					if _, err = models.UpdateSteamAppInMonday.Execute(monday.DefaultClient, app, app.MondayItemID, boardID, globalConfig.Monday); err != nil {
+						log.ERROR.Printf(
+							"\tCould not update linked item %d for SteamApp %q: %v",
+							app.MondayItemID, app.String(), err,
+						)
+					}
 				}
 			}
 
