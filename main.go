@@ -1272,6 +1272,49 @@ func main() {
 					default:
 						return cli.NewExitError("no model of name "+c.StringSlice("arg")[0], 1)
 					}
+				case "updategame":
+					args := c.StringSlice("arg")
+
+					var itemID int64
+					if itemID, err = strconv.ParseInt(args[2], 10, 64); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+
+					var boardID int64
+					if boardID, err = strconv.ParseInt(args[3], 10, 64); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+
+					switch strings.ToLower(args[0]) {
+					case "games":
+						game := models.Game{}
+						var id uuid.UUID
+						if id, err = uuid.Parse(args[1]); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+
+						if err = db.DB.Find(&game, id).Error; err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+						execute = func() (any, error) {
+							return models.UpdateGameInMonday.Execute(monday.DefaultClient, &game, int(itemID), int(boardID), globalConfig.Monday)
+						}
+					case "steam_apps":
+						app := models.SteamApp{}
+						var id int64
+						if id, err = strconv.ParseInt(args[1], 10, 64); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+
+						if err = db.DB.Find(&app, id).Error; err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+						execute = func() (any, error) {
+							return models.UpdateSteamAppInMonday.Execute(monday.DefaultClient, &app, int(itemID), int(boardID), globalConfig.Monday)
+						}
+					default:
+						return cli.NewExitError("no model of name "+args[0], 1)
+					}
 				}
 
 				var resource any

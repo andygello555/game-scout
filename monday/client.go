@@ -221,6 +221,7 @@ func (cv ColumnValue) Decode(columnMap ColumnMap) (Value, error) {
 type Item struct {
 	Id           string
 	GroupId      string
+	BoardId      string
 	Name         string
 	ColumnValues []ColumnValue
 }
@@ -338,13 +339,14 @@ func (v Votes) Value() (any, error) { return v.VoterIds, nil }
 
 type MappingConfig interface {
 	MappingModelName() string
-	MappingBoardID() int
-	MappingGroupID() string
+	MappingBoardIDs() []int
+	MappingGroupIDs() []string
+	MappingColumnsToUpdate() []string
 	MappingModelInstanceIDColumnID() string
 	MappingModelInstanceUpvotesColumnID() string
 	MappingModelInstanceDownvotesColumnID() string
 	MappingModelInstanceWatchedColumnID() string
-	ColumnValues(game any) (columnValues map[string]any, err error)
+	ColumnValues(game any, columnIDs ...string) (columnValues map[string]any, err error)
 }
 
 type Config interface {

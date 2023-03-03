@@ -15,6 +15,7 @@ import (
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"math"
+	"strconv"
 	"time"
 )
 
@@ -109,12 +110,30 @@ func MeasurePhase(state *ScoutState) (err error) {
 		})...)
 		mondayWatchedGameIDs = mapset.NewSet[uuid.UUID]()
 		for _, game := range mondayGames {
+			if game.MondayItemID != 0 && game.MondayBoardID != "" {
+				var boardID int64
+				if boardID, err = strconv.ParseInt(game.MondayBoardID, 10, 64); err != nil {
+					log.ERROR.Printf(
+						"\tCould not parse board ID %q for linked item %d for Game %q: %v",
+						game.MondayBoardID, game.MondayItemID, game.String(), err,
+					)
+				}
+
+				if _, err = models.UpdateGameInMonday.Execute(monday.DefaultClient, game, game.MondayItemID, boardID, globalConfig.Monday); err != nil {
+					log.ERROR.Printf(
+						"\tCould not update linked item %d for Game %q: %v",
+						game.MondayItemID, game.String(), err,
+					)
+				}
+			}
+
 			if game.Watched != nil {
-				log.INFO.Printf("Game %q is watched", game.String())
+				log.INFO.Printf("\tGame %q is watched", game.String())
 				mondayWatchedGameIDs.Add(game.ID)
 			}
+
 			if err = db.DB.Save(game).Error; err != nil {
-				log.ERROR.Printf("Could not save Game %q: %v", game.String(), err)
+				log.ERROR.Printf("\tCould not save Game %q: %v", game.String(), err)
 			}
 		}
 
@@ -124,12 +143,30 @@ func MeasurePhase(state *ScoutState) (err error) {
 		})...)
 		mondayWatchedSteamAppIDs = mapset.NewSet[uint64]()
 		for _, app := range mondaySteamApps {
+			if app.MondayItemID != 0 && app.MondayBoardID != "" {
+				var boardID int64
+				if boardID, err = strconv.ParseInt(app.MondayBoardID, 10, 64); err != nil {
+					log.ERROR.Printf(
+						"\tCould not parse board ID %q for linked item %d for SteamApp %q: %v",
+						app.MondayBoardID, app.MondayItemID, app.String(), err,
+					)
+				}
+
+				if _, err = models.UpdateSteamAppInMonday.Execute(monday.DefaultClient, app, app.MondayItemID, boardID, globalConfig.Monday); err != nil {
+					log.ERROR.Printf(
+						"\tCould not update linked item %d for SteamApp %q: %v",
+						app.MondayItemID, app.String(), err,
+					)
+				}
+			}
+
 			if app.Watched != nil {
-				log.INFO.Printf("SteamApp %q is watched", app.String())
+				log.INFO.Printf("\tSteamApp %q is watched", app.String())
 				mondayWatchedSteamAppIDs.Add(app.ID)
 			}
+
 			if err = db.DB.Save(app).Error; err != nil {
-				log.ERROR.Printf("Could not save Game %q: %v", app.String(), err)
+				log.ERROR.Printf("\tCould not save Game %q: %v", app.String(), err)
 			}
 		}
 	} else {
