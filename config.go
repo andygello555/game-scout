@@ -349,12 +349,15 @@ type MondayMappingConfig struct {
 	// ModelName is the name of the model that this MondayMappingConfig is for. This should either be "models.SteamApp"
 	// or "models.Game".
 	ModelName string `json:"model_name"`
-	// BoardID is the Monday.com assigned ID of the board used to track models.SteamApp/models.Game from the Measure
-	// Phase.
-	BoardID int `json:"board_id"`
-	// GroupID is the Monday.com assigned ID of the group within the BoardID used to track models.SteamApp/models.Game
-	// from the Measure Phase
-	GroupID string `json:"group_id"`
+	// BoardIDs is the Monday.com assigned IDs of the boards used to track models.SteamApp/models.Game from the Measure
+	// Phase. Newly created Monday-ified models.Game/models.SteamApp will always be added to the first board in this list.
+	BoardIDs []int `json:"board_ids"`
+	// GroupIDs is the Monday.com assigned IDs of the groups within the BoardIDs used to track
+	// models.SteamApp/models.Game from the Measure Phase. Groups that models.Game are in should never intersect with
+	// the boards that models.SteamApp are in, or if this is not possible, boards between the two models.GameModel
+	// should be unique. Newly created Monday-ified models.Game/models.SteamApp will always be added to the first group in
+	// this list.
+	GroupIDs []string `json:"group_ids"`
 	// ModelInstanceIDColumnID is the Monday.com assigned ID of the column within the BoardID used to store the ID of
 	// the models.SteamApp/models.Game instance in game-scout.
 	ModelInstanceIDColumnID string `json:"model_instance_id_column_id"`
@@ -374,11 +377,17 @@ type MondayMappingConfig struct {
 	// This is used when creating models.Game/models.SteamApp in their BoardID in the Measure Phase.
 	ModelFieldToColumnValueExpr         map[string]string `json:"model_field_to_column_value_expr"`
 	modelFieldToColumnValueExprCompiled map[string]*vm.Program
+	// ColumnsToUpdate is a list of Monday column IDs to update for existing models.SteamApp/models.Game within the
+	// linked Monday BoardIDs or GroupIDs. models.SteamApp/models.Game instances that exist in the linked Monday
+	// BoardIDs or GroupIDs will be updated at the start of the Measure Phase. using their mapped expressions in
+	// ModelFieldToColumnValueExpr.
+	ColumnsToUpdate []string `json:"columns_to_update"`
 }
 
-func (mmc *MondayMappingConfig) MappingModelName() string { return mmc.ModelName }
-func (mmc *MondayMappingConfig) MappingBoardID() int      { return mmc.BoardID }
-func (mmc *MondayMappingConfig) MappingGroupID() string   { return mmc.GroupID }
+func (mmc *MondayMappingConfig) MappingModelName() string         { return mmc.ModelName }
+func (mmc *MondayMappingConfig) MappingBoardIDs() []int           { return mmc.BoardIDs }
+func (mmc *MondayMappingConfig) MappingGroupIDs() []string        { return mmc.GroupIDs }
+func (mmc *MondayMappingConfig) MappingColumnsToUpdate() []string { return mmc.ColumnsToUpdate }
 func (mmc *MondayMappingConfig) MappingModelInstanceIDColumnID() string {
 	return mmc.ModelInstanceIDColumnID
 }
@@ -456,9 +465,17 @@ func (mmc *MondayMappingConfig) Compile() (err error) {
 	return
 }
 
-func (mmc *MondayMappingConfig) ColumnValues(game any) (columnValues map[string]any, err error) {
+func (mmc *MondayMappingConfig) ColumnValues(game any, columnIDs ...string) (columnValues map[string]any, err error) {
 	columnValues = make(map[string]any)
-	for columnID, program := range mmc.modelFieldToColumnValueExprCompiled {
+	// If no columnIDs are given we will add all the keys within modelFieldToColumnValueExprCompiled
+	if len(columnIDs) == 0 {
+		for columnID := range mmc.modelFieldToColumnValueExprCompiled {
+			columnIDs = append(columnIDs, columnID)
+		}
+	}
+
+	for _, columnID := range columnIDs {
+		program := mmc.modelFieldToColumnValueExprCompiled[columnID]
 		if columnValues[columnID], err = expr.Run(program, map[string]any{"game": game}); err != nil {
 			err = errors.Wrapf(err, "could not find column value for %q on %s", columnID, reflect.TypeOf(game).String())
 			return
@@ -469,16 +486,17 @@ func (mmc *MondayMappingConfig) ColumnValues(game any) (columnValues map[string]
 
 func (mmc *MondayMappingConfig) String() string {
 	return fmt.Sprintf(
-		`{ModelName: %v, BoardID: %v, GroupID: %v, ModelInstanceIDColumnID: %v, ModelInstanceUpvotesColumnID: %v, ModelInstanceDownvotesColumnID: %v, ModelInstanceWatchedColumnID: %v, ModelFieldToColumnValueExpr: %v, modelFieldToColumnValueExprCompiled: %v}`,
+		`{ModelName: %v, BoardIDs: %v, GroupIDs: %v, ModelInstanceIDColumnID: %v, ModelInstanceUpvotesColumnID: %v, ModelInstanceDownvotesColumnID: %v, ModelInstanceWatchedColumnID: %v, ModelFieldToColumnValueExpr: %v, modelFieldToColumnValueExprCompiled: %v, ColumnsToUpdate: %v}`,
 		mmc.ModelName,
-		mmc.BoardID,
-		mmc.GroupID,
+		mmc.BoardIDs,
+		mmc.GroupIDs,
 		mmc.ModelInstanceIDColumnID,
 		mmc.ModelInstanceUpvotesColumnID,
 		mmc.ModelInstanceDownvotesColumnID,
 		mmc.ModelInstanceWatchedColumnID,
 		mmc.ModelFieldToColumnValueExpr,
 		mmc.modelFieldToColumnValueExprCompiled,
+		mmc.ColumnsToUpdate,
 	)
 }
 

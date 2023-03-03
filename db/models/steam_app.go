@@ -37,6 +37,12 @@ type SteamApp struct {
 	ID uint64
 	// Name is the current name of the SteamApp.
 	Name string
+	// MondayItemID is a non-database field that is filled when fetching the SteamApp from Monday using the
+	// GetSteamAppsFromMonday monday.Binding.
+	MondayItemID int `gorm:"-:all"`
+	// MondayBoardID is a non-database field that is filled when fetching the SteamApp from Monday using the
+	// GetSteamAppsFromMonday monday.Binding.
+	MondayBoardID string `gorm:"-:all"`
 	// Type is only used for our benefit to check what type of software this SteamApp is. We do not save it to the
 	// database at all, because we only save SteamApp's that are games.
 	Type string `gorm:"-:all"`
@@ -407,8 +413,8 @@ var GetSteamAppsFromMonday = monday.NewBinding[monday.ItemResponse, []*SteamApp]
 	func(args ...any) *graphql.Request {
 		page := args[0].(int)
 		mapping := args[1].(monday.Config).MondayMappingForModel(SteamApp{})
-		boardIds := []int{mapping.MappingBoardID()}
-		groupIds := []string{mapping.MappingGroupID()}
+		boardIds := mapping.MappingBoardIDs()
+		groupIds := mapping.MappingGroupIDs()
 		return monday.GetItems.Request(page, boardIds, groupIds)
 	},
 	func(response monday.ItemResponse, args ...any) []*SteamApp {
@@ -442,6 +448,13 @@ var GetSteamAppsFromMonday = monday.NewBinding[monday.ItemResponse, []*SteamApp]
 			}
 
 			apps = append(apps, &app)
+
+			var itemID int64
+			if itemID, err = strconv.ParseInt(item.Id, 10, 64); err == nil {
+				app.MondayItemID = int(itemID)
+			}
+			app.MondayBoardID = item.BoardId
+
 			if column, ok = columnMap[mapping.MappingModelInstanceWatchedColumnID()]; ok {
 				if column.Value != "null" {
 					var watches monday.Votes
@@ -501,13 +514,47 @@ var AddSteamAppToMonday = monday.NewBinding[monday.ItemId, string](
 			panic(err)
 		}
 		return monday.AddItem.Request(
-			mapping.MappingBoardID(),
-			mapping.MappingGroupID(),
+			mapping.MappingBoardIDs()[0],
+			mapping.MappingGroupIDs()[0],
 			itemName,
 			columnValues,
 		)
 	},
 	monday.AddItem.Response, "create_item", false,
+)
+
+// UpdateSteamAppInMonday is a monday.Binding which updates the monday.Item of the given ID within the monday.Board of
+// the given ID for SteamApp using the monday.MappingConfig.ColumnValues method to generate values for all the
+// monday.Column IDs provided by the monday.MappingConfig.MappingColumnsToUpdate method. Arguments provided to Execute:
+//
+// • game (*SteamApp): The SteamApp to use as the basis for the new column values.
+//
+// • itemId (int): The ID of the monday.Item that represents the given SteamApp.
+//
+// • boardId (int): The ID of the monday.Board within which the monday.Item resides.
+//
+// • config (monday.Config): The monday.Config used to fetch the monday.MappingConfig for SteamApp from. This
+// monday.MappingConfig is then used to generate the column values that are posted to the Monday API to mutate the column
+// values of the monday.Item of the given ID in the mapped monday.Board.
+//
+// Execute returns the ID of the monday.Item that has been mutated.
+var UpdateSteamAppInMonday = monday.NewBinding[monday.ItemId, string](
+	func(args ...any) *graphql.Request {
+		app := args[0].(*SteamApp)
+		itemId := args[1].(int)
+		boardId := args[2].(int)
+		mapping := args[3].(monday.Config).MondayMappingForModel(SteamApp{})
+		columnValues, err := mapping.ColumnValues(app, mapping.MappingColumnsToUpdate()...)
+		if err != nil {
+			panic(err)
+		}
+		return monday.ChangeMultipleColumnValues.Request(
+			itemId,
+			boardId,
+			columnValues,
+		)
+	},
+	monday.ChangeMultipleColumnValues.Response, "change_multiple_column_values", false,
 )
 
 // VerifiedDeveloper returns the first verified Developer for this SteamApp. If there is not one, we will return a nil pointer.
