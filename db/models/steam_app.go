@@ -367,8 +367,6 @@ func (app *SteamApp) OnConflict() clause.OnConflict {
 		"asset_modified_time",
 		"last_changelist_id",
 		"times_highlighted",
-		"watched",
-		"votes",
 		"weighted_score",
 	})...)
 	return clause.OnConflict{

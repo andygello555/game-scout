@@ -328,8 +328,6 @@ func (g *Game) OnConflict() clause.OnConflict {
 		"total_downvotes",
 		"total_comments",
 		"tag_score",
-		"watched",
-		"votes",
 		"weighted_score",
 	})...)
 	return clause.OnConflict{
