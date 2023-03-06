@@ -281,6 +281,7 @@ func DeletePhase(state *ScoutState) (err error) {
 		if err = state.Save(); err != nil {
 			log.ERROR.Printf("Could not save State cache to disk in Enable: %v", err)
 		}
+		state.GetCachedField(StateType).SetOrAdd("Result", "DeleteStats", "TotalFinishedSamples", models.SetOrAddInc.Func())
 		sample++
 	}
 
@@ -295,8 +296,8 @@ func DeletePhase(state *ScoutState) (err error) {
 		for iter.Continue() {
 			deletedDev := iter.Key().(*models.TrendingDev)
 			log.INFO.Printf(
-				"Starting process to remove any traces of Developer %v which is %s in our list of devs to delete",
-				deletedDev.Developer, numbers.Ordinal(iter.I()+1),
+				"Starting process to remove any traces of Developer %v which is %s in our list of %d devs to delete",
+				deletedDev.Developer, numbers.Ordinal(iter.I()+1), deletedDevelopers.Len(),
 			)
 			gameIDs := slices.Comprehension(deletedDev.Games, func(idx int, value *models.Game, arr []*models.Game) uuid.UUID {
 				return value.ID

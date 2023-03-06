@@ -49,6 +49,10 @@ type Game struct {
 	Storefront Storefront `gorm:"type:storefront_type"`
 	// Website is the URL for this game's website. Usually a Steam store page.
 	Website null.String `gorm:"index:idx_website,where:website is not null,unique"`
+	// ImageURL is the URL for this game's cover/header image. For Game's whose Storefront is SteamStorefront this is
+	// set to: "https://cdn.cloudflare.steamstatic.com/steam/apps/{{ $appid }}/header.jpg", and for ItchIOStorefront
+	// Games this is set to the URL of the header image on the Game's Itch.IO page.
+	ImageURL null.String `gorm:"default:null"`
 	// Developers are the Twitter usernames that could be developers for this Game.
 	Developers pq.StringArray `gorm:"type:varchar(15)[];default:'{}'"`
 	// VerifiedDeveloperUsernames are the Twitter usernames that can be found somewhere on the Game's Website.
@@ -322,6 +326,7 @@ func (g *Game) OnConflict() clause.OnConflict {
 		"name",
 		"storefront",
 		"website",
+		"image_url",
 		"verified_developer_usernames",
 		"updates",
 		"release_date",
@@ -555,6 +560,7 @@ func (g *GameWrapper) Default() {
 	g.Game.Storefront = UnknownStorefront
 	g.Game.Name = null.StringFromPtr(nil)
 	g.Game.Website = null.StringFromPtr(nil)
+	g.Game.ImageURL = null.StringFromPtr(nil)
 	g.Game.Publisher = null.StringFromPtr(nil)
 	g.Game.TotalReviews = null.Int32FromPtr(nil)
 	g.Game.PositiveReviews = null.Int32FromPtr(nil)
@@ -965,6 +971,10 @@ func (g *GameSteamStorefront) AfterScrape(args ...any) {
 	standardisedURL := SteamStorefront.ScrapeURL().Fill(args...)
 	g.Game.Storefront = SteamStorefront
 	g.Game.Website = null.StringFrom(standardisedURL)
+	g.Game.ImageURL = null.StringFrom(fmt.Sprintf(
+		"https://cdn.cloudflare.steamstatic.com/steam/apps/%d/header.jpg",
+		g.Game.Storefront.ScrapeURL().ExtractArgs(g.Game.Website.String)[0],
+	))
 }
 
 type GameItchIOStorefront GameWrapper
@@ -1014,17 +1024,29 @@ func (g *GameItchIOStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, min
 	storefrontConfig := config.ScrapeGetStorefront(ItchIOStorefront)
 	tagConfig := storefrontConfig.StorefrontTags()
 	return browser.ItchIOGamePage.RetrySoup(nil, maxTries, minDelay, func(doc *soup.Root, resp *http.Response) (err error) {
-		// First find the game's name. This is contained within h1.game_title
-		var title soup.Root
-		if title = doc.Find("h1", "class", "game_title"); title.Error != nil {
+		// First find the game's name and image. This is contained within #header
+		var header soup.Root
+		if header = doc.Find("div", "id", "header"); header.Error != nil {
 			return errors.Wrapf(
-				title.Error, "could not find game name for Itch.IO title %s (dev: %s)",
+				header.Error, "could not find header for Itch.IO title %s (dev: %s)",
 				gameSlug, developer,
 			)
 		}
 
+		var title soup.Root
+		if title = header.Find("h1", "class", "game_title"); title.Error != nil {
+			return errors.Wrapf(
+				header.Error, "could not find name for Itch.IO title %s (dev: %s)",
+				gameSlug, developer,
+			)
+		}
 		g.Game.Name = null.StringFrom(title.Text())
 		log.INFO.Printf("Name found for Itch.IO title %s (dev: %s): %q", gameSlug, developer, g.Game.Name.String)
+
+		var image soup.Root
+		if image = header.Find("img"); image.Error == nil {
+			g.Game.ImageURL = null.StringFrom(image.Attrs()["src"])
+		}
 
 		// Find the verified developer usernames for this game. This can be found in meta[property='twitter:creator']
 		if creator := doc.Find("meta", "property", "twitter:creator"); creator.Error == nil {

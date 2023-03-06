@@ -34,6 +34,10 @@ func TransformTweet(
 	if len(tweet.ReferencedTweets) > 0 {
 		for _, referencedTweet := range tweet.ReferencedTweets {
 			if referencedTweet.Reference.Type == "retweeted" {
+				log.INFO.Printf(
+					"Tweet %s from %q is a retweet, remapping to author of retweet %q",
+					tweet.Tweet.ID, tweet.Author.UserName, referencedTweet.TweetDictionary.Author.UserName,
+				)
 				tweet = referencedTweet.TweetDictionary
 				break
 			}
@@ -216,12 +220,17 @@ func DiscoveryBatch(
 
 			// At this point we only save the developer and the game. We still need to aggregate all the possible
 			// developerSnapshots
-			if _, ok := state.GetIterableCachedField(DeveloperSnapshotsType).Get(result.developer.ID); !ok {
+			if snapshots, ok := state.GetIterableCachedField(DeveloperSnapshotsType).Get(result.developer.ID); !ok {
 				// Create/update the developer if a developer snapshot for it hasn't been added yet
 				log.INFO.Printf("%sthis is the first time we have seen Developer %v", logPrefix, result.developer)
 				if created, err = db.Upsert(result.developer); resultAddDevOrGame(created) {
 					state.GetCachedField(StateType).SetOrAdd("Result", resultKey(), "Developers", models.SetOrAddInc.Func())
 				}
+			} else {
+				log.INFO.Printf(
+					"%sthis is NOT the first time we have seen Developer %v, they have %d snapshots",
+					logPrefix, result.developer, len(snapshots.([]*models.DeveloperSnapshot)),
+				)
 			}
 
 			// Create the game
@@ -241,7 +250,7 @@ func DiscoveryBatch(
 			// Add the developerSnap to the developerSnapshots
 			state.GetIterableCachedField(DeveloperSnapshotsType).SetOrAdd(result.developer.ID, result.developerSnap)
 			state.GetCachedField(StateType).SetOrAdd("Result", resultKey(), "TotalSnapshots", models.SetOrAddInc.Func())
-			log.INFO.Printf("%sadded DeveloperSnapshot to mapping", logPrefix)
+			log.INFO.Printf("%sadded DeveloperSnapshot to mapping (%d developer IDs in DeveloperSnapshots)", logPrefix, state.GetIterableCachedField(DeveloperSnapshotsType).Len())
 		} else {
 			log.WARNING.Printf("%scouldn't transform tweet no. %d: %s. Skipping...", logPrefix, result.tweetNo, err.Error())
 		}

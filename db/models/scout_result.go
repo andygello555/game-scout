@@ -65,6 +65,9 @@ type DisableEnableDeleteStats struct {
 	// TotalSampledDevelopers is the total number of developers that were sampled in the phase. Only applies for
 	// ScoutResult.EnableStats and ScoutResult.DeleteStats.
 	TotalSampledDevelopers int64
+	// TotalFinishedSamples the number of Developer samples successfully processed in the phase. Only applies for
+	// ScoutResult.EnableStats and ScoutResult.DeleteStats.
+	TotalFinishedSamples int64
 }
 
 // Before sets the EnabledDevelopersBefore and DisabledDevelopersBefore fields using SQL queries. Call this before the

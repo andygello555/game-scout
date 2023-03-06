@@ -53,7 +53,7 @@ func (sf Storefront) LogoSrc() string {
 	case SteamStorefront:
 		return "https://store.cloudflare.steamstatic.com/public/shared/images/header/logo_steam.svg"
 	case ItchIOStorefront:
-		return "https://static.itch.io/images/logo-black-new.svg"
+		return "https://static.itch.io/images/logo-white-new.svg"
 	default:
 		return ""
 	}

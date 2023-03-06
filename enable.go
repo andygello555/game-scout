@@ -164,6 +164,7 @@ func EnablePhase(state *ScoutState) (err error) {
 		if err = state.Save(); err != nil {
 			log.ERROR.Printf("Could not save State cache to disk in Enable: %v", err)
 		}
+		state.GetCachedField(StateType).SetOrAdd("Result", "EnableStats", "TotalFinishedSamples", models.SetOrAddInc.Func())
 		sample++
 	}
 

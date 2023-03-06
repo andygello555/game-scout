@@ -144,19 +144,34 @@ func UpdateDeveloper(
 		"Executing DiscoveryBatch for batch of %d tweets for Developer %v",
 		len(tweetRaw.TweetDictionaries()), developer,
 	)
-	// Run DiscoveryBatch for this batch of tweet dictionaries
-	var subGameIDs mapset.Set[uuid.UUID]
-	if subGameIDs, err = DiscoveryBatch(
-		developerNo, tweetRaw.TweetDictionaries(), gameScrapers, state,
-	); err != nil && !myErrors.IsTemporary(err) {
-		log.FATAL.Printf("Error returned by DiscoveryBatch is not temporary: %s. We have to stop :(", err.Error())
-		return gameIDs, myErrors.TemporaryWrapf(
-			false, err, "could not execute DiscoveryBatch for tweets fetched for Developer %v",
-			developer,
-		)
+
+	if len(tweetRaw.TweetDictionaries()) > 0 {
+		// Run DiscoveryBatch for this batch of tweet dictionaries (if there are any)
+		var subGameIDs mapset.Set[uuid.UUID]
+		if subGameIDs, err = DiscoveryBatch(
+			developerNo, tweetRaw.TweetDictionaries(), gameScrapers, state,
+		); err != nil && !myErrors.IsTemporary(err) {
+			log.FATAL.Printf("Error returned by DiscoveryBatch is not temporary: %s. We have to stop :(", err.Error())
+			return gameIDs, myErrors.TemporaryWrapf(
+				false, err, "could not execute DiscoveryBatch for tweets fetched for Developer %v",
+				developer,
+			)
+		}
+		// MergeIterableCachedFields the gameIDs from DiscoveryBatch back into the local gameIDs
+		gameIDs = gameIDs.Union(subGameIDs)
+	} else {
+		log.WARNING.Printf("Cannot fetch any tweets for Developer %v, inserting a dummy snapshot and time", developer)
+		state.GetCachedField(UserTweetTimesType).SetOrAdd(developer.ID, startTime)
+		state.GetIterableCachedField(DeveloperSnapshotsType).SetOrAdd(developer.ID, &models.DeveloperSnapshot{
+			TimesHighlighted:     developer.TimesHighlighted,
+			DeveloperID:          developer.ID,
+			Tweets:               0,
+			TweetIDs:             []string{},
+			TweetsPublicMetrics:  &twitter.TweetMetricsObj{},
+			UserPublicMetrics:    developer.PublicMetrics,
+			ContextAnnotationSet: myTwitter.NewContextAnnotationSet(),
+		})
 	}
-	// MergeIterableCachedFields the gameIDs from DiscoveryBatch back into the local gameIDs
-	gameIDs = gameIDs.Union(subGameIDs)
 	return
 }
 
@@ -193,6 +208,7 @@ func updateDeveloperWorker(
 			developer:   job.developer,
 			tempState:   StateInMemory(),
 		}
+		result.tempState.GetCachedField(StateType).SetOrAdd("Phase", Update)
 		var subGameIDs mapset.Set[uuid.UUID]
 		subGameIDs, result.error = UpdateDeveloper(
 			job.developerNo, job.developer, job.totalTweets,
@@ -552,6 +568,15 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 				// updated.
 				state.GetCachedField(StateType).SetOrAdd("UpdatedDevelopers", result.developer.ID)
 				state.GetCachedField(StateType).SetOrAdd("Result", "UpdateStats", "Developers", models.SetOrAddInc.Func())
+
+				// Then we add all the properties of the ScoutResult within the temp state in the result returned from
+				// UpdateDeveloper.
+				scoutResultAny, _ := result.tempState.GetCachedField(StateType).Get("Result")
+				scoutResult := scoutResultAny.(*models.ScoutResult)
+				log.INFO.Printf("Merging temp ScoutResult properties collected for Developer %v back into main ScoutResult: %#+v", result.developer, scoutResult.UpdateStats)
+				state.GetCachedField(StateType).SetOrAdd("Result", "UpdateStats", "Games", models.SetOrAddAdd.Func(scoutResult.UpdateStats.Games))
+				state.GetCachedField(StateType).SetOrAdd("Result", "UpdateStats", "TweetsConsumed", models.SetOrAddAdd.Func(scoutResult.UpdateStats.TweetsConsumed))
+				state.GetCachedField(StateType).SetOrAdd("Result", "UpdateStats", "TotalSnapshots", models.SetOrAddAdd.Func(scoutResult.UpdateStats.TotalSnapshots))
 
 				// Save the ScoutState after batchSize number of successful results have been consumed
 				resultBatchCount++

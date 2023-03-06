@@ -168,8 +168,10 @@ func TestUpdatePhase(t *testing.T) {
 	developerSnapshotNo := 0
 	sixDaysAgo := time.Now().UTC().Add(time.Hour * time.Duration(-24*6))
 	scanner = bufio.NewScanner(developerIDsFile)
+	expectedDeveloperIDs := mapset.NewSet[string]()
 	for scanner.Scan() && developerNo != *developers {
 		developer := models.Developer{ID: scanner.Text(), Username: strconv.Itoa(developerNo)}
+		expectedDeveloperIDs.Add(developer.ID)
 		if err = db.DB.Create(&developer).Error; err != nil {
 			t.Errorf("Cannot create Developer %s: %s", developer.ID, err.Error())
 		}
@@ -251,6 +253,24 @@ func TestUpdatePhase(t *testing.T) {
 		t.Errorf(
 			"There are only %d gameIDs, expected >=%d",
 			state.GetIterableCachedField(GameIDsType).Len(), developerNo,
+		)
+	}
+
+	actualDeveloperIDs := mapset.NewSet[string]()
+	iter := state.GetIterableCachedField(DeveloperSnapshotsType).Iter()
+	for iter.Continue() {
+		key := iter.Key()
+		val, _ := iter.Get()
+		fmt.Printf("%v: has %d snapshots\n", key, len(val.([]*models.DeveloperSnapshot)))
+		actualDeveloperIDs.Add(key.(string))
+		iter.Next()
+	}
+	fmt.Println("There are", state.GetIterableCachedField(DeveloperSnapshotsType).Len(), "DeveloperSnapshots")
+
+	if !actualDeveloperIDs.Equal(expectedDeveloperIDs) {
+		t.Errorf(
+			"Developer's that were updated do not match the developer's that were queued. actual - expected = %v, expected - actual = %v",
+			actualDeveloperIDs.Difference(expectedDeveloperIDs), expectedDeveloperIDs.Difference(actualDeveloperIDs),
 		)
 	}
 }

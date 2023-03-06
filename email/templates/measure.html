@@ -25,14 +25,13 @@
     <tbody>
     <tr style="text-align: center">
         <td style="word-wrap: anywhere; overflow-wrap: anywhere; padding: 12px 15px; border-bottom-left-radius: 5px; border-bottom-right-radius: 5px">
-            {{ if eq .Game.Storefront "S" }}
+            {{ if .Game.ImageURL.IsValid }}
             <div class="row">
                 <div class="column">
                     <div class="card left-right">
                         <div style="width: 95%; margin: auto">
-                            {{ $appid := index (.Game.Storefront.ScrapeURL.ExtractArgs .Game.Website.String) 0 }}
                             <img
-                                    src="https://cdn.cloudflare.steamstatic.com/steam/apps/{{ $appid }}/header.jpg"
+                                    src="{{ .Game.ImageURL.String }}"
                                     alt="Store page banner for {{ .Game.Name.String }}"
                                     style="max-width: 100%; max-height: 100%"
                             />
@@ -40,6 +39,23 @@
                     </div>
                 </div>
             </div>
+            {{ else }}
+                {{ if eq .Game.Storefront "S" }}
+                <div class="row">
+                    <div class="column">
+                        <div class="card left-right">
+                            <div style="width: 95%; margin: auto">
+                                {{ $appid := index (.Game.Storefront.ScrapeURL.ExtractArgs .Game.Website.String) 0 }}
+                                <img
+                                        src="https://cdn.cloudflare.steamstatic.com/steam/apps/{{ $appid }}/header.jpg"
+                                        alt="Store page banner for {{ .Game.Name.String }}"
+                                        style="max-width: 100%; max-height: 100%"
+                                />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {{ end }}
             {{ end }}
             {{ if ne .TrendingDev.Developer.ID "N/A" }}
             <div class="row">

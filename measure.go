@@ -127,10 +127,12 @@ func MeasurePhase(state *ScoutState) (err error) {
 				}
 			}
 
+			isWatchedLog := " "
 			if game.Watched != nil {
-				log.INFO.Printf("\tGame %q is watched", game.String())
+				isWatchedLog = fmt.Sprintf(" is watched (%s) and has ", *game.Watched)
 				mondayWatchedGameIDs.Add(game.ID)
 			}
+			log.INFO.Printf("\tGame %q%shas vote score: %d", game.String(), isWatchedLog, game.Votes)
 
 			if err = db.DB.Save(game).Error; err != nil {
 				log.ERROR.Printf("\tCould not save Game %q: %v", game.String(), err)
@@ -353,7 +355,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 		if err = db.DB.Find(&watchedGames, "watched is not null").Error; err != nil {
 			log.ERROR.Printf("Could not find Watched Games: %v", err)
 		}
-		log.INFO.Println("There are %d Games that are marked as Watched in the DB", len(watchedGames))
+		log.INFO.Printf("There are %d Games that are marked as Watched in the DB", len(watchedGames))
 		for _, watchedGame := range watchedGames {
 			if !mondayWatchedGameIDs.Contains(watchedGame.ID) {
 				log.WARNING.Printf("\tGame %q is no longer being watched on Monday. Updating...", watchedGame.String())
@@ -380,7 +382,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 					Games: []*models.Game{watchedGame},
 				}
 				developer := models.Developer{}
-				if err = db.DB.Limit(1).Find(&developer, "username IN ?", watchedGame.VerifiedDeveloperUsernames).Error; err != nil {
+				if err = db.DB.Limit(1).Find(&developer, "username IN ?", []string(watchedGame.VerifiedDeveloperUsernames)).Error; err != nil {
 					log.WARNING.Printf("\tCould not find verified developer for Game %q: %v", watchedGame.String(), err)
 				} else {
 					log.INFO.Printf("\tFound verified Developer for Game %q: %v", watchedGame.String(), developer)
@@ -407,7 +409,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 		if err = db.DB.Find(&watchedSteamApps, "watched is not null").Error; err != nil {
 			log.ERROR.Printf("Could not find Watched SteamApps: %v", err)
 		}
-		log.INFO.Println("There are %d SteamApps that are marked as Watched in the DB", len(watchedGames))
+		log.INFO.Printf("There are %d SteamApps that are marked as Watched in the DB", len(watchedSteamApps))
 		for _, watchedApp := range watchedSteamApps {
 			if !mondayWatchedSteamAppIDs.Contains(watchedApp.ID) {
 				log.WARNING.Printf("\tSteamApp %q is no longer being watched on Monday. Updating...", watchedApp.String())

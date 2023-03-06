@@ -342,7 +342,7 @@ func (c *TwitterConfig) TwitterQuery() string {
 	for i, blacklistedHashtag := range c.BlacklistedHashtags {
 		hashtags[i] = "-#" + blacklistedHashtag
 	}
-	return fmt.Sprintf("%s (%s)", query, strings.Join(hashtags, " OR "))
+	return fmt.Sprintf("(%s) %s", query, strings.Join(hashtags, " "))
 }
 
 type MondayMappingConfig struct {
