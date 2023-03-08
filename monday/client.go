@@ -2,15 +2,17 @@
 package monday
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/andygello555/game-scout/api"
 	"github.com/machinebox/graphql"
 	"github.com/pkg/errors"
 	"strconv"
 	"time"
 )
 
-var DefaultClient *Client
+var DefaultClient api.Client
 
 type User struct {
 	Id    int    `json:"id"`
@@ -357,6 +359,13 @@ type Config interface {
 type Client struct {
 	Config Config
 	*graphql.Client
+}
+
+func (c *Client) Run(ctx context.Context, attrs map[string]any, req api.Request, res any) error {
+	config := attrs["config"].(Config)
+	req.Header().Set("Authorization", config.MondayToken())
+	req.Header().Set("Content-Type", "application/json")
+	return c.Client.Run(ctx, req.(api.GraphQLRequest).Request, res)
 }
 
 // CreateClient creates and sets the DefaultClient.

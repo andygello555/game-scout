@@ -8,12 +8,14 @@ import (
 	"github.com/RichardKnop/machinery/v1/backends/result"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/RichardKnop/machinery/v1/tasks"
+	"github.com/andygello555/game-scout/api"
 	"github.com/andygello555/game-scout/browser"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/game-scout/email"
 	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/andygello555/game-scout/monday"
+	"github.com/andygello555/game-scout/reddit"
 	"github.com/andygello555/game-scout/steamcmd"
 	task "github.com/andygello555/game-scout/tasks"
 	myTwitter "github.com/andygello555/game-scout/twitter"
@@ -81,6 +83,12 @@ func main() {
 	log.INFO.Printf("Setting up Monday client at %s", start.String())
 	monday.CreateClient(globalConfig.Monday)
 	log.INFO.Printf("Done setting up Monday client in %s", time.Now().UTC().Sub(start).String())
+
+	// Set up the default Reddit client
+	start = time.Now().UTC()
+	log.INFO.Printf("Setting up Reddit client at %s", start.String())
+	reddit.CreateClient(globalConfig.Reddit)
+	log.INFO.Printf("Done setting up Reddit client in %s", time.Now().UTC().Sub(start).String())
 
 	// Set up the default email client
 	start = time.Now().UTC()
@@ -1106,7 +1114,11 @@ func main() {
 				},
 				cli.BoolFlag{
 					Name:  "all",
-					Usage: "fetch all the resources from the binding using a Paginator",
+					Usage: "fetch all the resources from the binding using a typed Paginator",
+				},
+				cli.BoolFlag{
+					Name:  "allAll",
+					Usage: "fetch all the resources from the binding using a generic Paginator",
 				},
 				cli.BoolFlag{
 					Name:  "log",
@@ -1115,7 +1127,7 @@ func main() {
 			},
 			Action: func(c *cli.Context) (err error) {
 				if c.Bool("log") {
-					monday.DefaultClient.Log = func(s string) {
+					monday.DefaultClient.(*monday.Client).Log = func(s string) {
 						log.INFO.Println(s)
 					}
 				}
@@ -1139,15 +1151,30 @@ func main() {
 					execute = func() (any, error) {
 						return monday.GetBoards.Execute(monday.DefaultClient, args...)
 					}
-					if c.Bool("all") {
+					if c.Bool("all") || c.Bool("allAll") {
 						if len(args) > 0 {
 							args = args[1:]
 						}
 						execute = func() (any, error) {
-							if paginator, err := monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, monday.GetBoards, args...); err != nil {
+							if c.Bool("all") {
+								if paginator, err := api.NewTypedPaginator(monday.DefaultClient, time.Millisecond*100, monday.GetBoards, args...); err != nil {
+									return nil, err
+								} else {
+									all, err := paginator.All()
+									if err == nil {
+										fmt.Println("paginator items:", len(all))
+									}
+									return all, err
+								}
+							}
+							if paginator, err := api.NewPaginator(monday.DefaultClient, time.Millisecond*100, api.WrapBinding("getboards", monday.GetBoards), args...); err != nil {
 								return nil, err
 							} else {
-								return paginator.All()
+								all, err := paginator.All()
+								if err == nil {
+									fmt.Println("paginator items:", len(all))
+								}
+								return all, err
 							}
 						}
 					}
@@ -1191,15 +1218,30 @@ func main() {
 					execute = func() (any, error) {
 						return monday.GetItems.Execute(monday.DefaultClient, args...)
 					}
-					if c.Bool("all") {
+					if c.Bool("all") || c.Bool("allAll") {
 						execute = func() (any, error) {
 							if len(args) > 0 {
 								args = args[1:]
 							}
-							if paginator, err := monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, monday.GetItems, args...); err != nil {
+							if c.Bool("all") {
+								if paginator, err := api.NewTypedPaginator(monday.DefaultClient, time.Millisecond*100, monday.GetItems, args...); err != nil {
+									return nil, err
+								} else {
+									all, err := paginator.All()
+									if err == nil {
+										fmt.Println("paginator items:", len(all))
+									}
+									return all, err
+								}
+							}
+							if paginator, err := api.NewPaginator(monday.DefaultClient, time.Millisecond*100, api.WrapBinding("getitems", monday.GetItems), args...); err != nil {
 								return nil, err
 							} else {
-								return paginator.All()
+								all, err := paginator.All()
+								if err == nil {
+									fmt.Println("paginator items:", len(all))
+								}
+								return all, err
 							}
 						}
 					}
@@ -1247,12 +1289,27 @@ func main() {
 						execute = func() (any, error) {
 							return models.GetGamesFromMonday.Execute(monday.DefaultClient, page, globalConfig.Monday, db.DB)
 						}
-						if c.Bool("all") {
+						if c.Bool("all") || c.Bool("allAll") {
 							execute = func() (any, error) {
-								if paginator, err := monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, models.GetGamesFromMonday, globalConfig.Monday, db.DB); err != nil {
+								if c.Bool("all") {
+									if paginator, err := api.NewTypedPaginator(monday.DefaultClient, time.Millisecond*100, models.GetGamesFromMonday, globalConfig.Monday, db.DB); err != nil {
+										return nil, err
+									} else {
+										all, err := paginator.All()
+										if err == nil {
+											fmt.Println("paginator items:", len(all))
+										}
+										return all, err
+									}
+								}
+								if paginator, err := api.NewPaginator(monday.DefaultClient, time.Millisecond*100, api.WrapBinding("getgames", models.GetGamesFromMonday), globalConfig.Monday, db.DB); err != nil {
 									return nil, err
 								} else {
-									return paginator.All()
+									all, err := paginator.All()
+									if err == nil {
+										fmt.Println("paginator items:", len(all))
+									}
+									return all, err
 								}
 							}
 						}
@@ -1260,12 +1317,27 @@ func main() {
 						execute = func() (any, error) {
 							return models.GetSteamAppsFromMonday.Execute(monday.DefaultClient, page, globalConfig.Monday, db.DB)
 						}
-						if c.Bool("all") {
+						if c.Bool("all") || c.Bool("allAll") {
 							execute = func() (any, error) {
-								if paginator, err := monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, models.GetSteamAppsFromMonday, globalConfig.Monday, db.DB); err != nil {
+								if c.Bool("all") {
+									if paginator, err := api.NewTypedPaginator(monday.DefaultClient, time.Millisecond*100, models.GetSteamAppsFromMonday, globalConfig.Monday, db.DB); err != nil {
+										return nil, err
+									} else {
+										all, err := paginator.All()
+										if err == nil {
+											fmt.Println("paginator items:", len(all))
+										}
+										return all, err
+									}
+								}
+								if paginator, err := api.NewPaginator(monday.DefaultClient, time.Millisecond*100, api.WrapBinding("getgames", models.GetSteamAppsFromMonday), globalConfig.Monday, db.DB); err != nil {
 									return nil, err
 								} else {
-									return paginator.All()
+									all, err := paginator.All()
+									if err == nil {
+										fmt.Println("paginator items:", len(all))
+									}
+									return all, err
 								}
 							}
 						}
@@ -1322,6 +1394,43 @@ func main() {
 					return cli.NewExitError(err.Error(), 1)
 				}
 				fmt.Printf("%+v\n", resource)
+				return
+			},
+		},
+		{
+			Name:  "reddit",
+			Usage: "run a Reddit Client Binding",
+			Flags: []cli.Flag{
+				cli.StringSliceFlag{
+					Name:  "binding",
+					Usage: "the name of the bindings to execute",
+					Value: &cli.StringSlice{},
+				},
+				cli.StringSliceFlag{
+					Name:  "arg",
+					Usage: "an arg to execute the binding with",
+					Value: &cli.StringSlice{},
+				},
+				cli.BoolFlag{
+					Name:  "all",
+					Usage: "fetch all the resources from the binding using a Paginator",
+				},
+			},
+			Action: func(c *cli.Context) (err error) {
+				argsAny := slices.Comprehension[string, any](c.StringSlice("arg"), func(idx int, value string, arr []string) any {
+					return value
+				})
+
+				for _, binding := range c.StringSlice("binding") {
+					bindingName := strings.ToLower(binding)
+
+					var response any
+					if response, err = reddit.API.Execute(bindingName, argsAny...); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+					bindingWrapper, _ := reddit.API.Binding(bindingName)
+					fmt.Printf("%v(%v): %+v\n", bindingWrapper, argsAny, response)
+				}
 				return
 			},
 		},

@@ -345,6 +345,28 @@ func (c *TwitterConfig) TwitterQuery() string {
 	return fmt.Sprintf("(%s) %s", query, strings.Join(hashtags, " "))
 }
 
+type RedditConfig struct {
+	// PersonalUseScript is the ID of the personal use script that was set up for game-scout scraping.
+	PersonalUseScript string `json:"personal_use_script"`
+	// Secret is the secret that must be sent to the Reddit API access-token endpoint to acquire an OAuth token.
+	Secret string `json:"secret"`
+	// UserAgent that is used in requests to the Reddit API to identify game-scout.
+	UserAgent string `json:"user_agent"`
+	// Username for the Reddit account related to the personal use script.
+	Username string `json:"username"`
+	// Password for the Reddit account related to the personal use script.
+	Password string `json:"password"`
+	// Subreddits is the list of subreddits to scrape in the form: "GameDevelopment" (sans "r/" prefix).
+	Subreddits []string `json:"subreddits"`
+}
+
+func (rc *RedditConfig) RedditPersonalUseScript() string { return rc.PersonalUseScript }
+func (rc *RedditConfig) RedditSecret() string            { return rc.Secret }
+func (rc *RedditConfig) RedditUserAgent() string         { return rc.UserAgent }
+func (rc *RedditConfig) RedditUsername() string          { return rc.Username }
+func (rc *RedditConfig) RedditPassword() string          { return rc.Password }
+func (rc *RedditConfig) RedditSubreddits() []string      { return rc.Subreddits }
+
 type MondayMappingConfig struct {
 	// ModelName is the name of the model that this MondayMappingConfig is for. This should either be "models.SteamApp"
 	// or "models.Game".
@@ -757,6 +779,7 @@ type Config struct {
 	Email         *EmailConfig         `json:"email"`
 	Tasks         *TaskConfig          `json:"tasks"`
 	Twitter       *TwitterConfig       `json:"twitter"`
+	Reddit        *RedditConfig        `json:"reddit"`
 	Monday        *MondayConfig        `json:"monday,omitempty"`
 	Scrape        *ScrapeConfig        `json:"scrape"`
 	SteamWebPipes *SteamWebPipesConfig `json:"SteamWebPipes"`

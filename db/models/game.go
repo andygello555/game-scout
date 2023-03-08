@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/anaskhan96/soup"
+	"github.com/andygello555/game-scout/api"
 	"github.com/andygello555/game-scout/browser"
 	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/andygello555/game-scout/monday"
@@ -14,7 +15,6 @@ import (
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
-	"github.com/machinebox/graphql"
 	"github.com/pkg/errors"
 	"github.com/volatiletech/null/v9"
 	"gorm.io/gorm"
@@ -362,10 +362,10 @@ func (g *Game) Update(db *gorm.DB, config ScrapeConfig) error {
 	return db.Omit(g.OnCreateOmit()...).Save(g).Error
 }
 
-// GetGamesFromMonday is a monday.Binding to retrieve multiple Game from the mapped board and group. Arguments provided
+// GetGamesFromMonday is a api.Binding to retrieve multiple Game from the mapped board and group. Arguments provided
 // to Execute:
 //
-// • page (int): The page of results to retrieve. This means that GetGamesFromMonday can be passed to a monday.Paginator.
+// • page (int): The page of results to retrieve. This means that GetGamesFromMonday can be passed to an api.Paginator.
 //
 // • config (monday.Config): The monday.Config to use to find the monday.MappingConfig for the Game model.
 //
@@ -375,15 +375,17 @@ func (g *Game) Update(db *gorm.DB, config ScrapeConfig) error {
 // Execute returns a list of Game instances within their mapped board and group combination for the given page of
 // results. It does this by retrieving the Game.ID from the appropriate column from each item and then searching the
 // gorm.DB instance which is provided in the 3rd argument.
-var GetGamesFromMonday = monday.NewBinding[monday.ItemResponse, []*Game](
-	func(args ...any) *graphql.Request {
+var GetGamesFromMonday = api.NewBinding[monday.ItemResponse, []*Game](
+	func(b api.Binding[monday.ItemResponse, []*Game], args ...any) api.Request {
 		page := args[0].(int)
 		mapping := args[1].(monday.Config).MondayMappingForModel(Game{})
 		boardIds := mapping.MappingBoardIDs()
 		groupIds := mapping.MappingGroupIDs()
 		return monday.GetItems.Request(page, boardIds, groupIds)
 	},
-	func(response monday.ItemResponse, args ...any) []*Game {
+	monday.ResponseWrapper[monday.ItemResponse, []*Game],
+	monday.ResponseUnwrapped[monday.ItemResponse, []*Game],
+	func(b api.Binding[monday.ItemResponse, []*Game], response monday.ItemResponse, args ...any) []*Game {
 		items := monday.GetItems.Response(response)
 		mapping := args[1].(monday.Config).MondayMappingForModel(Game{})
 		db := args[2].(*gorm.DB)
@@ -455,8 +457,9 @@ var GetGamesFromMonday = monday.NewBinding[monday.ItemResponse, []*Game](
 			game.Votes = int32(voteValues[0] - voteValues[1])
 		}
 		return games
-	},
-	"boards", true,
+	}, true,
+	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
+	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
 )
 
 // AddGameToMonday adds a Game to the mapped board and group by constructing column values using the
@@ -470,8 +473,8 @@ var GetGamesFromMonday = monday.NewBinding[monday.ItemResponse, []*Game](
 //
 // Execute returns the item ID of the newly created item. This can then be used to set the Game.Watched field
 // appropriately if necessary.
-var AddGameToMonday = monday.NewBinding[monday.ItemId, string](
-	func(args ...any) *graphql.Request {
+var AddGameToMonday = api.NewBinding[monday.ItemId, string](
+	func(b api.Binding[monday.ItemId, string], args ...any) api.Request {
 		game := args[0].(*Game)
 		itemName := game.Website.String
 		if game.Name.IsValid() {
@@ -489,10 +492,14 @@ var AddGameToMonday = monday.NewBinding[monday.ItemId, string](
 			columnValues,
 		)
 	},
-	monday.AddItem.Response, "create_item", false,
+	monday.ResponseWrapper[monday.ItemId, string],
+	monday.ResponseUnwrapped[monday.ItemId, string],
+	monday.AddItem.GetResponseMethod(), false,
+	func(client api.Client) (string, any) { return "jsonResponseKey", "create_item" },
+	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
 )
 
-// UpdateGameInMonday is a monday.Binding which updates the monday.Item of the given ID within the monday.Board of the
+// UpdateGameInMonday is an api.Binding which updates the monday.Item of the given ID within the monday.Board of the
 // given ID for Game using the monday.MappingConfig.ColumnValues method to generate values for all the monday.Column IDs
 // provided by the monday.MappingConfig.MappingColumnsToUpdate method. Arguments provided to Execute:
 //
@@ -507,8 +514,8 @@ var AddGameToMonday = monday.NewBinding[monday.ItemId, string](
 // values of the monday.Item of the given ID in the mapped monday.Board.
 //
 // Execute returns the ID of the monday.Item that has been mutated.
-var UpdateGameInMonday = monday.NewBinding[monday.ItemId, string](
-	func(args ...any) *graphql.Request {
+var UpdateGameInMonday = api.NewBinding[monday.ItemId, string](
+	func(b api.Binding[monday.ItemId, string], args ...any) api.Request {
 		game := args[0].(*Game)
 		itemId := args[1].(int)
 		boardId := args[2].(int)
@@ -523,7 +530,11 @@ var UpdateGameInMonday = monday.NewBinding[monday.ItemId, string](
 			columnValues,
 		)
 	},
-	monday.ChangeMultipleColumnValues.Response, "change_multiple_column_values", false,
+	monday.ResponseWrapper[monday.ItemId, string],
+	monday.ResponseUnwrapped[monday.ItemId, string],
+	monday.ChangeMultipleColumnValues.GetResponseMethod(), false,
+	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
+	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
 )
 
 func (g *Game) GetVerifiedDeveloperUsernames() []string { return g.VerifiedDeveloperUsernames }
