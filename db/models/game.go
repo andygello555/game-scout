@@ -457,6 +457,12 @@ var GetGamesFromMonday = api.NewBinding[monday.ItemResponse, []*Game](
 			game.Votes = int32(voteValues[0] - voteValues[1])
 		}
 		return games
+	}, func(binding api.Binding[monday.ItemResponse, []*Game]) []api.BindingParam {
+		return api.Params(
+			"page", 0, true,
+			"config", reflect.TypeOf((*monday.Config)(nil)), true,
+			"db", &gorm.DB{}, true,
+		)
 	}, true,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
 	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
@@ -494,7 +500,12 @@ var AddGameToMonday = api.NewBinding[monday.ItemId, string](
 	},
 	monday.ResponseWrapper[monday.ItemId, string],
 	monday.ResponseUnwrapped[monday.ItemId, string],
-	monday.AddItem.GetResponseMethod(), false,
+	monday.AddItem.GetResponseMethod(), func(binding api.Binding[monday.ItemId, string]) []api.BindingParam {
+		return api.Params(
+			"game", &Game{}, true,
+			"config", reflect.TypeOf((*monday.Config)(nil)), true,
+		)
+	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "create_item" },
 	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
 )
@@ -532,7 +543,15 @@ var UpdateGameInMonday = api.NewBinding[monday.ItemId, string](
 	},
 	monday.ResponseWrapper[monday.ItemId, string],
 	monday.ResponseUnwrapped[monday.ItemId, string],
-	monday.ChangeMultipleColumnValues.GetResponseMethod(), false,
+	monday.ChangeMultipleColumnValues.GetResponseMethod(),
+	func(binding api.Binding[monday.ItemId, string]) []api.BindingParam {
+		return api.Params(
+			"game", &Game{}, true,
+			"itemId", 0, true,
+			"boardId", 0, true,
+			"config", reflect.TypeOf((*monday.Config)(nil)), true,
+		)
+	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
 	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
 )

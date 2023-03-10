@@ -1417,19 +1417,21 @@ func main() {
 				},
 			},
 			Action: func(c *cli.Context) (err error) {
-				argsAny := slices.Comprehension[string, any](c.StringSlice("arg"), func(idx int, value string, arr []string) any {
-					return value
-				})
-
 				for _, binding := range c.StringSlice("binding") {
 					bindingName := strings.ToLower(binding)
 
-					var response any
-					if response, err = reddit.API.Execute(bindingName, argsAny...); err != nil {
+					var (
+						response any
+						args     []any
+					)
+					if args, err = reddit.API.ArgsFromStrings(bindingName, c.StringSlice("arg")...); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+					if response, err = reddit.API.Execute(bindingName, args...); err != nil {
 						return cli.NewExitError(err.Error(), 1)
 					}
 					bindingWrapper, _ := reddit.API.Binding(bindingName)
-					fmt.Printf("%v(%v): %+v\n", bindingWrapper, argsAny, response)
+					fmt.Printf("%v(%v): %+v\n", bindingWrapper, args, response)
 				}
 				return
 			},

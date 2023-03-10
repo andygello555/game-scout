@@ -31,8 +31,7 @@ var GetUsers = api.NewBinding[[]User, []User](
 	},
 	ResponseWrapper[[]User, []User],
 	ResponseUnwrapped[[]User, []User],
-	nil,
-	false,
+	nil, nil, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "users" },
 	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
 )
@@ -42,7 +41,7 @@ var GetUsers = api.NewBinding[[]User, []User](
 //
 // • page (int): The page of results to retrieve. This means that GetBoards can be passed to an api.Paginator.
 //
-// • workspaceIds ([]int): The IDs of the workspaces to retrieve all Board from.
+// • workspaceIds ([]int...): The IDs of the workspaces to retrieve all Board from.
 //
 // Binding.Execute returns a list of Board instances from the given workspaces for the given page of results.
 var GetBoards = api.NewBinding[[]Board, []Board](
@@ -52,21 +51,19 @@ var GetBoards = api.NewBinding[[]Board, []Board](
 			workspaceIds []int
 		)
 		req := graphql.NewRequest(`query ($page: Int!, $workspaceIds: [Int]) { boards (page: $page, workspace_ids: $workspaceIds) { id name } }`)
-		if len(args) > 0 {
-			page = args[0].(int)
-		}
-		if len(args) > 1 {
-			workspaceIds = slices.Comprehension[any, int](args[1:], func(idx int, value any, arr []any) int {
-				return value.(int)
-			})
-		}
+		page = args[0].(int)
+		workspaceIds = slices.Comprehension[any, int](args[1:], func(idx int, value any, arr []any) int {
+			return value.(int)
+		})
 		req.Var("page", page)
 		req.Var("workspaceIds", workspaceIds)
 		return api.GraphQLRequest{Request: req}
 	},
 	ResponseWrapper[[]Board, []Board],
 	ResponseUnwrapped[[]Board, []Board],
-	nil, true,
+	nil, func(binding api.Binding[[]Board, []Board]) []api.BindingParam {
+		return api.Params("page", 1, "workspaceIds", []int{}, false, true)
+	}, true,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
 	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
 )
@@ -75,9 +72,13 @@ type groupResponse []struct {
 	Groups []Group `json:"groups"`
 }
 
+func boardIdsParam() []api.BindingParam {
+	return api.Params("boardIds", []int{}, false, true)
+}
+
 // GetGroups is a Binding to retrieve multiple Group from the given boards. Arguments provided to Binding.Execute:
 //
-// • boardIds ([]int): The IDs of the boards to retrieve all Group from.
+// • boardIds ([]int...): The IDs of the boards to retrieve all Group from.
 //
 // Binding.Execute returns a list of Group instances from the given boards.
 var GetGroups = api.NewBinding[groupResponse, []Group](
@@ -97,7 +98,9 @@ var GetGroups = api.NewBinding[groupResponse, []Group](
 		}
 		return groups
 	},
-	false,
+	func(binding api.Binding[groupResponse, []Group]) []api.BindingParam {
+		return boardIdsParam()
+	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
 	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
 )
@@ -117,7 +120,7 @@ func getColumnsRequest[ResT any, RetT any](b api.Binding[ResT, RetT], args ...an
 
 // GetColumns is a Binding to retrieve multiple Column from the given boards. Arguments provided to Binding.Execute:
 //
-// • boardIds ([]int): The IDs of the boards to retrieve all Column from.
+// • boardIds ([]int...): The IDs of the boards to retrieve all Column from.
 //
 // Binding.Execute returns a list of Column instances from the given boards.
 var GetColumns = api.NewBinding[columnResponse, []Column](
@@ -131,7 +134,9 @@ var GetColumns = api.NewBinding[columnResponse, []Column](
 		}
 		return columns
 	},
-	false,
+	func(binding api.Binding[columnResponse, []Column]) []api.BindingParam {
+		return boardIdsParam()
+	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
 	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
 )
@@ -139,7 +144,7 @@ var GetColumns = api.NewBinding[columnResponse, []Column](
 // GetColumnMap is a Binding to retrieve the multiple ColumnMap from the given boards. Arguments provided to
 // Binding.Execute:
 //
-// • boardIds ([]int): The IDs of the boards to retrieve all ColumnMap for.
+// • boardIds ([]int...): The IDs of the boards to retrieve all ColumnMap for.
 //
 // Binding.Execute returns a map of Board IDs to ColumnMap instances for the given boards.
 var GetColumnMap = api.NewBinding[columnResponse, map[string]ColumnMap](
@@ -156,7 +161,9 @@ var GetColumnMap = api.NewBinding[columnResponse, map[string]ColumnMap](
 		}
 		return m
 	},
-	false,
+	func(binding api.Binding[columnResponse, map[string]ColumnMap]) []api.BindingParam {
+		return boardIdsParam()
+	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
 	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
 )
@@ -203,7 +210,9 @@ var AddItem = api.NewBinding[ItemId, string](
 	func(b api.Binding[ItemId, string], response ItemId, args ...any) string {
 		return response.Id
 	},
-	false,
+	func(binding api.Binding[ItemId, string]) []api.BindingParam {
+		return api.Params("boardId", 0, true, "groupId", 0, true, "itemName", "", true, "columnValues", map[string]any{})
+	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "create_item" },
 	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
 )
@@ -230,7 +239,9 @@ var AddItemUpdate = api.NewBinding[ItemId, string](
 	func(b api.Binding[ItemId, string], response ItemId, args ...any) string {
 		return response.Id
 	},
-	false,
+	func(binding api.Binding[ItemId, string]) []api.BindingParam {
+		return api.Params("itemId", 0, true, "msg", "", true)
+	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "create_update" },
 	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
 )
@@ -311,7 +322,9 @@ var GetItems = api.NewBinding[ItemResponse, []Item](
 		}
 		return items
 	},
-	true,
+	func(binding api.Binding[ItemResponse, []Item]) []api.BindingParam {
+		return api.Params("page", 1, "boardIds", []int{}, "groupIds", []int{})
+	}, true,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
 	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
 )
@@ -344,7 +357,9 @@ var ChangeMultipleColumnValues = api.NewBinding[ItemId, string](
 	func(b api.Binding[ItemId, string], response ItemId, args ...any) string {
 		return response.Id
 	},
-	false,
+	func(binding api.Binding[ItemId, string]) []api.BindingParam {
+		return api.Params("itemId", 0, true, "boardId", 0, true, "columnValues", map[string]any{})
+	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "change_multiple_column_values" },
 	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
 )

@@ -491,6 +491,12 @@ var GetSteamAppsFromMonday = api.NewBinding[monday.ItemResponse, []*SteamApp](
 			app.Votes = int32(voteValues[0] - voteValues[1])
 		}
 		return apps
+	}, func(binding api.Binding[monday.ItemResponse, []*SteamApp]) []api.BindingParam {
+		return api.Params(
+			"page", 0, true,
+			"config", reflect.TypeOf((*monday.Config)(nil)), true,
+			"db", &gorm.DB{}, true,
+		)
 	}, true,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
 	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
@@ -525,7 +531,13 @@ var AddSteamAppToMonday = api.NewBinding[monday.ItemId, string](
 	},
 	monday.ResponseWrapper[monday.ItemId, string],
 	monday.ResponseUnwrapped[monday.ItemId, string],
-	monday.AddItem.GetResponseMethod(), false,
+	monday.AddItem.GetResponseMethod(),
+	func(binding api.Binding[monday.ItemId, string]) []api.BindingParam {
+		return api.Params(
+			"game", &SteamApp{}, true,
+			"config", reflect.TypeOf((*monday.Config)(nil)), true,
+		)
+	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "create_item" },
 	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
 )
@@ -563,7 +575,15 @@ var UpdateSteamAppInMonday = api.NewBinding[monday.ItemId, string](
 	},
 	monday.ResponseWrapper[monday.ItemId, string],
 	monday.ResponseUnwrapped[monday.ItemId, string],
-	monday.ChangeMultipleColumnValues.GetResponseMethod(), false,
+	monday.ChangeMultipleColumnValues.GetResponseMethod(),
+	func(binding api.Binding[monday.ItemId, string]) []api.BindingParam {
+		return api.Params(
+			"game", &SteamApp{}, true,
+			"itemId", 0, true,
+			"boardId", 0, true,
+			"config", reflect.TypeOf((*monday.Config)(nil)), true,
+		)
+	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "change_multiple_column_values" },
 	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
 )

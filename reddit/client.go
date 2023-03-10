@@ -68,6 +68,7 @@ func (c *Client) Run(ctx context.Context, attrs map[string]any, req api.Request,
 			}
 		}
 	}
+	//fmt.Println("requesting", request.Method, request.URL.String(), request.Header)
 
 	var response *http.Response
 	if response, err = http.DefaultClient.Do(request); err != nil {
@@ -77,7 +78,10 @@ func (c *Client) Run(ctx context.Context, attrs map[string]any, req api.Request,
 
 	if response.Body != nil {
 		defer func(body io.ReadCloser) {
-			err = myErrors.MergeErrors(err, errors.Wrapf(body.Close(), "could not close response body to %s", request.URL.String()))
+			err = myErrors.MergeErrors(err, errors.Wrapf(body.Close(),
+				"could not close response body to %s %s",
+				request.Method, request.URL.String(),
+			))
 		}(response.Body)
 	}
 
@@ -88,7 +92,10 @@ func (c *Client) Run(ctx context.Context, attrs map[string]any, req api.Request,
 	}
 
 	if err = json.Unmarshal(body, res); err != nil {
-		err = errors.Wrapf(err, "could not unmarshal JSON for response to %s %s", request.Method, request.URL.String())
+		err = errors.Wrapf(err,
+			"could not unmarshal JSON for response to %s %s",
+			request.Method, request.URL.String(),
+		)
 	}
 	return
 }
