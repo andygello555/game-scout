@@ -43,6 +43,9 @@ type Game struct {
 	// MondayBoardID is a non-database field that is filled when fetching the Game from Monday using the
 	// GetGamesFromMonday monday.Binding.
 	MondayBoardID string `gorm:"-:all"`
+	// IsGame is only used for our benefit to check if the software that is being sold on the storepage pointed to by
+	// Website is a Game. We only want to store Games within the DB and not DLC, Assets, Software, etc.
+	IsGame bool `gorm:"-:all"`
 	// Name is the name of the game. If this cannot be found it is set to nil.
 	Name null.String
 	// Storefront is where this game is sold. If this cannot be found it is set to nil.
@@ -558,6 +561,7 @@ func (g *GameWrapper) Default() {
 		g.Game = &Game{}
 	}
 	g.Game.Storefront = UnknownStorefront
+	g.Game.IsGame = false
 	g.Game.Name = null.StringFromPtr(nil)
 	g.Game.Website = null.StringFromPtr(nil)
 	g.Game.ImageURL = null.StringFromPtr(nil)
@@ -613,6 +617,7 @@ func (g *GameSteamStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, minD
 			ok                bool
 			jsonBody          map[string]any
 			appDetails        map[string]any
+			appType           any
 			appName           any
 			appReleaseDate    string
 			appReleaseDateInt int64
@@ -626,6 +631,19 @@ func (g *GameSteamStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, minD
 		if appDetails, ok = jsonBody["common"].(map[string]any); !ok {
 			return fmt.Errorf("cannot get \"common\" from parsed output for %v", appID)
 		}
+
+		if appType, ok = appDetails["type"]; !ok {
+			return fmt.Errorf("cannot find \"type\" key in common details for %d", appID)
+		}
+		sofType := strings.ToLower(appType.(string))
+		log.INFO.Printf("App %v has type: %s", appID, g.Game.IsGame)
+
+		// We exit out of the scrape if the Game is not a Game. This is so we can not waste anymore time with app.
+		if sofType != "game" {
+			log.WARNING.Printf("App %v is not a Game (it is a \"%s\"). Skipping ScrapeInfo...", appID, sofType)
+			return myErrors.Done
+		}
+		g.Game.IsGame = true
 
 		if appName, ok = appDetails["name"]; !ok {
 			return fmt.Errorf("cannot find \"name\" key in common details for %v", appID)
@@ -692,6 +710,9 @@ func (g *GameSteamStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, minD
 
 func (g *GameSteamStorefront) ScrapeReviews(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
 	appID := args[0]
+	if !g.Game.IsGame {
+		return fmt.Errorf("%d is not a Game. Skipping ScrapeReviews", appID)
+	}
 	// Fetch reviews to gather headline stats on the number of reviews
 	return browser.SteamAppReviews.RetryJSON(nil, maxTries, minDelay, func(jsonBody map[string]any, resp *http.Response) error {
 		querySummary, ok := jsonBody["query_summary"].(map[string]any)
@@ -712,6 +733,10 @@ func (g *GameSteamStorefront) ScrapeReviews(config ScrapeConfig, maxTries int, m
 
 func (g *GameSteamStorefront) ScrapeCommunity(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) (err error) {
 	appID := args[0]
+	if !g.Game.IsGame {
+		return fmt.Errorf("%d is not a Game. Skipping ScrapeCommunity", appID)
+	}
+
 	// Fetch all the community posts and aggregate the upvotes, downvotes, and comment totals
 	const batchSize = 50
 	gidEvent := "0"
@@ -801,6 +826,10 @@ func (g *GameSteamStorefront) ScrapeCommunity(config ScrapeConfig, maxTries int,
 
 func (g *GameSteamStorefront) ScrapeTags(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) (err error) {
 	appID := args[0]
+	if !g.Game.IsGame {
+		return fmt.Errorf("%d is not a Game. Skipping ScrapeTags", appID)
+	}
+
 	// Use SteamSpy to find the accumulated TagScore for the game
 	storefrontConfig := config.ScrapeGetStorefront(SteamStorefront)
 	tagConfig := storefrontConfig.StorefrontTags()
@@ -906,6 +935,10 @@ func (g *GameSteamStorefront) ScrapeTags(config ScrapeConfig, maxTries int, minD
 
 func (g *GameSteamStorefront) ScrapeExtra(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) (err error) {
 	appID := args[0]
+	if !g.Game.IsGame {
+		return fmt.Errorf("%d is not a Game. Skipping ScrapeExtra", appID)
+	}
+
 	// Fetch the game's app page so that we can see if they have included a link to the dev's/game's twitter page. This
 	// is only done when there is a Developer for the Game (i.e. the Game's Developers field is not empty). This is
 	// also a fallback for finding the release date for games that are unreleased.
@@ -1089,6 +1122,15 @@ func (g *GameItchIOStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, min
 			infoKey := infoItemPairs[i].Text()
 			infoValue := infoItemPairs[i+1]
 			switch strings.ToLower(infoKey) {
+			case "category":
+				sofType := strings.ToLower(infoValue.Text())
+				if sofType != "games" {
+					log.WARNING.Printf(
+						"Itch.IO title %s (dev: %s) is not a Game (it is a \"%s\"). Skipping ScrapeInfo...",
+						gameSlug, developer, sofType,
+					)
+					return myErrors.Done
+				}
 			case "release date":
 				releaseDateAbbr := abbreviationTitle(infoValue)
 				if releaseDateAbbr != nil {
@@ -1178,6 +1220,7 @@ func (g *GameItchIOStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, min
 				)
 			}
 		}
+		g.Game.IsGame = true
 
 		// If the release date has not yet been set then we will default it to +/- 5 months
 		if g.Game.ReleaseDate.IsZero() {
@@ -1215,6 +1258,13 @@ func (g *GameItchIOStorefront) ScrapeTags(config ScrapeConfig, maxTries int, min
 
 func (g *GameItchIOStorefront) ScrapeCommunity(config ScrapeConfig, maxTries int, minDelay time.Duration, args ...any) error {
 	developer, gameSlug := args[0], args[1]
+	if !g.Game.IsGame {
+		return fmt.Errorf(
+			"Itch.IO title %s (dev: %s) is not a Game. Skipping ScrapeReviews",
+			gameSlug, developer,
+		)
+	}
+
 	return browser.ItchIOGameDevlogs.RetrySoup(nil, maxTries, minDelay, func(doc *soup.Root, resp *http.Response) (err error) {
 		devlogs := doc.FindAll("a", "class", "title")
 		log.INFO.Printf(

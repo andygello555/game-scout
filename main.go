@@ -476,7 +476,9 @@ func main() {
 					if gameChannel, ok := gameScrapers.Add(false, &models.Game{}, storefrontMap); ok {
 						gameModel := <-gameChannel
 						if gameModel != nil {
-							gameUpsertable = gameModel.(*models.Game)
+							game := gameModel.(*models.Game)
+							gameUpsertable = game
+							fmt.Printf("Game: %q, IsGame = %t\n", game, game.IsGame)
 						}
 					}
 					gameScrapers.Stop()
@@ -488,7 +490,9 @@ func main() {
 					}); ok {
 						gameModel := <-gameChannel
 						if gameModel != nil {
-							gameUpsertable = gameModel.(*models.SteamApp)
+							app := gameModel.(*models.SteamApp)
+							gameUpsertable = app
+							fmt.Printf("SteamApp: %q, Type = %q\n", app, app.Type)
 						}
 					}
 					gameScrapers.Stop()
