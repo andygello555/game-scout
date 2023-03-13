@@ -429,6 +429,14 @@ func (w *ClientWrapper) CheckRateLimit(binding *Binding, totalResources int) (er
 				ResourceType:           binding.ResourceType,
 				Happened:               now,
 			}
+		} else if remaining == 0 {
+			// Wait however long it takes for the rateLimit to reset. This will never be longer than LimitPerRequest.
+			waitTime := rateLimit.Reset.Time().Sub(now)
+			log.WARNING.Printf(
+				"(%s - %s) / %s == 0, so we will wait %s until the rateLimit reset time",
+				rateLimit.Reset.Time().String(), now.String(), w.Config.TwitterRateLimits().LimitPerRequest(), waitTime,
+			)
+			time.Sleep(waitTime)
 		}
 	}
 
