@@ -106,6 +106,10 @@ out:
 			gameModel := <-gameChannel
 			if gameModel != nil {
 				game = gameModel.(*models.Game)
+				// Don't save games that are not games
+				if !game.IsGame {
+					game = nil
+				}
 			}
 		}
 	}
