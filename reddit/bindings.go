@@ -32,12 +32,15 @@ var API = api.NewAPI(nil, api.Schema{
 	}).AddAttrs(
 		func(client api.Client) (string, any) { return "client", client },
 		func(client api.Client) (string, any) { return "access_token", true },
+		func(client api.Client) (string, any) { return "binding", "access_token" },
 	)),
 
 	"me": api.WrapBinding("me", api.NewBindingChain(func(binding api.Binding[Me, Me], args ...any) (request api.Request) {
 		req, _ := http.NewRequest(http.MethodGet, "https://oauth.reddit.com/api/v1/me", http.NoBody)
 		return api.HTTPRequest{Request: req}
-	})),
+	}).AddAttrs(
+		func(client api.Client) (string, any) { return "binding", "me" },
+	)),
 
 	"top": api.WrapBinding("top", api.NewBindingChain(func(binding api.Binding[listingWrapper, Listing], args ...any) (request api.Request) {
 		subreddit := args[0].(string)
@@ -55,5 +58,7 @@ var API = api.NewAPI(nil, api.Schema{
 		return response.Data
 	}).SetParamsMethod(func(binding api.Binding[listingWrapper, Listing]) []api.BindingParam {
 		return api.Params("subreddit", "", true, "timePeriod", Day)
-	})),
+	}).AddAttrs(
+		func(client api.Client) (string, any) { return "binding", "top" },
+	)),
 })

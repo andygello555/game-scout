@@ -9,6 +9,8 @@ import (
 	"github.com/pkg/errors"
 	"io"
 	"net/http"
+	"strconv"
+	"sync"
 	"time"
 )
 
@@ -37,9 +39,47 @@ func (at AccessToken) Headers() http.Header {
 	}
 }
 
+type RateLimit struct {
+	Used      int64
+	Remaining int64
+	Reset     time.Time
+}
+
+// RateLimitFromHeader returns a new RateLimit instance from the given http.Header by fetching and parsing the values
+// for the following headers:
+//   - X-Ratelimit-Remaining
+//   - X-Ratelimit-Reset
+//   - X-Ratelimit-Used
+func RateLimitFromHeader(header http.Header) (rl *RateLimit, err error) {
+	rl = &RateLimit{}
+	if rl.Remaining, err = strconv.ParseInt(header.Get("X-Ratelimit-Remaining"), 10, 64); err != nil {
+		err = errors.Wrap(err, "cannot parse \"X-Ratelimit-Remaing\" header to int")
+		return
+	}
+
+	if rl.Used, err = strconv.ParseInt(header.Get("X-Ratelimit-Used"), 10, 64); err != nil {
+		err = errors.Wrap(err, "cannot parse \"X-Ratelimit-Used\" header to int")
+		return
+	}
+
+	var resetSeconds int64
+	if resetSeconds, err = strconv.ParseInt(header.Get("X-Ratelimit-Reset"), 10, 64); err != nil {
+		err = errors.Wrap(err, "cannot \"X-Ratelimit-Reset\" header to int")
+		return
+	}
+	rl.Reset = time.Now().Add(time.Second * time.Duration(resetSeconds))
+	return
+}
+
 type Client struct {
 	Config      Config
 	AccessToken *AccessToken
+	RateLimits  sync.Map
+}
+
+func CreateClient(config Config) {
+	DefaultClient = &Client{Config: config}
+	API.Client = DefaultClient
 }
 
 func (c *Client) RefreshToken() (err error) {
@@ -54,9 +94,10 @@ func (c *Client) RefreshToken() (err error) {
 func (c *Client) Run(ctx context.Context, attrs map[string]any, req api.Request, res any) (err error) {
 	request := req.(api.HTTPRequest).Request
 	request.Header.Set("User-Agent", c.Config.RedditUserAgent())
+	binding := attrs["binding"].(string)
 
 	// If we are not currently fetching the AccessToken, then we will check if we need to refresh the access token.
-	if _, ok := attrs["access_token"]; !ok {
+	if binding != "access_token" {
 		if err = c.RefreshToken(); err != nil {
 			return
 		}
@@ -74,6 +115,25 @@ func (c *Client) Run(ctx context.Context, attrs map[string]any, req api.Request,
 	if response, err = http.DefaultClient.Do(request); err != nil {
 		err = errors.Wrapf(err, "could not make %s HTTP request to %s", request.Method, request.URL.String())
 		return
+	}
+
+	var rl *RateLimit
+	if rl, err = RateLimitFromHeader(response.Header); err != nil {
+		err = errors.Wrapf(
+			err, "could not parse RateLimit from response headers to %s %s",
+			request.Method, request.URL.String(),
+		)
+		return
+	}
+
+	if rlAny, ok := c.RateLimits.Load(binding); ok {
+		// If there is already a RateLimit for this binding, check if the rate-limit returned by the current request is
+		// newer.
+		if rl.Reset.After(rlAny.(*RateLimit).Reset) {
+			c.RateLimits.Store(binding, rl)
+		}
+	} else {
+		c.RateLimits.Store(binding, rl)
 	}
 
 	if response.Body != nil {
@@ -98,9 +158,4 @@ func (c *Client) Run(ctx context.Context, attrs map[string]any, req api.Request,
 		)
 	}
 	return
-}
-
-func CreateClient(config Config) {
-	DefaultClient = &Client{Config: config}
-	API.Client = DefaultClient
 }
