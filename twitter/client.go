@@ -409,9 +409,11 @@ func (w *ClientWrapper) CheckRateLimit(binding *Binding, totalResources int) (er
 				Happened:               now,
 			}
 		}
+
 		// If the number of requests we can make in the remaining time on the rate limit exceeds the number of requests
-		// we would have to make to satisfy the totalResources to get.
-		if remaining := rateLimit.Reset.Time().Sub(now) / w.Config.TwitterRateLimits().LimitPerRequest(); int64(remaining) < int64(totalResources/binding.MaxResourcesPerRequest) {
+		// we would have to make to satisfy the totalResources to get. We also check if remaining is != 0. This is
+		// because the rate limit will just about be reset by the time we make the actual request.
+		if remaining := rateLimit.Reset.Time().Sub(now) / w.Config.TwitterRateLimits().LimitPerRequest(); int64(remaining) < int64(totalResources/binding.MaxResourcesPerRequest) && remaining != 0 {
 			log.WARNING.Printf(
 				"There is %s remaining on the rate limit meaning we cannot make the %d requests required for %d %ss",
 				remaining.String(),
