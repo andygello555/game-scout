@@ -957,13 +957,13 @@
                                                         </li>
                                                         {{ end }}
 
-                                                        {{ if gt (len .TopSteamApps) 0 }}
+                                                        {{ if gt (len .WatchedSteamApps) 0 }}
                                                         <li>
                                                             <a href="#watchedSteamApps">
                                                                 <span class="highlight-container"><span class="highlight">Watched Steam Apps</span></span>
                                                             </a>
                                                             <ol>
-                                                                {{ range .TopSteamApps }}
+                                                                {{ range .WatchedSteamApps }}
                                                                 <li><a href="#watched_steamApp_{{ .ID }}">
                                                                     <span class="highlight-container"><span class="highlight"><strong>{{ .Name }}</strong> ({{ .ID }})</span></span>
                                                                 </a></li>
