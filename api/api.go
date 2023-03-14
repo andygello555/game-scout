@@ -7,6 +7,7 @@ import (
 	"github.com/machinebox/graphql"
 	"net/http"
 	"reflect"
+	"sync"
 	"time"
 )
 
@@ -37,8 +38,48 @@ type Request interface {
 
 // Client is the API client that will execute the Binding.
 type Client interface {
-	// Run should execute the given Request and unmarshal the response into the given response interface.
-	Run(ctx context.Context, attrs map[string]any, req Request, res any) error
+	// Run should execute the given Request and unmarshal the response into the given response interface. It is usually
+	// called from Binding.Execute to execute a Binding, hence why we also pass in the name of the Binding (from
+	// Binding.Name).
+	Run(ctx context.Context, bindingName string, attrs map[string]any, req Request, res any) error
+}
+
+type RateLimitType int
+
+const (
+	// RequestRateLimit means that the RateLimit is limited by the number of HTTP requests that can be made in a certain
+	// timespan.
+	RequestRateLimit RateLimitType = iota
+	// ResourceRateLimit means that the RateLimit is limited by the number of resources that can be fetched in a certain
+	// timespan.
+	ResourceRateLimit
+)
+
+// RateLimit represents a RateLimit for a binding.
+type RateLimit interface {
+	// Reset returns the time at which the RateLimit resets.
+	Reset() time.Time
+	// Remaining returns the number of requests remaining/resources that can be fetched for this RateLimit.
+	Remaining() int
+	// Used returns the number of requests used/resources fetched so far for this RateLimit.
+	Used() int
+	// Type is the type of the RateLimit. See RateLimitType for documentation.
+	Type() RateLimitType
+}
+
+// RateLimitedClient is an API Client that has a RateLimit for each Binding it has authority over.
+type RateLimitedClient interface {
+	// Client should implement a Client.Run method that sets an internal sync.Map of RateLimit(s).
+	Client
+	// RateLimits returns the sync.Map of Binding names to RateLimit instances.
+	RateLimits() *sync.Map
+	// AddRateLimit should add a RateLimit to the internal sync.Map within the Client. It should check if the Binding of
+	// the given name already has a RateLimit, and whether the RateLimit.Reset lies after the currently set RateLimit
+	// for that Binding.
+	AddRateLimit(bindingName string, rateLimit RateLimit)
+	// LatestRateLimit should return the latest RateLimit for the Binding of the given name. If multiple Binding(s)
+	// share the same RateLimit(s) then this can also be encoded into this method.
+	LatestRateLimit(bindingName string) RateLimit
 }
 
 // BindingWrapper wraps a Binding value with its name. This is used within the Schema map so that we don't have to use
@@ -54,9 +95,21 @@ func (bw BindingWrapper) String() string {
 	return fmt.Sprintf("%s/%v", bw.name, bw.binding.Type())
 }
 
+// Name returns the name of the underlying Binding.
+func (bw BindingWrapper) Name() string { return bw.name }
+
+func (bw BindingWrapper) bindingName() string {
+	return bw.binding.MethodByName("Name").Call([]reflect.Value{})[0].Interface().(string)
+}
+
 // Paginated calls the Binding.Paginated method for the underlying Binding in the BindingWrapper.
 func (bw BindingWrapper) Paginated() bool {
 	return bw.binding.MethodByName("Paginated").Call([]reflect.Value{})[0].Bool()
+}
+
+// Paginator returns an un-typed Paginator for the underlying Binding of the BindingWrapper.
+func (bw BindingWrapper) Paginator(client Client, waitTime time.Duration, args ...any) (paginator Paginator[any, any], err error) {
+	return NewPaginator(client, waitTime, bw, args...)
 }
 
 // ArgsFromStrings calls the Binding.ArgsFromStrings method for the underlying Binding in the BindingWrapper.
@@ -70,6 +123,11 @@ func (bw BindingWrapper) ArgsFromStrings(args ...string) (parsedArgs []any, err 
 		err = values[1].Interface().(error)
 	}
 	return
+}
+
+// Params calls the Binding.Params method for the underlying Binding in the BindingWrapper.
+func (bw BindingWrapper) Params() []BindingParam {
+	return bw.binding.MethodByName("Params").Call([]reflect.Value{})[0].Interface().([]BindingParam)
 }
 
 // Execute calls the Binding.Execute method for the underlying Binding in the BindingWrapper.
@@ -87,14 +145,20 @@ func (bw BindingWrapper) Execute(client Client, args ...any) (val any, err error
 	return
 }
 
-// WrapBinding will return the BindingWrapper for the given Binding of the given name.
-func WrapBinding[ResT any, RetT any](name string, binding Binding[ResT, RetT]) BindingWrapper {
+func (bw BindingWrapper) setName(name string) {
+	fmt.Println("setName", bw.binding.Type())
+	bw.binding.MethodByName("SetName").Call([]reflect.Value{reflect.ValueOf(name)})
+}
+
+// WrapBinding will return the BindingWrapper for the given Binding. The name of the BindingWrapper will be fetched from
+// Binding.Name, so make sure to override this before using the Binding.
+func WrapBinding[ResT any, RetT any](binding Binding[ResT, RetT]) BindingWrapper {
 	var (
 		resT ResT
 		retT RetT
 	)
 	return BindingWrapper{
-		name:         name,
+		name:         binding.Name(),
 		responseType: reflect.TypeOf(resT),
 		returnType:   reflect.TypeOf(retT),
 		binding:      reflect.ValueOf(&binding).Elem(),
@@ -112,6 +176,10 @@ type API struct {
 
 // NewAPI constructs a new API instance for the given Client and Schema combination.
 func NewAPI(client Client, schema Schema) *API {
+	for bindingName, bindingWrapper := range schema {
+		bindingWrapper.name = bindingName
+	}
+
 	return &API{
 		Client: client,
 		schema: schema,
@@ -152,7 +220,7 @@ func (api *API) Execute(name string, args ...any) (val any, err error) {
 }
 
 // Paginator returns a Paginator for the Binding of the given name within the API.
-func (api *API) Paginator(name string, waitTime time.Duration, args ...any) (paginator Paginator[[]any, []any], err error) {
+func (api *API) Paginator(name string, waitTime time.Duration, args ...any) (paginator Paginator[any, any], err error) {
 	var binding BindingWrapper
 	if binding, err = api.checkBindingExists(name); err != nil {
 		return

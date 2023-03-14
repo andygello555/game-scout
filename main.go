@@ -1171,12 +1171,13 @@ func main() {
 									return all, err
 								}
 							}
-							if paginator, err := api.NewPaginator(monday.DefaultClient, time.Millisecond*100, api.WrapBinding("getboards", monday.GetBoards), args...); err != nil {
+
+							if paginator, err := api.NewPaginator(monday.DefaultClient, time.Millisecond*100, api.WrapBinding(monday.GetBoards), args...); err != nil {
 								return nil, err
 							} else {
 								all, err := paginator.All()
 								if err == nil {
-									fmt.Println("paginator items:", len(all))
+									fmt.Println("paginator items:", reflect.ValueOf(all).Len())
 								}
 								return all, err
 							}
@@ -1238,12 +1239,12 @@ func main() {
 									return all, err
 								}
 							}
-							if paginator, err := api.NewPaginator(monday.DefaultClient, time.Millisecond*100, api.WrapBinding("getitems", monday.GetItems), args...); err != nil {
+							if paginator, err := api.NewPaginator(monday.DefaultClient, time.Millisecond*100, api.WrapBinding(monday.GetItems), args...); err != nil {
 								return nil, err
 							} else {
 								all, err := paginator.All()
 								if err == nil {
-									fmt.Println("paginator items:", len(all))
+									fmt.Println("paginator items:", reflect.ValueOf(all).Len())
 								}
 								return all, err
 							}
@@ -1306,12 +1307,12 @@ func main() {
 										return all, err
 									}
 								}
-								if paginator, err := api.NewPaginator(monday.DefaultClient, time.Millisecond*100, api.WrapBinding("getgames", models.GetGamesFromMonday), globalConfig.Monday, db.DB); err != nil {
+								if paginator, err := api.NewPaginator(monday.DefaultClient, time.Millisecond*100, api.WrapBinding(models.GetGamesFromMonday), globalConfig.Monday, db.DB); err != nil {
 									return nil, err
 								} else {
 									all, err := paginator.All()
 									if err == nil {
-										fmt.Println("paginator items:", len(all))
+										fmt.Println("paginator items:", reflect.ValueOf(all).Len())
 									}
 									return all, err
 								}
@@ -1334,12 +1335,12 @@ func main() {
 										return all, err
 									}
 								}
-								if paginator, err := api.NewPaginator(monday.DefaultClient, time.Millisecond*100, api.WrapBinding("getgames", models.GetSteamAppsFromMonday), globalConfig.Monday, db.DB); err != nil {
+								if paginator, err := api.NewPaginator(monday.DefaultClient, time.Millisecond*100, api.WrapBinding(models.GetSteamAppsFromMonday), globalConfig.Monday, db.DB); err != nil {
 									return nil, err
 								} else {
 									all, err := paginator.All()
 									if err == nil {
-										fmt.Println("paginator items:", len(all))
+										fmt.Println("paginator items:", reflect.ValueOf(all).Len())
 									}
 									return all, err
 								}
@@ -1415,9 +1416,10 @@ func main() {
 					Usage: "an arg to execute the binding with",
 					Value: &cli.StringSlice{},
 				},
-				cli.BoolFlag{
-					Name:  "all",
-					Usage: "fetch all the resources from the binding using a Paginator",
+				cli.IntFlag{
+					Name:     "pages",
+					Required: false,
+					Usage:    "fetch the given number of pages from the binding using a Paginator",
 				},
 			},
 			Action: func(c *cli.Context) (err error) {
@@ -1428,13 +1430,25 @@ func main() {
 						response any
 						args     []any
 					)
-					if args, err = reddit.API.ArgsFromStrings(bindingName, c.StringSlice("arg")...); err != nil {
-						return cli.NewExitError(err.Error(), 1)
-					}
-					if response, err = reddit.API.Execute(bindingName, args...); err != nil {
-						return cli.NewExitError(err.Error(), 1)
-					}
 					bindingWrapper, _ := reddit.API.Binding(bindingName)
+					if args, err = bindingWrapper.ArgsFromStrings(c.StringSlice("arg")...); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+
+					if c.Int("pages") > 0 {
+						var paginator api.Paginator[any, any]
+						if paginator, err = bindingWrapper.Paginator(reddit.API.Client, time.Millisecond*500, args...); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+						if response, err = paginator.Pages(c.Int("pages")); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+						fmt.Println("paginator items:", reflect.ValueOf(response).Len())
+					} else {
+						if response, err = bindingWrapper.Execute(reddit.API.Client, args...); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+					}
 					fmt.Printf("%v(%v): %+v\n", bindingWrapper, args, response)
 				}
 				return

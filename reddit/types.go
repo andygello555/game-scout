@@ -1,5 +1,38 @@
 package reddit
 
+import (
+	"encoding/json"
+	"fmt"
+	"github.com/anaskhan96/soup"
+	"html"
+	"strconv"
+	"time"
+)
+
+const (
+	kindComment           = "t1"
+	kindUser              = "t2"
+	kindPost              = "t3"
+	kindMessage           = "t4"
+	kindSubreddit         = "t5"
+	kindTrophy            = "t6"
+	kindListing           = "Listing"
+	kindSubredditSettings = "subreddit_settings"
+	kindKarmaList         = "KarmaList"
+	kindTrophyList        = "TrophyList"
+	kindUserList          = "UserList"
+	kindMore              = "more"
+	kindLiveThread        = "LiveUpdateEvent"
+	kindLiveThreadUpdate  = "LiveUpdate"
+	kindModAction         = "modaction"
+	kindMulti             = "LabeledMulti"
+	kindMultiDescription  = "LabeledMultiDescription"
+	kindWikiPage          = "wikipage"
+	kindWikiPageListing   = "wikipagelisting"
+	kindWikiPageSettings  = "wikipagesettings"
+	kindStyleSheet        = "stylesheet"
+)
+
 type TimePeriod string
 
 const (
@@ -32,6 +65,47 @@ func (tp TimePeriod) Name() string {
 
 func (tp TimePeriod) String() string {
 	return string(tp)
+}
+
+// Timestamp represents a time that can be unmarshalled from a JSON string
+// formatted as either an RFC3339 or Unix timestamp.
+type Timestamp struct {
+	time.Time
+}
+
+// MarshalJSON implements the json.Marshaler interface.
+func (t *Timestamp) MarshalJSON() ([]byte, error) {
+	if t == nil || t.Time.IsZero() {
+		return []byte(`false`), nil
+	}
+
+	parsed := t.Time.Format(time.RFC3339)
+	return []byte(`"` + parsed + `"`), nil
+}
+
+// UnmarshalJSON implements the json.Unmarshaler interface.
+// Time is expected in RFC3339 or Unix format.
+func (t *Timestamp) UnmarshalJSON(data []byte) (err error) {
+	str := string(data)
+
+	// "edited" for posts and comments is either false, or a timestamp.
+	if str == "false" {
+		return
+	}
+
+	f, err := strconv.ParseFloat(str, 64)
+	if err == nil {
+		t.Time = time.Unix(int64(f), 0).UTC()
+	} else {
+		t.Time, err = time.Parse(`"`+time.RFC3339+`"`, str)
+	}
+
+	return
+}
+
+// Equal reports whether t and u are equal based on time.Equal
+func (t Timestamp) Equal(u Timestamp) bool {
+	return t.Time.Equal(u.Time)
 }
 
 type Me struct {
@@ -190,154 +264,348 @@ type listingWrapper struct {
 	Kind string  `json:"kind"`
 }
 
+type Thing struct {
+	Kind string `json:"kind"`
+	Data any    `json:"data"`
+}
+
+// UnmarshalJSON implements the json.Unmarshaler interface.
+func (t *Thing) UnmarshalJSON(b []byte) (err error) {
+	root := new(struct {
+		Kind string          `json:"kind"`
+		Data json.RawMessage `json:"data"`
+	})
+
+	if err = json.Unmarshal(b, root); err != nil {
+		return err
+	}
+
+	t.Kind = root.Kind
+	var v any
+	switch t.Kind {
+	case kindListing:
+		v = new(Listing)
+	case kindPost:
+		v = new(Post)
+	case kindComment:
+		v = new(Comment)
+	case kindMore:
+		v = new(More)
+	default:
+		err = fmt.Errorf("unrecognised kind %s", t.Kind)
+		return
+	}
+
+	if err = json.Unmarshal(root.Data, v); err != nil {
+		return err
+	}
+	t.Data = v
+	return
+}
+
+type Things struct {
+	Comments []*Comment
+	Posts    []*Post
+	Mores    []*More
+}
+
+// UnmarshalJSON implements the json.Unmarshaler interface.
+func (t *Things) UnmarshalJSON(b []byte) error {
+	var things []Thing
+	if err := json.Unmarshal(b, &things); err != nil {
+		return err
+	}
+
+	t.add(things...)
+	return nil
+}
+
+func (t *Things) add(things ...Thing) {
+	for _, thing := range things {
+		switch v := thing.Data.(type) {
+		case *Post:
+			t.Posts = append(t.Posts, v)
+		case *Comment:
+			t.Comments = append(t.Comments, v)
+		case *More:
+			t.Mores = append(t.Mores, v)
+		}
+	}
+}
+
+type Listings []Listing
+
+func (l Listings) After() any {
+	if len(l) > 0 {
+		return l[len(l)-1].After()
+	}
+	return ""
+}
+
 type Listing struct {
-	After     string         `json:"after"`
-	Before    string         `json:"before"`
-	Children  []ListingChild `json:"children"`
-	Dist      int            `json:"dist"`
-	GeoFilter string         `json:"geo_filter"`
-	Modhash   string         `json:"modhash"`
+	after     string `json:"after"`
+	Before    string `json:"before"`
+	Children  Things `json:"children"`
+	Dist      int    `json:"dist"`
+	GeoFilter string `json:"geo_filter"`
+	Modhash   string `json:"modhash"`
 }
 
-type ListingChild struct {
-	Data ListingData `json:"data"`
-	Kind string      `json:"kind"`
+func (l *Listing) After() any { return l.after }
+
+// UnmarshalJSON implements the json.Unmarshaler interface.
+func (l *Listing) UnmarshalJSON(b []byte) error {
+	root := new(struct {
+		After     string `json:"after"`
+		Before    string `json:"before"`
+		Children  Things `json:"children"`
+		Dist      int    `json:"dist"`
+		GeoFilter string `json:"geo_filter"`
+		Modhash   string `json:"modhash"`
+	})
+
+	err := json.Unmarshal(b, root)
+	if err != nil {
+		return err
+	}
+
+	l.after = root.After
+	l.Before = root.Before
+	l.Children = root.Children
+	l.Dist = root.Dist
+	l.GeoFilter = root.GeoFilter
+	l.Modhash = root.Modhash
+
+	return nil
 }
 
-type ListingGildings struct {
+// Post represents a post on a subreddit.
+type Post struct {
+	ID        string     `json:"id,omitempty"`
+	FullID    string     `json:"name,omitempty"`
+	Created   *Timestamp `json:"created_utc,omitempty"`
+	Edited    *Timestamp `json:"edited,omitempty"`
+	Permalink string     `json:"permalink,omitempty"`
+	URL       string     `json:"url,omitempty"`
+	Title     string     `json:"title,omitempty"`
+	Body      string     `json:"selftext,omitempty"`
+	BodyHTML  string     `json:"selftext_html,omitempty"`
+	// Indicates if you've upvoted/downvoted (true/false).
+	// If neither, it will be nil.
+	Likes                 *bool   `json:"likes"`
+	Ups                   int     `json:"ups"`
+	Downs                 int     `json:"downs"`
+	Score                 int     `json:"score"`
+	UpvoteRatio           float32 `json:"upvote_ratio"`
+	NumberOfComments      int     `json:"num_comments"`
+	SubredditName         string  `json:"subreddit,omitempty"`
+	SubredditNamePrefixed string  `json:"subreddit_name_prefixed,omitempty"`
+	SubredditID           string  `json:"subreddit_id,omitempty"`
+	SubredditSubscribers  int     `json:"subreddit_subscribers"`
+	Author                string  `json:"author,omitempty"`
+	AuthorID              string  `json:"author_fullname,omitempty"`
+	Spoiler               bool    `json:"spoiler"`
+	Locked                bool    `json:"locked"`
+	NSFW                  bool    `json:"over_18"`
+	IsSelfPost            bool    `json:"is_self"`
+	Saved                 bool    `json:"saved"`
+	Stickied              bool    `json:"stickied"`
 }
 
-type RedditVideo struct {
-	BitrateKbps       int    `json:"bitrate_kbps"`
-	DashURL           string `json:"dash_url"`
-	Duration          int    `json:"duration"`
-	FallbackURL       string `json:"fallback_url"`
-	Height            int    `json:"height"`
-	HlsURL            string `json:"hls_url"`
-	IsGif             bool   `json:"is_gif"`
-	ScrubberMediaURL  string `json:"scrubber_media_url"`
-	TranscodingStatus string `json:"transcoding_status"`
-	Width             int    `json:"width"`
+func (p *Post) String() string {
+	return fmt.Sprintf(
+		`{ID: %v, FullID: %v, Created: %v, Edited: %v, Permalink: %v, URL: %v, Title: %v, Body: %v, Likes: %v, Ups: %v, Downs: %v, Score: %v, UpvoteRatio: %v, NumberOfComments: %v, SubredditName: %v, SubredditNamePrefixed: %v, SubredditID: %v, SubredditSubscribers: %v, Author: %v, AuthorID: %v, Spoiler: %v, Locked: %v, NSFW: %v, IsSelfPost: %v, Saved: %v, Stickied: %v}`,
+		p.ID,
+		p.FullID,
+		p.Created,
+		p.Edited,
+		p.Permalink,
+		p.URL,
+		p.Title,
+		p.Body,
+		p.Likes,
+		p.Ups,
+		p.Downs,
+		p.Score,
+		p.UpvoteRatio,
+		p.NumberOfComments,
+		p.SubredditName,
+		p.SubredditNamePrefixed,
+		p.SubredditID,
+		p.SubredditSubscribers,
+		p.Author,
+		p.AuthorID,
+		p.Spoiler,
+		p.Locked,
+		p.NSFW,
+		p.IsSelfPost,
+		p.Saved,
+		p.Stickied,
+	)
 }
 
-type ListingMedia struct {
-	RedditVideo RedditVideo `json:"reddit_video"`
+func (p *Post) Soup() soup.Root {
+	return soup.HTMLParse(html.UnescapeString(p.BodyHTML))
 }
 
-type ListingMediaEmbed struct {
+// Comment is a comment on a post.
+type Comment struct {
+	ID                    string     `json:"id,omitempty"`
+	FullID                string     `json:"name,omitempty"`
+	Created               *Timestamp `json:"created_utc,omitempty"`
+	Edited                *Timestamp `json:"edited,omitempty"`
+	ParentID              string     `json:"parent_id,omitempty"`
+	Permalink             string     `json:"permalink,omitempty"`
+	Body                  string     `json:"body,omitempty"`
+	BodyHTML              string     `json:"body_html,omitempty"`
+	Author                string     `json:"author,omitempty"`
+	AuthorID              string     `json:"author_fullname,omitempty"`
+	AuthorFlairText       string     `json:"author_flair_text,omitempty"`
+	AuthorFlairID         string     `json:"author_flair_template_id,omitempty"`
+	SubredditName         string     `json:"subreddit,omitempty"`
+	SubredditNamePrefixed string     `json:"subreddit_name_prefixed,omitempty"`
+	SubredditID           string     `json:"subreddit_id,omitempty"`
+	// Indicates if you've upvote/downvoted (true/false).
+	// If neither, it will be nil.
+	Likes            *bool  `json:"likes"`
+	Score            int    `json:"score"`
+	Controversiality int    `json:"controversiality"`
+	PostID           string `json:"link_id,omitempty"`
+	// This doesn't appear consistently.
+	PostTitle string `json:"link_title,omitempty"`
+	// This doesn't appear consistently.
+	PostPermalink string `json:"link_permalink,omitempty"`
+	// This doesn't appear consistently.
+	PostAuthor string `json:"link_author,omitempty"`
+	// This doesn't appear consistently.
+	PostNumComments *int    `json:"num_comments,omitempty"`
+	IsSubmitter     bool    `json:"is_submitter"`
+	ScoreHidden     bool    `json:"score_hidden"`
+	Saved           bool    `json:"saved"`
+	Stickied        bool    `json:"stickied"`
+	Locked          bool    `json:"locked"`
+	CanGild         bool    `json:"can_gild"`
+	NSFW            bool    `json:"over_18"`
+	Replies         Replies `json:"replies"`
 }
 
-type ListingSecureMedia struct {
-	RedditVideo RedditVideo `json:"reddit_video"`
+func (c *Comment) Soup() soup.Root {
+	return soup.HTMLParse(html.UnescapeString(c.BodyHTML))
 }
 
-type ListingSecureMediaEmbed struct {
+// HasMore determines whether the comment has more replies to load in its reply tree.
+func (c *Comment) HasMore() bool {
+	return c.Replies.More != nil && len(c.Replies.More.Children) > 0
 }
 
-type ListingData struct {
-	AllAwardings               []interface{}           `json:"all_awardings"`
-	AllowLiveComments          bool                    `json:"allow_live_comments"`
-	ApprovedAtUtc              interface{}             `json:"approved_at_utc"`
-	ApprovedBy                 interface{}             `json:"approved_by"`
-	Archived                   bool                    `json:"archived"`
-	Author                     string                  `json:"author"`
-	AuthorFlairBackgroundColor interface{}             `json:"author_flair_background_color"`
-	AuthorFlairCSSClass        interface{}             `json:"author_flair_css_class"`
-	AuthorFlairRichtext        []interface{}           `json:"author_flair_richtext"`
-	AuthorFlairTemplateID      interface{}             `json:"author_flair_template_id"`
-	AuthorFlairText            interface{}             `json:"author_flair_text"`
-	AuthorFlairTextColor       interface{}             `json:"author_flair_text_color"`
-	AuthorFlairType            string                  `json:"author_flair_type"`
-	AuthorFullname             string                  `json:"author_fullname"`
-	AuthorIsBlocked            bool                    `json:"author_is_blocked"`
-	AuthorPatreonFlair         bool                    `json:"author_patreon_flair"`
-	AuthorPremium              bool                    `json:"author_premium"`
-	Awarders                   []interface{}           `json:"awarders"`
-	BannedAtUtc                interface{}             `json:"banned_at_utc"`
-	BannedBy                   interface{}             `json:"banned_by"`
-	CanGild                    bool                    `json:"can_gild"`
-	CanModPost                 bool                    `json:"can_mod_post"`
-	Category                   interface{}             `json:"category"`
-	Clicked                    bool                    `json:"clicked"`
-	ContentCategories          interface{}             `json:"content_categories"`
-	ContestMode                bool                    `json:"contest_mode"`
-	Created                    float64                 `json:"created"`
-	CreatedUtc                 float64                 `json:"created_utc"`
-	DiscussionType             interface{}             `json:"discussion_type"`
-	Distinguished              interface{}             `json:"distinguished"`
-	Domain                     string                  `json:"domain"`
-	Downs                      int                     `json:"downs"`
-	Edited                     bool                    `json:"edited"`
-	Gilded                     int                     `json:"gilded"`
-	Gildings                   ListingGildings         `json:"gildings"`
-	Hidden                     bool                    `json:"hidden"`
-	HideScore                  bool                    `json:"hide_score"`
-	ID                         string                  `json:"id"`
-	IsCreatedFromAdsUI         bool                    `json:"is_created_from_ads_ui"`
-	IsCrosspostable            bool                    `json:"is_crosspostable"`
-	IsMeta                     bool                    `json:"is_meta"`
-	IsOriginalContent          bool                    `json:"is_original_content"`
-	IsRedditMediaDomain        bool                    `json:"is_reddit_media_domain"`
-	IsRobotIndexable           bool                    `json:"is_robot_indexable"`
-	IsSelf                     bool                    `json:"is_self"`
-	IsVideo                    bool                    `json:"is_video"`
-	Likes                      interface{}             `json:"likes"`
-	LinkFlairBackgroundColor   string                  `json:"link_flair_background_color"`
-	LinkFlairCSSClass          interface{}             `json:"link_flair_css_class"`
-	LinkFlairRichtext          []interface{}           `json:"link_flair_richtext"`
-	LinkFlairText              interface{}             `json:"link_flair_text"`
-	LinkFlairTextColor         string                  `json:"link_flair_text_color"`
-	LinkFlairType              string                  `json:"link_flair_type"`
-	Locked                     bool                    `json:"locked"`
-	Media                      ListingMedia            `json:"media"`
-	MediaEmbed                 ListingMediaEmbed       `json:"media_embed"`
-	MediaOnly                  bool                    `json:"media_only"`
-	ModNote                    interface{}             `json:"mod_note"`
-	ModReasonBy                interface{}             `json:"mod_reason_by"`
-	ModReasonTitle             interface{}             `json:"mod_reason_title"`
-	ModReports                 []interface{}           `json:"mod_reports"`
-	Name                       string                  `json:"name"`
-	NoFollow                   bool                    `json:"no_follow"`
-	NumComments                int                     `json:"num_comments"`
-	NumCrossposts              int                     `json:"num_crossposts"`
-	NumReports                 interface{}             `json:"num_reports"`
-	Over18                     bool                    `json:"over_18"`
-	ParentWhitelistStatus      string                  `json:"parent_whitelist_status"`
-	Permalink                  string                  `json:"permalink"`
-	Pinned                     bool                    `json:"pinned"`
-	Pwls                       int                     `json:"pwls"`
-	Quarantine                 bool                    `json:"quarantine"`
-	RemovalReason              interface{}             `json:"removal_reason"`
-	RemovedBy                  interface{}             `json:"removed_by"`
-	RemovedByCategory          interface{}             `json:"removed_by_category"`
-	ReportReasons              interface{}             `json:"report_reasons"`
-	Saved                      bool                    `json:"saved"`
-	Score                      int                     `json:"score"`
-	SecureMedia                ListingSecureMedia      `json:"secure_media"`
-	SecureMediaEmbed           ListingSecureMediaEmbed `json:"secure_media_embed"`
-	Selftext                   string                  `json:"selftext"`
-	SelftextHTML               interface{}             `json:"selftext_html"`
-	SendReplies                bool                    `json:"send_replies"`
-	Spoiler                    bool                    `json:"spoiler"`
-	Stickied                   bool                    `json:"stickied"`
-	Subreddit                  string                  `json:"subreddit"`
-	SubredditID                string                  `json:"subreddit_id"`
-	SubredditNamePrefixed      string                  `json:"subreddit_name_prefixed"`
-	SubredditSubscribers       int                     `json:"subreddit_subscribers"`
-	SubredditType              string                  `json:"subreddit_type"`
-	SuggestedSort              interface{}             `json:"suggested_sort"`
-	Thumbnail                  string                  `json:"thumbnail"`
-	Title                      string                  `json:"title"`
-	TopAwardedType             interface{}             `json:"top_awarded_type"`
-	TotalAwardsReceived        int                     `json:"total_awards_received"`
-	TreatmentTags              []interface{}           `json:"treatment_tags"`
-	Ups                        int                     `json:"ups"`
-	UpvoteRatio                float64                 `json:"upvote_ratio"`
-	URL                        string                  `json:"url"`
-	URLOverriddenByDest        string                  `json:"url_overridden_by_dest"`
-	UserReports                []interface{}           `json:"user_reports"`
-	ViewCount                  interface{}             `json:"view_count"`
-	Visited                    bool                    `json:"visited"`
-	WhitelistStatus            string                  `json:"whitelist_status"`
-	Wls                        int                     `json:"wls"`
+// addCommentToReplies traverses the comment tree to find the one
+// that the 2nd comment is replying to. It then adds it to its replies.
+func (c *Comment) addCommentToReplies(comment *Comment) {
+	if c.FullID == comment.ParentID {
+		c.Replies.Comments = append(c.Replies.Comments, comment)
+		return
+	}
+
+	for _, reply := range c.Replies.Comments {
+		reply.addCommentToReplies(comment)
+	}
+}
+
+func (c *Comment) addMoreToReplies(more *More) {
+	if c.FullID == more.ParentID {
+		c.Replies.More = more
+		return
+	}
+
+	for _, reply := range c.Replies.Comments {
+		reply.addMoreToReplies(more)
+	}
+}
+
+func (c *Comment) String() string {
+	return fmt.Sprintf(
+		`{ID: %v, FullID: %v, Created: %v, Edited: %v, ParentID: %v, Permalink: %v, Body: %v, BodyHTML: %v, Author: %v, AuthorID: %v, AuthorFlairText: %v, AuthorFlairID: %v, SubredditName: %v, SubredditNamePrefixed: %v, SubredditID: %v, Likes: %v, Score: %v, Controversiality: %v, PostID: %v, PostTitle: %v, PostPermalink: %v, PostAuthor: %v, PostNumComments: %v, IsSubmitter: %v, ScoreHidden: %v, Saved: %v, Stickied: %v, Locked: %v, CanGild: %v, NSFW: %v, Replies: %v}`,
+		c.ID,
+		c.FullID,
+		c.Created,
+		c.Edited,
+		c.ParentID,
+		c.Permalink,
+		c.Body,
+		c.BodyHTML,
+		c.Author,
+		c.AuthorID,
+		c.AuthorFlairText,
+		c.AuthorFlairID,
+		c.SubredditName,
+		c.SubredditNamePrefixed,
+		c.SubredditID,
+		c.Likes,
+		c.Score,
+		c.Controversiality,
+		c.PostID,
+		c.PostTitle,
+		c.PostPermalink,
+		c.PostAuthor,
+		c.PostNumComments,
+		c.IsSubmitter,
+		c.ScoreHidden,
+		c.Saved,
+		c.Stickied,
+		c.Locked,
+		c.CanGild,
+		c.NSFW,
+		c.Replies,
+	)
+}
+
+// Replies holds replies to a comment.
+// It contains both comments and "more" comments, which are entrypoints to other
+// comments that were left out.
+type Replies struct {
+	Comments []*Comment `json:"comments,omitempty"`
+	More     *More      `json:"-"`
+}
+
+// UnmarshalJSON implements the json.Unmarshaler interface.
+func (r *Replies) UnmarshalJSON(data []byte) error {
+	// if a comment has no replies, its "replies" field is set to ""
+	if string(data) == `""` {
+		r = nil
+		return nil
+	}
+
+	root := new(Thing)
+	err := json.Unmarshal(data, root)
+	if err != nil {
+		return err
+	}
+
+	listing, _ := root.Data.(*Listing)
+
+	r.Comments = listing.Children.Comments
+	if len(listing.Children.Mores) > 0 {
+		r.More = listing.Children.Mores[0]
+	}
+	return nil
+}
+
+// MarshalJSON implements the json.Marshaler interface.
+func (r *Replies) MarshalJSON() ([]byte, error) {
+	if r == nil || len(r.Comments) == 0 {
+		return []byte(`null`), nil
+	}
+	return json.Marshal(r.Comments)
+}
+
+// More holds information used to retrieve additional comments omitted from a base comment tree.
+type More struct {
+	ID       string `json:"id"`
+	FullID   string `json:"name"`
+	ParentID string `json:"parent_id"`
+	// Count is the total number of replies to the parent + replies to those replies (recursively).
+	Count int `json:"count"`
+	// Depth is the number of comment nodes from the parent down to the furthest comment node.
+	Depth    int      `json:"depth"`
+	Children []string `json:"children"`
 }

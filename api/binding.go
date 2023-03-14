@@ -84,6 +84,14 @@ type Binding[ResT any, RetT any] interface {
 	// chained with others when creating a new Binding through NewBindingChain.
 	SetPaginated(paginated bool) Binding[ResT, RetT]
 
+	// Name returns the name of the Binding. When using NewBinding, NewBindingChain, or NewWrappedBinding, this will be
+	// set to whatever is returned by the following line of code:
+	//  fmt.Sprintf("%T", binding)
+	// Where "binding" is the referred to Binding.
+	Name() string
+	// SetName sets the name of the Binding. This returns the Binding so it can be chained.
+	SetName(name string) Binding[ResT, RetT]
+
 	// Attrs returns the attributes for the Binding. These can be passed in when creating a Binding through the
 	// NewBinding function. Attrs can be used in any of the implemented functions, and they are also passed to
 	// Client.Run when Execute-ing the Binding.
@@ -115,6 +123,8 @@ type bindingProto[ResT any, RetT any] struct {
 	checkedParams           bool
 	paramsMethod            BindingParamsMethod[ResT, RetT]
 	paginated               bool
+	name                    string
+	nameSet                 bool
 	attrs                   map[string]any
 	attrFuncs               []Attr
 }
@@ -244,8 +254,8 @@ func checkParams(params []BindingParam) (err error) {
 
 // checkParams will see if the given BindingParam(s) make sense. This means that:
 //   - BindingParam(s) should have a unique BindingParam.name.
-//   - Non Required BindingParam(s) should trail after all Required BindingParam(s).
-//   - Variadic BindingParam(s) should trail after all non-required BindingParam(s)
+//   - Non Required BindingParam(s) should trail afterParamSet all Required BindingParam(s).
+//   - Variadic BindingParam(s) should trail afterParamSet all non-required BindingParam(s)
 //   - Variadic BindingParam(s) should not be Required.
 //   - Variadic BindingParam(s) should have DefaultValue that is an empty reflect.Slice/reflect.Array type.
 //
@@ -387,7 +397,7 @@ func (b bindingProto[ResT, RetT]) Execute(client Client, args ...any) (response 
 	responseWrapperInt := responseWrapper.Interface()
 
 	ctx := context.Background()
-	if err = client.Run(ctx, b.attrs, req, &responseWrapperInt); err != nil {
+	if err = client.Run(ctx, b.Name(), b.attrs, req, &responseWrapperInt); err != nil {
 		err = errors.Wrapf(err, "could not Execute Binding %T", b)
 		return
 	}
@@ -406,6 +416,20 @@ func (b bindingProto[ResT, RetT]) SetPaginated(paginated bool) Binding[ResT, Ret
 	b.paginated = paginated
 	return &b
 }
+
+func (b bindingProto[ResT, RetT]) Name() string {
+	if !b.nameSet {
+		return fmt.Sprintf("%T", b)
+	}
+	return b.name
+}
+
+func (b bindingProto[ResT, RetT]) SetName(name string) Binding[ResT, RetT] {
+	b.name = name
+	b.nameSet = true
+	return &b
+}
+
 func (b bindingProto[ResT, RetT]) Attrs() map[string]any { return b.attrs }
 
 func (b bindingProto[ResT, RetT]) AddAttrs(attrs ...Attr) Binding[ResT, RetT] {
@@ -516,7 +540,9 @@ func NewWrappedBinding[ResT any, RetT any](
 	paginated bool,
 	attrs ...Attr,
 ) BindingWrapper {
-	return WrapBinding(name, NewBinding(request, wrap, unwrap, response, params, paginated, attrs...))
+	b := NewBinding(request, wrap, unwrap, response, params, paginated, attrs...)
+	b.SetName(name)
+	return WrapBinding(b)
 }
 
 // NewBindingChain creates a new Binding for an API via a prototype that implements the Binding interface. Unlike the

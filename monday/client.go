@@ -361,7 +361,7 @@ type Client struct {
 	*graphql.Client
 }
 
-func (c *Client) Run(ctx context.Context, attrs map[string]any, req api.Request, res any) error {
+func (c *Client) Run(ctx context.Context, bindingName string, attrs map[string]any, req api.Request, res any) error {
 	config := attrs["config"].(Config)
 	req.Header().Set("Authorization", config.MondayToken())
 	req.Header().Set("Content-Type", "application/json")

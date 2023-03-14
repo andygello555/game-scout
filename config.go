@@ -9,6 +9,7 @@ import (
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/game-scout/email"
 	"github.com/andygello555/game-scout/monday"
+	"github.com/andygello555/game-scout/reddit"
 	task "github.com/andygello555/game-scout/tasks"
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	"github.com/antonmedv/expr"
@@ -345,6 +346,24 @@ func (c *TwitterConfig) TwitterQuery() string {
 	return fmt.Sprintf("(%s) %s", query, strings.Join(hashtags, " "))
 }
 
+type RedditRateLimits struct {
+	RequestsPerMonth  uint64   `json:"requests_per_month"`
+	RequestsPerWeek   uint64   `json:"requests_per_week"`
+	RequestsPerDay    uint64   `json:"requests_per_day"`
+	RequestsPerHour   uint64   `json:"requests_per_hour"`
+	RequestsPerMinute uint64   `json:"requests_per_minute"`
+	RequestsPerSecond uint64   `json:"requests_per_second"`
+	TimePerRequest    Duration `json:"time_per_request"`
+}
+
+func (rl *RedditRateLimits) LimitPerMonth() uint64          { return rl.RequestsPerMonth }
+func (rl *RedditRateLimits) LimitPerWeek() uint64           { return rl.RequestsPerWeek }
+func (rl *RedditRateLimits) LimitPerDay() uint64            { return rl.RequestsPerDay }
+func (rl *RedditRateLimits) LimitPerHour() uint64           { return rl.RequestsPerHour }
+func (rl *RedditRateLimits) LimitPerMinute() uint64         { return rl.RequestsPerMinute }
+func (rl *RedditRateLimits) LimitPerSecond() uint64         { return rl.RequestsPerSecond }
+func (rl *RedditRateLimits) LimitPerRequest() time.Duration { return rl.TimePerRequest.Duration }
+
 type RedditConfig struct {
 	// PersonalUseScript is the ID of the personal use script that was set up for game-scout scraping.
 	PersonalUseScript string `json:"personal_use_script"`
@@ -358,14 +377,17 @@ type RedditConfig struct {
 	Password string `json:"password"`
 	// Subreddits is the list of subreddits to scrape in the form: "GameDevelopment" (sans "r/" prefix).
 	Subreddits []string `json:"subreddits"`
+	// RateLimits contains the rate per-unit of time.
+	RateLimits *RedditRateLimits `json:"rate_limits"`
 }
 
-func (rc *RedditConfig) RedditPersonalUseScript() string { return rc.PersonalUseScript }
-func (rc *RedditConfig) RedditSecret() string            { return rc.Secret }
-func (rc *RedditConfig) RedditUserAgent() string         { return rc.UserAgent }
-func (rc *RedditConfig) RedditUsername() string          { return rc.Username }
-func (rc *RedditConfig) RedditPassword() string          { return rc.Password }
-func (rc *RedditConfig) RedditSubreddits() []string      { return rc.Subreddits }
+func (rc *RedditConfig) RedditPersonalUseScript() string          { return rc.PersonalUseScript }
+func (rc *RedditConfig) RedditSecret() string                     { return rc.Secret }
+func (rc *RedditConfig) RedditUserAgent() string                  { return rc.UserAgent }
+func (rc *RedditConfig) RedditUsername() string                   { return rc.Username }
+func (rc *RedditConfig) RedditPassword() string                   { return rc.Password }
+func (rc *RedditConfig) RedditSubreddits() []string               { return rc.Subreddits }
+func (rc *RedditConfig) RedditRateLimits() reddit.RateLimitConfig { return rc.RateLimits }
 
 type MondayMappingConfig struct {
 	// ModelName is the name of the model that this MondayMappingConfig is for. This should either be "models.SteamApp"

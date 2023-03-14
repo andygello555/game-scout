@@ -20,7 +20,7 @@ import (
 type httpClient struct {
 }
 
-func (h httpClient) Run(ctx context.Context, attrs map[string]any, req Request, res any) (err error) {
+func (h httpClient) Run(ctx context.Context, bindingName string, attrs map[string]any, req Request, res any) (err error) {
 	request := req.(HTTPRequest).Request
 
 	var response *http.Response
@@ -496,12 +496,12 @@ func ExampleNewAPI() {
 		// when creating Bindings. This will execute a similar HTTP request to the "products" Binding but
 		// Binding.Execute will instead return a single Product instance.
 		// Note: how the RetT type param is set to just "Product".
-		"first_product": WrapBinding("first_product", NewBindingChain(func(binding Binding[[]Product, Product], args ...any) (request Request) {
+		"first_product": WrapBinding(NewBindingChain(func(binding Binding[[]Product, Product], args ...any) (request Request) {
 			req, _ := http.NewRequest(http.MethodGet, "https://fakestoreapi.com/products?limit=1", nil)
 			return HTTPRequest{req}
 		}).SetResponseMethod(func(binding Binding[[]Product, Product], response []Product, args ...any) Product {
 			return response[0]
-		})),
+		}).SetName("first_product")),
 	})
 
 	// Then we can execute our "users" binding with a limit of 3...
