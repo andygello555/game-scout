@@ -358,6 +358,8 @@ func (t *Thing) UnmarshalJSON(b []byte) (err error) {
 		v = new(Post)
 	case kindComment:
 		v = new(Comment)
+	case kindUser:
+		v = new(User)
 	case kindMore:
 		v = new(More)
 	default:
@@ -476,6 +478,21 @@ func (l *Listing) UnmarshalJSON(b []byte) error {
 	l.Modhash = root.Modhash
 
 	return nil
+}
+
+// User represents a Reddit user.
+type User struct {
+	// this is not the full ID, watch out.
+	ID               string     `json:"id,omitempty"`
+	Name             string     `json:"name,omitempty"`
+	Created          *Timestamp `json:"created_utc,omitempty"`
+	PostKarma        int        `json:"link_karma"`
+	CommentKarma     int        `json:"comment_karma"`
+	IsFriend         bool       `json:"is_friend"`
+	IsEmployee       bool       `json:"is_employee"`
+	HasVerifiedEmail bool       `json:"has_verified_email"`
+	NSFW             bool       `json:"over_18"`
+	IsSuspended      bool       `json:"is_suspended"`
 }
 
 // Post represents a post on a subreddit.

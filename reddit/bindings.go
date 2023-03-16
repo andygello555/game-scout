@@ -127,6 +127,20 @@ var API = api.NewAPI(nil, api.Schema{
 		)
 	}).SetPaginated(true).SetName("comments")),
 
+	"user_about": api.WrapBinding(api.NewBindingChain(func(binding api.Binding[Thing, *User], args ...any) (request api.Request) {
+		username := args[0].(string)
+		req, _ := http.NewRequest(
+			http.MethodGet,
+			fmt.Sprintf("https://oauth.reddit.com/user/%s/about.json", username),
+			http.NoBody,
+		)
+		return api.HTTPRequest{Request: req}
+	}).SetResponseMethod(func(binding api.Binding[Thing, *User], response Thing, args ...any) *User {
+		return response.Data.(*User)
+	}).SetParamsMethod(func(binding api.Binding[Thing, *User]) []api.BindingParam {
+		return api.Params("username", "", true)
+	})),
+
 	"user_where": api.WrapBinding(api.NewBindingChain(func(binding api.Binding[listingWrapper, *Listing], args ...any) (request api.Request) {
 		username := args[0].(string)
 		where := args[1].(UserWhereType)
