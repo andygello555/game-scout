@@ -30,7 +30,7 @@ type AccessToken struct {
 }
 
 func (at AccessToken) Expired() bool {
-	return time.Now().Before(at.ExpireTime)
+	return time.Now().After(at.ExpireTime)
 }
 
 func (at AccessToken) Headers() http.Header {
@@ -50,10 +50,19 @@ type RateLimit struct {
 //   - X-Ratelimit-Remaining
 //   - X-Ratelimit-Reset
 //   - X-Ratelimit-Used
+//
+// If not all headers are found, nil will be returned.
 func RateLimitFromHeader(header http.Header) (rl *RateLimit, err error) {
+	_, ok1 := header["X-Ratelimit-Remaining"]
+	_, ok2 := header["X-Ratelimit-Reset"]
+	_, ok3 := header["X-Ratelimit-Used"]
+	if !ok1 || !ok2 || !ok3 {
+		return nil, nil
+	}
+
 	rl = &RateLimit{}
 	if rl.remaining, err = strconv.ParseInt(header.Get("X-Ratelimit-Remaining"), 10, 64); err != nil {
-		err = errors.Wrap(err, "cannot parse \"X-Ratelimit-Remaing\" header to int")
+		err = errors.Wrap(err, "cannot parse \"X-Ratelimit-Remaining\" header to int")
 		return
 	}
 
@@ -71,15 +80,16 @@ func RateLimitFromHeader(header http.Header) (rl *RateLimit, err error) {
 	return
 }
 
-func (r *RateLimit) Reset() time.Time        { return r.reset }
+func (r *RateLimit) Reset() time.Time        { return r.reset.Truncate(time.Second) }
 func (r *RateLimit) Remaining() int          { return int(r.remaining) }
 func (r *RateLimit) Used() int               { return int(r.used) }
 func (r *RateLimit) Type() api.RateLimitType { return api.RequestRateLimit }
 
 func (r *RateLimit) String() string {
+	total := r.Used() + r.Remaining()
 	return fmt.Sprintf(
 		"%d/%d used (%.2f%%) resets %s",
-		r.used, r.used+r.remaining, (float64(r.used)/(float64(r.used)+float64(r.remaining)))*100.0, r.reset.String(),
+		r.Used(), total, (float64(r.Used())/float64(total))*100.0, r.Reset().String(),
 	)
 }
 
@@ -97,7 +107,10 @@ func (c *Client) AddRateLimit(bindingName string, rateLimit api.RateLimit) {
 	if rlAny, ok := c.rateLimits.Load(bindingName); ok {
 		// If there is already a RateLimit for this binding, check if the rate-limit returned by the current request is
 		// newer.
-		if rateLimit.Reset().After(rlAny.(api.RateLimit).Reset()) {
+		rl := rlAny.(api.RateLimit)
+		gte := rateLimit.Reset().After(rl.Reset()) || rateLimit.Reset().Equal(rl.Reset())
+		usedMore := rateLimit.Used() > rl.Used()
+		if gte && usedMore {
 			c.rateLimits.Store(bindingName, rateLimit)
 		}
 	} else {
@@ -112,7 +125,9 @@ func (c *Client) LatestRateLimit(bindingName string) api.RateLimit {
 		if latestRateLimit == nil {
 			latestRateLimit = rl
 		} else {
-			if latestRateLimit.Reset().Before(rl.Reset()) {
+			gte := latestRateLimit.Reset().After(rl.Reset()) || latestRateLimit.Reset().Equal(rl.Reset())
+			usedMore := rl.Used() > latestRateLimit.Used()
+			if gte && usedMore {
 				latestRateLimit = rl
 			}
 		}
@@ -138,7 +153,9 @@ func (c *Client) RefreshToken() (err error) {
 func (c *Client) Run(ctx context.Context, bindingName string, attrs map[string]any, req api.Request, res any) (err error) {
 	request := req.(api.HTTPRequest).Request
 	request.Header.Set("User-Agent", c.Config.RedditUserAgent())
-	fmt.Printf("latest rate limit for %s = %v\n", bindingName, c.LatestRateLimit(bindingName))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Accept", "application/json")
+	//fmt.Printf("latest rate limit for %s = %v\n", bindingName, c.LatestRateLimit(bindingName))
 
 	// If we are not currently fetching the AccessToken, then we will check if we need to refresh the access token.
 	if bindingName != "access_token" {
@@ -153,31 +170,21 @@ func (c *Client) Run(ctx context.Context, bindingName string, attrs map[string]a
 			}
 		}
 	}
-	//fmt.Println("requesting", request.Method, request.URL.String(), request.Header)
 
+	//fmt.Printf("requesting %q = \"%s %s\"\n", bindingName, request.Method, request.URL.String())
 	var response *http.Response
 	if response, err = http.DefaultClient.Do(request); err != nil {
 		err = errors.Wrapf(err, "could not make %s HTTP request to %s", request.Method, request.URL.String())
 		return
 	}
 
-	var rl api.RateLimit
-	if rl, err = RateLimitFromHeader(response.Header); err != nil {
-		err = errors.Wrapf(
-			err, "could not parse RateLimit from response headers to %s %s",
-			request.Method, request.URL.String(),
-		)
-		return
-	}
-	c.AddRateLimit(bindingName, rl)
-
-	i := 0
-	c.rateLimits.Range(func(key, value any) bool {
-		fmt.Printf("%d: %s - %q", i+1, key, value)
-		i++
-		return true
-	})
-	fmt.Println()
+	//i := 0
+	//c.rateLimits.Range(func(key, value any) bool {
+	//	fmt.Printf("%d: %s - %q\n", i+1, key, value)
+	//	i++
+	//	return true
+	//})
+	//fmt.Println()
 
 	if response.Body != nil {
 		defer func(body io.ReadCloser) {
@@ -199,6 +206,21 @@ func (c *Client) Run(ctx context.Context, bindingName string, attrs map[string]a
 			"could not unmarshal JSON for response to %s %s",
 			request.Method, request.URL.String(),
 		)
+		return
 	}
+
+	var rl api.RateLimit
+	if rl, err = RateLimitFromHeader(response.Header); err != nil {
+		err = errors.Wrapf(
+			err, "could not parse RateLimit from response headers to %s %s",
+			request.Method, request.URL.String(),
+		)
+		return
+	}
+
+	if rl.(*RateLimit) != nil {
+		c.AddRateLimit(bindingName, rl)
+	}
+
 	return
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/anaskhan96/soup"
+	"github.com/andygello555/game-scout/errors"
 	"html"
 	"strconv"
 	"time"
@@ -65,6 +66,74 @@ func (tp TimePeriod) Name() string {
 
 func (tp TimePeriod) String() string {
 	return string(tp)
+}
+
+type Sort string
+
+const (
+	Hot           Sort = "hot"
+	New           Sort = "new"
+	Top           Sort = "top"
+	Controversial Sort = "controversial"
+)
+
+func (s Sort) Name() string {
+	switch s {
+	case Hot:
+		return "Hot"
+	case New:
+		return "New"
+	case Top:
+		return "Top"
+	case Controversial:
+		return "Controversial"
+	default:
+		return "<nil>"
+	}
+}
+
+func (s Sort) String() string {
+	return string(s)
+}
+
+type UserWhereType string
+
+const (
+	Overview  UserWhereType = "overview"
+	Submitted UserWhereType = "submitted"
+	Comments  UserWhereType = "comments"
+	Upvoted   UserWhereType = "upvoted"
+	Downvoted UserWhereType = "downvoted"
+	Hidden    UserWhereType = "hidden"
+	Saved     UserWhereType = "saved"
+	Gilded    UserWhereType = "gilded"
+)
+
+func (uwt UserWhereType) Name() string {
+	switch uwt {
+	case Overview:
+		return "Overview"
+	case Submitted:
+		return "Submitted"
+	case Comments:
+		return "Comments"
+	case Upvoted:
+		return "Upvoted"
+	case Downvoted:
+		return "Downvoted"
+	case Hidden:
+		return "Hidden"
+	case Saved:
+		return "Saved"
+	case Gilded:
+		return "Gilded"
+	default:
+		return "<nil>"
+	}
+}
+
+func (uwt UserWhereType) String() string {
+	return string(uwt)
 }
 
 // Timestamp represents a time that can be unmarshalled from a JSON string
@@ -309,6 +378,16 @@ type Things struct {
 	Mores    []*More
 }
 
+func (t *Things) Merge(t2 *Things) {
+	t.Comments = append(t.Comments, t2.Comments...)
+	t.Posts = append(t.Posts, t2.Posts...)
+	t.Mores = append(t.Mores, t2.Mores...)
+}
+
+func (t *Things) Len() int {
+	return len(t.Comments) + len(t.Posts) + len(t.Mores)
+}
+
 // UnmarshalJSON implements the json.Unmarshaler interface.
 func (t *Things) UnmarshalJSON(b []byte) error {
 	var things []Thing
@@ -343,25 +422,45 @@ func (l Listings) After() any {
 }
 
 type Listing struct {
-	after     string `json:"after"`
-	Before    string `json:"before"`
-	Children  Things `json:"children"`
-	Dist      int    `json:"dist"`
-	GeoFilter string `json:"geo_filter"`
-	Modhash   string `json:"modhash"`
+	after     *string `json:"after"`
+	Before    string  `json:"before"`
+	Children  Things  `json:"children"`
+	Dist      int     `json:"dist"`
+	GeoFilter string  `json:"geo_filter"`
+	Modhash   string  `json:"modhash"`
 }
 
-func (l *Listing) After() any { return l.after }
+func (l *Listing) Len() int {
+	return l.Children.Len()
+}
+
+func (l *Listing) After() any { return *l.after }
+
+func (l *Listing) Merge(similar any) (err error) {
+	if l2, ok := similar.(*Listing); !ok {
+		return fmt.Errorf("cannot merge %T into Listing", similar)
+	} else {
+		l.Children.Merge(&l2.Children)
+		l.after = l2.after
+		l.Before = l2.Before
+		l.Dist = l2.Dist
+		l.GeoFilter = l2.GeoFilter
+		l.Modhash = l2.Modhash
+	}
+	return
+}
+
+func (l *Listing) HasMore() bool { return l.after != nil }
 
 // UnmarshalJSON implements the json.Unmarshaler interface.
 func (l *Listing) UnmarshalJSON(b []byte) error {
 	root := new(struct {
-		After     string `json:"after"`
-		Before    string `json:"before"`
-		Children  Things `json:"children"`
-		Dist      int    `json:"dist"`
-		GeoFilter string `json:"geo_filter"`
-		Modhash   string `json:"modhash"`
+		After     *string `json:"after"`
+		Before    string  `json:"before"`
+		Children  Things  `json:"children"`
+		Dist      int     `json:"dist"`
+		GeoFilter string  `json:"geo_filter"`
+		Modhash   string  `json:"modhash"`
 	})
 
 	err := json.Unmarshal(b, root)
@@ -489,6 +588,14 @@ type Comment struct {
 	Replies         Replies `json:"replies"`
 }
 
+func (c *Comment) Count() int {
+	count := len(c.Replies.Comments)
+	for _, reply := range c.Replies.Comments {
+		count += reply.Count()
+	}
+	return count
+}
+
 func (c *Comment) Soup() soup.Root {
 	return soup.HTMLParse(html.UnescapeString(c.BodyHTML))
 }
@@ -598,6 +705,34 @@ func (r *Replies) MarshalJSON() ([]byte, error) {
 	return json.Marshal(r.Comments)
 }
 
+type moreResponse struct {
+	JSON struct {
+		Data struct {
+			Things Things `json:"things"`
+		} `json:"data"`
+	} `json:"json"`
+}
+
+type commentResponse struct {
+	more            *moreResponse
+	postAndComments *PostAndComments
+}
+
+func (cr *commentResponse) UnmarshalJSON(data []byte) error {
+	var pc PostAndComments
+	err := json.Unmarshal(data, &pc)
+	if err != nil {
+		var more moreResponse
+		if err2 := json.Unmarshal(data, &more); err2 != nil {
+			return errors.MergeErrors(err2, err)
+		}
+		cr.more = &more
+	} else {
+		cr.postAndComments = &pc
+	}
+	return nil
+}
+
 // More holds information used to retrieve additional comments omitted from a base comment tree.
 type More struct {
 	ID       string `json:"id"`
@@ -608,4 +743,86 @@ type More struct {
 	// Depth is the number of comment nodes from the parent down to the furthest comment node.
 	Depth    int      `json:"depth"`
 	Children []string `json:"children"`
+}
+
+type PostsAndComments struct {
+	Posts    []*Post
+	Comments []*Comment
+}
+
+// PostAndComments is a post and its comments.
+type PostAndComments struct {
+	Post     *Post      `json:"post"`
+	Comments []*Comment `json:"comments"`
+	More     *More      `json:"-"`
+}
+
+func (pc *PostAndComments) After() any {
+	if pc.HasMore() {
+		return pc
+	}
+	return nil
+}
+
+// Merge for PostAndComments doesn't do anything because everything is already achieved in api.Binding.Response
+func (pc *PostAndComments) Merge(postAndComments any) (err error) {
+	return
+}
+
+func (pc *PostAndComments) Count() int {
+	count := len(pc.Comments)
+	for _, comment := range pc.Comments {
+		count += comment.Count()
+	}
+	return count
+}
+
+// UnmarshalJSON implements the json.Unmarshaler interface.
+// When getting a sticky post, you get an array of 2 Listings
+// The 1st one contains the single post in its children array
+// The 2nd one contains the comments to the post
+func (pc *PostAndComments) UnmarshalJSON(data []byte) error {
+	var root [2]Thing
+
+	err := json.Unmarshal(data, &root)
+	if err != nil {
+		return err
+	}
+
+	listing1 := root[0].Data.(*Listing)
+	listing2 := root[1].Data.(*Listing)
+
+	pc.Post = listing1.Children.Posts[0]
+	pc.Comments = listing2.Children.Comments
+	if len(listing2.Children.Mores) > 0 {
+		pc.More = listing2.Children.Mores[0]
+	}
+
+	return nil
+}
+
+// HasMore determines whether the post has more replies to load in its reply tree.
+func (pc *PostAndComments) HasMore() bool {
+	return pc.More != nil && len(pc.More.Children) > 0
+}
+
+func (pc *PostAndComments) addCommentToTree(comment *Comment) {
+	if pc.Post.FullID == comment.ParentID {
+		pc.Comments = append(pc.Comments, comment)
+		return
+	}
+
+	for _, reply := range pc.Comments {
+		reply.addCommentToReplies(comment)
+	}
+}
+
+func (pc *PostAndComments) addMoreToTree(more *More) {
+	if pc.Post.FullID == more.ParentID {
+		pc.More = more
+	}
+
+	for _, reply := range pc.Comments {
+		reply.addMoreToReplies(more)
+	}
 }

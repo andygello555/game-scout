@@ -19,6 +19,7 @@ import (
 	"github.com/andygello555/game-scout/steamcmd"
 	task "github.com/andygello555/game-scout/tasks"
 	myTwitter "github.com/andygello555/game-scout/twitter"
+	"github.com/andygello555/gotils/v2/numbers"
 	"github.com/andygello555/gotils/v2/slices"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
@@ -1435,15 +1436,39 @@ func main() {
 						return cli.NewExitError(err.Error(), 1)
 					}
 
-					if c.Int("pages") > 0 {
+					if numbers.Abs(c.Int("pages")) > 0 {
 						var paginator api.Paginator[any, any]
 						if paginator, err = bindingWrapper.Paginator(reddit.API.Client, time.Millisecond*500, args...); err != nil {
 							return cli.NewExitError(err.Error(), 1)
 						}
-						if response, err = paginator.Pages(c.Int("pages")); err != nil {
+
+						if c.Int("pages") > 0 {
+							response, err = paginator.Pages(c.Int("pages"))
+						} else {
+							response, err = paginator.All()
+						}
+
+						if err != nil {
 							return cli.NewExitError(err.Error(), 1)
 						}
-						fmt.Println("paginator items:", reflect.ValueOf(response).Len())
+
+						paginatorItems := "N/A"
+						if lenable, ok := response.(api.Lenable); ok {
+							paginatorItems = strconv.Itoa(lenable.Len())
+						} else {
+							val := reflect.ValueOf(response)
+							switch val.Kind() {
+							case reflect.Array, reflect.Chan, reflect.Map, reflect.Slice, reflect.String:
+								paginatorItems = strconv.Itoa(val.Len())
+							case reflect.Ptr:
+								if val.Type().Elem().Kind() == reflect.Array {
+									paginatorItems = strconv.Itoa(val.Len())
+								}
+							default:
+								break
+							}
+						}
+						fmt.Println("paginator items:", paginatorItems)
 					} else {
 						if response, err = bindingWrapper.Execute(reddit.API.Client, args...); err != nil {
 							return cli.NewExitError(err.Error(), 1)

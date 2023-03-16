@@ -18,7 +18,6 @@ var API = api.NewAPI(nil, api.Schema{
 			"password":   {client.Config.RedditPassword()},
 		}
 		req, _ := http.NewRequest(http.MethodPost, "https://www.reddit.com/api/v1/access_token", strings.NewReader(data.Encode()))
-		req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 		req.SetBasicAuth(client.Config.RedditPersonalUseScript(), client.Config.RedditSecret())
 		return api.HTTPRequest{Request: req}
 	}).SetResponseMethod(func(binding api.Binding[accessTokenResponse, AccessToken], response accessTokenResponse, args ...any) AccessToken {
@@ -38,11 +37,11 @@ var API = api.NewAPI(nil, api.Schema{
 		return api.HTTPRequest{Request: req}
 	}).SetName("me")),
 
-	"top": api.WrapBinding(api.NewBindingChain(func(binding api.Binding[listingWrapper, Listings], args ...any) (request api.Request) {
+	"top": api.WrapBinding(api.NewBindingChain(func(binding api.Binding[listingWrapper, *Listing], args ...any) (request api.Request) {
 		subreddit := args[0].(string)
 		timePeriod := args[1].(TimePeriod)
-		after := args[2].(string)
-		limit := args[3].(int)
+		limit := args[2].(int)
+		after := args[3].(string)
 		req, _ := http.NewRequest(
 			http.MethodGet,
 			fmt.Sprintf(
@@ -52,14 +51,109 @@ var API = api.NewAPI(nil, api.Schema{
 			http.NoBody,
 		)
 		return api.HTTPRequest{Request: req}
-	}).SetResponseMethod(func(binding api.Binding[listingWrapper, Listings], response listingWrapper, args ...any) Listings {
-		return []Listing{response.Data}
-	}).SetParamsMethod(func(binding api.Binding[listingWrapper, Listings]) []api.BindingParam {
+	}).SetResponseMethod(func(binding api.Binding[listingWrapper, *Listing], response listingWrapper, args ...any) *Listing {
+		return &response.Data
+	}).SetParamsMethod(func(binding api.Binding[listingWrapper, *Listing]) []api.BindingParam {
 		return api.Params(
 			"subreddit", "", true,
 			"timePeriod", Day,
-			"after", "",
 			"limit", 25,
+			"after", "",
 		)
 	}).SetPaginated(true).SetName("top")),
+
+	"comments": api.WrapBinding(api.NewBindingChain(func(binding api.Binding[commentResponse, *PostAndComments], args ...any) (request api.Request) {
+		article := args[0].(string)
+		subreddit := args[1].(*string)
+		pc := args[2].(*PostAndComments)
+
+		subredditURL := ""
+		if subreddit != nil {
+			subredditURL = fmt.Sprintf("r/%s/", *subreddit)
+		}
+
+		// If we are not requesting more comments from an existing thread then we will fetch the comments for a thread.
+		if pc == nil {
+			req, _ := http.NewRequest(
+				http.MethodGet,
+				fmt.Sprintf("https://oauth.reddit.com/%scomments/%s.json", subredditURL, article),
+				http.NoBody,
+			)
+			return api.HTTPRequest{Request: req}
+		}
+
+		postID := pc.Post.FullID
+		commentIDs := pc.More.Children
+
+		form := url.Values{}
+		form.Set("api_type", "json")
+		form.Set("link_id", postID)
+		form.Set("children", strings.Join(commentIDs, ","))
+
+		// This was originally a GET, but with POST you can send a bigger payload
+		// since it's in the body and not the URI.
+		req, _ := http.NewRequest(http.MethodPost, "https://oauth.reddit.com/api/morechildren.json", strings.NewReader(form.Encode()))
+		return api.HTTPRequest{Request: req}
+	}).SetResponseMethod(func(binding api.Binding[commentResponse, *PostAndComments], response commentResponse, args ...any) *PostAndComments {
+		pc := args[2].(*PostAndComments)
+		if pc != nil {
+			// We merge the mores back into the PostAndComments that was passed in through args
+			response.postAndComments = pc
+			comments := response.more.JSON.Data.Things.Comments
+			for _, c := range comments {
+				response.postAndComments.addCommentToTree(c)
+			}
+
+			noMore := true
+
+			mores := response.more.JSON.Data.Things.Mores
+			for _, m := range mores {
+				if strings.HasPrefix(m.ParentID, kindPost+"_") {
+					noMore = false
+				}
+				response.postAndComments.addMoreToTree(m)
+			}
+
+			if noMore {
+				response.postAndComments.More = nil
+			}
+		}
+		return response.postAndComments
+	}).SetParamsMethod(func(binding api.Binding[commentResponse, *PostAndComments]) []api.BindingParam {
+		return api.Params(
+			"article", "", true,
+			"subreddit", (*string)(nil),
+			"after", (*PostAndComments)(nil),
+		)
+	}).SetPaginated(true).SetName("comments")),
+
+	"user_where": api.WrapBinding(api.NewBindingChain(func(binding api.Binding[listingWrapper, *Listing], args ...any) (request api.Request) {
+		username := args[0].(string)
+		where := args[1].(UserWhereType)
+		sort := args[2].(Sort)
+		timePeriod := args[3].(TimePeriod)
+		limit := args[4].(int)
+		after := args[5].(string)
+
+		req, _ := http.NewRequest(
+			http.MethodGet,
+			fmt.Sprintf(
+				"https://oauth.reddit.com/user/%s/%s.json?sort=%s&t=%s&limit=%d&after=%s",
+				username, where, sort, timePeriod, limit, after,
+			),
+			http.NoBody,
+		)
+		return api.HTTPRequest{Request: req}
+	}).SetResponseMethod(func(binding api.Binding[listingWrapper, *Listing], response listingWrapper, args ...any) *Listing {
+		return &response.Data
+	}).SetParamsMethod(func(binding api.Binding[listingWrapper, *Listing]) []api.BindingParam {
+		return api.Params(
+			"username", "", true,
+			"where", Overview, true,
+			"sort", Hot,
+			"timePeriod", Day,
+			"limit", 25,
+			"after", "",
+		)
+	}).SetPaginated(true).SetName("user_where")),
 })

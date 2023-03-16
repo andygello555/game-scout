@@ -17,6 +17,20 @@ type Afterable interface {
 	After() any
 }
 
+// Mergeable denotes whether a return type can be merged in a Paginator for a Binding. Instances of Mergeable can be
+// used instead of reflect.Slice or reflect.Array types as a return type for a Paginator.
+type Mergeable interface {
+	// Merge merges the given value into the Mergeable instance.
+	Merge(similar any) error
+	// HasMore returns true if there are more pages to fetch.
+	HasMore() bool
+}
+
+// Lenable is an interface that provides the Len interface for calculating the length of things.
+type Lenable interface {
+	Len() int
+}
+
 type paginatorParamSet int
 
 const (
@@ -29,22 +43,22 @@ func (pps paginatorParamSet) String() string {
 	return strings.TrimPrefix(pps.Set().String(), "Set")
 }
 
-func (pps paginatorParamSet) GetPaginatorParamValue(params []BindingParam, resource any, page int) ([]any, error) {
+func (pps paginatorParamSet) GetPaginatorParamValue(params []BindingParam, resource any, page int) (map[string]any, error) {
 	switch pps {
 	case pageParamSet:
-		return []any{page}, nil
+		return map[string]any{"page": page}, nil
 	case afterParamSet:
 		if resource == nil {
 			for _, param := range params {
 				if param.name == "after" {
-					return []any{reflect.Zero(param.Type()).Interface()}, nil
+					return map[string]any{"after": reflect.Zero(param.Type()).Interface()}, nil
 				}
 			}
 			return nil, fmt.Errorf("cannot find \"after\" parameter in parameters to use zero value for nil resource")
 		}
 
 		if afterable, ok := resource.(Afterable); ok {
-			return []any{afterable.After()}, nil
+			return map[string]any{"after": afterable.After()}, nil
 		} else {
 			return nil, fmt.Errorf("cannot find next \"after\" parameter as return type %T is not Afterable", resource)
 		}
@@ -53,19 +67,32 @@ func (pps paginatorParamSet) GetPaginatorParamValue(params []BindingParam, resou
 	}
 }
 
-func (pps paginatorParamSet) InsertPaginatorParamValues(params []BindingParam, args []any, paginatorValues []any) []any {
+func (pps paginatorParamSet) InsertPaginatorParamValues(params []BindingParam, args []any, paginatorValues map[string]any) ([]any, error) {
 	ppsSet := pps.Set()
-	paramIdxs := make([]int, len(paginatorValues))
+	ppsSetUsed := mapset.NewSet[string]()
 
-	i := 0
+	// Here we find out what indices that the paginator args should be passed in relative to the ordering of the params.
 	for paramNo, param := range params {
-		if ppsSet.Contains(param.name) {
-			paramIdxs[i] = paramNo
-			i++
+		if pagVal, ok := paginatorValues[param.name]; ok {
+			args = slices.AddElems(args, []any{pagVal}, paramNo)
+			ppsSetUsed.Add(param.name)
+		} else if paramNo >= len(args) {
+			if param.required {
+				return args, fmt.Errorf(
+					"required parameter %q (no. %d) cannot be defaulted and not all paginator args have been inserted yet (%s remaining)",
+					param.name, paramNo, ppsSet.Difference(ppsSetUsed),
+				)
+			} else {
+				args = slices.AddElems(args, []any{param.defaultValue}, paramNo)
+			}
+		}
+
+		// If we have marked all paginator arguments to be inserted then we can break out of the loop
+		if ppsSet.Equal(ppsSetUsed) {
+			break
 		}
 	}
-	args = slices.AddElems(args, paginatorValues, paramIdxs...)
-	return args
+	return args, nil
 }
 
 func (pps paginatorParamSet) Set() mapset.Set[string] {
@@ -128,8 +155,20 @@ type typedPaginator[ResT any, RetT any] struct {
 	currentPage            RetT
 }
 
+func (p *typedPaginator[ResT, RetT]) mergeable() bool {
+	return p.returnType.Implements(reflect.TypeOf((*Mergeable)(nil)).Elem())
+}
+
 func (p *typedPaginator[ResT, RetT]) Continue() bool {
-	return p.page == 1 || reflect.ValueOf(p.currentPage).Len() > 0
+	hasMore := false
+	if p.returnType.Implements(reflect.TypeOf((*Mergeable)(nil)).Elem()) {
+		if mergeable, ok := any(p.currentPage).(Mergeable); ok {
+			hasMore = mergeable.HasMore()
+		}
+	} else {
+		hasMore = reflect.ValueOf(p.currentPage).Len() > 0
+	}
+	return p.page == 1 || hasMore
 }
 
 func (p *typedPaginator[ResT, RetT]) Page() RetT { return p.currentPage }
@@ -210,7 +249,7 @@ func paginatorCheckRateLimit(
 }
 
 func (p *typedPaginator[ResT, RetT]) Next() (err error) {
-	var paginatorValues []any
+	var paginatorValues map[string]any
 	if paginatorValues, err = p.paramSet.GetPaginatorParamValue(p.params, p.currentPage, p.page); err != nil {
 		err = errors.Wrapf(
 			err, "cannot get paginator param values from %T value on page %d",
@@ -218,7 +257,14 @@ func (p *typedPaginator[ResT, RetT]) Next() (err error) {
 		)
 		return
 	}
-	args := p.paramSet.InsertPaginatorParamValues(p.params, p.args, paginatorValues)
+
+	var args []any
+	if args, err = p.paramSet.InsertPaginatorParamValues(p.params, p.args, paginatorValues); err != nil {
+		err = errors.Wrapf(
+			err, "cannot insert paginator values (%v) into arguments for page %d",
+			paginatorValues, p.page,
+		)
+	}
 
 	var ignoreFirstRequest bool
 	execute := func() (ret RetT, err error) {
@@ -254,22 +300,46 @@ func (p *typedPaginator[ResT, RetT]) Next() (err error) {
 
 func (p *typedPaginator[ResT, RetT]) All() (RetT, error) {
 	pages := reflect.New(p.returnType).Elem()
+	mergeable := p.mergeable()
 	for p.Continue() {
 		if err := p.Next(); err != nil {
 			return pages.Interface().(RetT), err
 		}
-		pages = reflect.AppendSlice(pages, reflect.ValueOf(p.Page()))
+
+		if mergeable {
+			if p.page == 2 {
+				pages = reflect.ValueOf(p.currentPage)
+			} else {
+				if err := pages.Interface().(Mergeable).Merge(p.Page()); err != nil {
+					return pages.Interface().(RetT), err
+				}
+			}
+		} else {
+			pages = reflect.AppendSlice(pages, reflect.ValueOf(p.Page()))
+		}
 	}
 	return pages.Interface().(RetT), nil
 }
 
 func (p *typedPaginator[ResT, RetT]) Pages(pageNo int) (RetT, error) {
 	pages := reflect.New(p.returnType).Elem()
+	mergeable := p.mergeable()
 	for p.Continue() && p.page <= pageNo {
 		if err := p.Next(); err != nil {
 			return pages.Interface().(RetT), err
 		}
-		pages = reflect.AppendSlice(pages, reflect.ValueOf(p.Page()))
+
+		if mergeable {
+			if p.page == 2 {
+				pages = reflect.ValueOf(p.currentPage)
+			} else {
+				if err := pages.Interface().(Mergeable).Merge(p.Page()); err != nil {
+					return pages.Interface().(RetT), err
+				}
+			}
+		} else {
+			pages = reflect.AppendSlice(pages, reflect.ValueOf(p.Page()))
+		}
 	}
 	return pages.Interface().(RetT), nil
 }
@@ -322,16 +392,21 @@ func NewTypedPaginator[ResT any, RetT any](client Client, waitTime time.Duration
 	}
 
 	returnType := reflect.ValueOf(new(RetT)).Elem().Type()
-	switch returnType.Kind() {
-	case reflect.Slice, reflect.Array:
+	if returnType.Implements(reflect.TypeOf((*Mergeable)(nil)).Elem()) {
 		p.returnType = returnType
-		paginator = p
-	default:
-		err = fmt.Errorf(
-			"cannot create typed Paginator for Binding[%v, %v] that has a non-slice/array return type",
-			reflect.ValueOf(new(ResT)).Elem().Type(), returnType,
-		)
+	} else {
+		switch returnType.Kind() {
+		case reflect.Slice, reflect.Array:
+			p.returnType = returnType
+		default:
+			err = fmt.Errorf(
+				"cannot create typed Paginator for Binding[%v, %v] that has a non-slice/array return type",
+				reflect.ValueOf(new(ResT)).Elem().Type(), returnType,
+			)
+			return
+		}
 	}
+	paginator = p
 	return
 }
 
@@ -350,11 +425,26 @@ type paginator struct {
 	currentPage            any
 }
 
-func (p *paginator) Continue() bool { return p.page == 1 || reflect.ValueOf(p.currentPage).Len() > 0 }
-func (p *paginator) Page() any      { return p.currentPage }
+func (p *paginator) mergeable() bool {
+	return p.returnType.Implements(reflect.TypeOf((*Mergeable)(nil)).Elem())
+}
+
+func (p *paginator) Continue() bool {
+	hasMore := false
+	if p.returnType.Implements(reflect.TypeOf((*Mergeable)(nil)).Elem()) {
+		if mergeable, ok := p.currentPage.(Mergeable); ok {
+			hasMore = mergeable.HasMore()
+		}
+	} else {
+		hasMore = reflect.ValueOf(p.currentPage).Len() > 0
+	}
+	return p.page == 1 || hasMore
+}
+
+func (p *paginator) Page() any { return p.currentPage }
 
 func (p *paginator) Next() (err error) {
-	var paginatorValues []any
+	var paginatorValues map[string]any
 	if paginatorValues, err = p.paramSet.GetPaginatorParamValue(p.params, p.currentPage, p.page); err != nil {
 		err = errors.Wrapf(
 			err, "cannot get paginator param values from %T value on page %d",
@@ -362,9 +452,16 @@ func (p *paginator) Next() (err error) {
 		)
 		return
 	}
-	args := p.paramSet.InsertPaginatorParamValues(p.params, p.args, paginatorValues)
-	fmt.Println("paginatorValues", paginatorValues, len(paginatorValues))
-	fmt.Println("args", args, len(args))
+
+	var args []any
+	if args, err = p.paramSet.InsertPaginatorParamValues(p.params, p.args, paginatorValues); err != nil {
+		err = errors.Wrapf(
+			err, "cannot insert paginator values (%v) into arguments for page %d",
+			paginatorValues, p.page,
+		)
+	}
+	//fmt.Println("paginatorValues", paginatorValues, len(paginatorValues))
+	//fmt.Println("args", args, len(args))
 
 	var ignoreFirstRequest bool
 	execute := func() (err error) {
@@ -403,22 +500,47 @@ func (p *paginator) Next() (err error) {
 
 func (p *paginator) All() (any, error) {
 	pages := reflect.New(p.returnType).Elem()
+	mergeable := p.mergeable()
 	for p.Continue() {
 		if err := p.Next(); err != nil {
 			return pages, err
 		}
-		pages = reflect.AppendSlice(pages, reflect.ValueOf(p.Page()))
+
+		if mergeable {
+			// If we have just fetched the first page then we will set pages to be the value of the first page
+			if p.page == 2 {
+				pages = reflect.ValueOf(p.currentPage)
+			} else {
+				if err := pages.Interface().(Mergeable).Merge(p.Page()); err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			pages = reflect.AppendSlice(pages, reflect.ValueOf(p.Page()))
+		}
 	}
 	return pages.Interface(), nil
 }
 
 func (p *paginator) Pages(pageNo int) (any, error) {
 	pages := reflect.New(p.returnType).Elem()
+	mergeable := p.mergeable()
 	for p.Continue() && p.page <= pageNo {
 		if err := p.Next(); err != nil {
 			return pages, err
 		}
-		pages = reflect.AppendSlice(pages, reflect.ValueOf(p.Page()))
+
+		if mergeable {
+			if p.page == 2 {
+				pages = reflect.ValueOf(p.currentPage)
+			} else {
+				if err := pages.Interface().(Mergeable).Merge(p.Page()); err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			pages = reflect.AppendSlice(pages, reflect.ValueOf(p.Page()))
+		}
 	}
 	return pages.Interface(), nil
 }
@@ -450,15 +572,20 @@ func NewPaginator(client Client, waitTime time.Duration, binding BindingWrapper,
 		return
 	}
 
-	switch binding.returnType.Kind() {
-	case reflect.Slice, reflect.Array:
+	if binding.returnType.Implements(reflect.TypeOf((*Mergeable)(nil)).Elem()) {
 		p.returnType = binding.returnType
-		pag = p
-	default:
-		err = fmt.Errorf(
-			"cannot create a Paginator for Binding[%v, %v] that has a non-slice/array return type",
-			binding.responseType, binding.returnType,
-		)
+	} else {
+		switch binding.returnType.Kind() {
+		case reflect.Slice, reflect.Array:
+			p.returnType = binding.returnType
+		default:
+			err = fmt.Errorf(
+				"cannot create a Paginator for Binding[%v, %v] that has a non-slice/array return type",
+				binding.responseType, binding.returnType,
+			)
+			return
+		}
 	}
+	pag = p
 	return
 }
