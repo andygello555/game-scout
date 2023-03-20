@@ -8,6 +8,7 @@ import (
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
+	"github.com/andygello555/game-scout/reddit"
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	"github.com/andygello555/gotils/v2/numbers"
 	"github.com/andygello555/gotils/v2/slices"
@@ -829,5 +830,21 @@ func ExampleStateLoadOrCreate() {
 func TestCreateInitialSteamApps(t *testing.T) {
 	if err := models.CreateInitialSteamApps(db.DB); err != nil {
 		t.Errorf("Error occurred whilst running CreateInitialSteamApps: %v", err)
+	}
+}
+
+func TestSubredditFetch(t *testing.T) {
+	reddit.CreateClient(globalConfig.Reddit)
+	const subreddit = "GameDevelopment"
+	state := StateInMemory()
+
+	if postsCommentsAndUsers, err := SubredditFetch(subreddit, state); err != nil {
+		t.Errorf("Error occurred whilst fetching posts, comments, and users for top in %q: %v", subreddit, err)
+	} else {
+		var b []byte
+		if b, err = json.MarshalIndent(postsCommentsAndUsers, "", "  "); err != nil {
+			t.Errorf("Could not marshal []*PostCommentsAndUser to JSON: %v", err)
+		}
+		fmt.Println(string(b))
 	}
 }

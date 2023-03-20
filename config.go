@@ -635,6 +635,17 @@ type ScrapeConstants struct {
 	ScoutTimeout Duration `json:"scout_timeout"`
 	// TransformTweetWorkers is the number of transformTweetWorker that will be spun up in the DiscoveryBatch.
 	TransformTweetWorkers int `json:"transform_tweet_workers"`
+	// RedditSubredditScrapeWorkers is the number of redditSubredditScraper workers to start in RedditDiscoveryPhase.
+	RedditSubredditScrapeWorkers int `json:"reddit_subreddit_scrape_workers"`
+	// RedditBindingPaginatorWaitTime is the time is the "waitTime" to supply to any api.Paginator created for the
+	// Reddit api.API.
+	RedditBindingPaginatorWaitTime Duration `json:"reddit_binding_paginator_wait_time"`
+	// RedditCommentsPerPost is the number of comments to retrieve per-post in SubredditFetch.
+	RedditCommentsPerPost int `json:"reddit_comments_per_post"`
+	// RedditPostsPerSubreddit is the number of posts to process per-subreddit. If there are more posts than this in top
+	// for the current week then we will divide the number of total posts available with RedditPostsPerSubreddit and use
+	// this number as the number of posts to skip before processing another post.
+	RedditPostsPerSubreddit int `json:"reddit_posts_per_subreddit"`
 	// UpdateDeveloperWorkers is the number of updateDeveloperWorker that will be spun up in the update phase.
 	UpdateDeveloperWorkers int `json:"update_developer_workers"`
 	// MaxUpdateTweets is the maximum number of tweets fetched in the update phase.

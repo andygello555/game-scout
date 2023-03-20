@@ -3,9 +3,11 @@ package main
 import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
+	"github.com/andygello555/game-scout/api"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
 	myErrors "github.com/andygello555/game-scout/errors"
+	"github.com/andygello555/game-scout/reddit"
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	"github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
@@ -258,6 +260,143 @@ func DiscoveryBatch(
 		} else {
 			log.WARNING.Printf("%scouldn't transform tweet no. %d: %s. Skipping...", logPrefix, result.tweetNo, err.Error())
 		}
+	}
+	return
+}
+
+type PostCommentsAndUser struct {
+	*reddit.PostAndComments
+	*reddit.User
+}
+
+// SubredditFetch will retrieve the top posts, with their comments, and OP's.
+func SubredditFetch(subreddit string, state *ScoutState) (postsCommentsAndUsers []*PostCommentsAndUser, err error) {
+	var paginator api.Paginator[any, any]
+	if paginator, err = reddit.API.Paginator(
+		"top", globalConfig.Scrape.Constants.RedditBindingPaginatorWaitTime.Duration,
+		subreddit, reddit.Week, 100,
+	); err != nil {
+		err = myErrors.TemporaryWrap(false, err, "could not create Paginator for \"top\" Reddit binding")
+		return
+	}
+
+	start := time.Now()
+	log.INFO.Printf("Retrieving all top posts in the last week for %q", subreddit)
+	var listing any
+	if listing, err = paginator.All(); err != nil {
+		log.ERROR.Printf("Could not find all top posts for %q: %v", subreddit, err)
+	}
+
+	posts := listing.(*reddit.Listing).Children.Posts
+	log.INFO.Printf(
+		"Found %d top posts for the week for %q in %s",
+		len(posts), subreddit, time.Now().Sub(start).String(),
+	)
+
+	skipPosts := 0
+	if len(posts) > globalConfig.Scrape.Constants.RedditPostsPerSubreddit {
+		skipPosts = len(posts) / globalConfig.Scrape.Constants.RedditPostsPerSubreddit
+	}
+
+	postsCommentsAndUsers = make([]*PostCommentsAndUser, 0, len(posts))
+	for _, post := range posts {
+		start = time.Now()
+		log.INFO.Printf(
+			"Fetching comments and user for post %q (%s) on subreddit %q",
+			post.Title, post.ID, subreddit,
+		)
+
+		if paginator, err = reddit.API.Paginator(
+			"comments", globalConfig.Scrape.Constants.RedditBindingPaginatorWaitTime.Duration,
+			post.ID, &subreddit,
+		); err != nil {
+			err = myErrors.TemporaryWrapf(
+				false, err, "could not create Paginator for \"comments\" for post %q (%s) in %q",
+				post.Title, post.ID, subreddit,
+			)
+			return
+		}
+
+		var postAndComments any
+		if postAndComments, err = paginator.Until(func(paginator api.Paginator[any, any]) bool {
+			return paginator.Page() == nil || paginator.Page().(*reddit.PostAndComments).Count() < globalConfig.Scrape.Constants.RedditCommentsPerPost
+		}); err != nil {
+			log.ERROR.Printf(
+				"Could not find %d comments for post %q (%s), only found %d: %v",
+				globalConfig.Scrape.Constants.RedditCommentsPerPost, post.Title, post.ID, postAndComments.(*reddit.PostAndComments).Count(), err,
+			)
+		}
+
+		postCommentsAndUser := PostCommentsAndUser{PostAndComments: postAndComments.(*reddit.PostAndComments)}
+		if postCommentsAndUser.PostAndComments == nil {
+			log.WARNING.Printf("PostAndComments is nil, which means we couldn't get past the first page")
+			continue
+		}
+
+		log.INFO.Printf("Found %d comments for post %q (%s) in %s", postCommentsAndUser.Count(), post.Title, post.ID, time.Now().Sub(start))
+
+		var user any
+		if user, err = reddit.API.Execute("user_about", post.Author); err != nil {
+			log.WARNING.Printf("Could not get user_about for post %q (%s)'s author %q: %v", post.Title, post.ID, post.Author, err)
+			continue
+		}
+		postCommentsAndUser.User = user.(*reddit.User)
+		postsCommentsAndUsers = append(postsCommentsAndUsers, &postCommentsAndUser)
+	}
+	return
+}
+
+type redditSubredditScrapeJob struct {
+	subreddit string
+	state     *ScoutState
+}
+
+type redditSubredditScrapeResult struct {
+	redditSubredditScrapeJob
+	postsCommentsAndUsers []*PostCommentsAndUser
+	err                   error
+}
+
+func redditSubredditScraper(jobs <-chan redditSubredditScrapeJob, results chan<- redditSubredditScrapeResult) {
+	for job := range jobs {
+		result := redditSubredditScrapeResult{redditSubredditScrapeJob: job}
+		result.postsCommentsAndUsers, result.err = SubredditFetch(job.subreddit, job.state)
+		results <- result
+	}
+}
+
+// RedditDiscoveryPhase will iterate over each subreddit in the config and find all the top posts for them. It will then
+// iterate over each post found, and fetch a max of 100 comments for each post. From these comments, it will filter any
+// out that are not the OP's. It will then look in the body of these comments for a link to any game store pages.
+//
+// This can run in parallel to DiscoveryPhase.
+func RedditDiscoveryPhase(state *ScoutState, gameScrapers *models.StorefrontScrapers[string]) (err error) {
+	subreddits := globalConfig.Reddit.RedditSubreddits()
+	jobs := make(chan redditSubredditScrapeJob, len(subreddits))
+	results := make(chan redditSubredditScrapeResult, len(subreddits))
+
+	for i := 0; i < globalConfig.Scrape.Constants.RedditSubredditScrapeWorkers; i++ {
+		go redditSubredditScraper(jobs, results)
+	}
+
+	for _, subreddit := range subreddits {
+		jobs <- redditSubredditScrapeJob{
+			subreddit: subreddit,
+			state:     StateInMemory(),
+		}
+	}
+
+	for r := 0; r < len(subreddits); r++ {
+		result := <-results
+		if result.err != nil {
+			log.ERROR.Printf("Subreddit %q could not be scraped: %v", result.subreddit, result.err)
+			if !myErrors.IsTemporary(result.err) {
+				err = errors.Wrap(result.err, "reddit scrape could not recover from non-temp error")
+				return
+			}
+			continue
+		}
+
 	}
 	return
 }

@@ -138,6 +138,8 @@ type Paginator[ResT any, RetT any] interface {
 	All() (RetT, error)
 	// Pages fetches the given number of pages from the Binding whilst appending each response slice together.
 	Pages(pages int) (RetT, error)
+	// Until keeps fetching pages until there are no more pages, or the given predicate function returns false.
+	Until(predicate func(paginator Paginator[ResT, RetT]) bool) (RetT, error)
 }
 
 type typedPaginator[ResT any, RetT any] struct {
@@ -298,24 +300,34 @@ func (p *typedPaginator[ResT, RetT]) Next() (err error) {
 	return
 }
 
+func (p *typedPaginator[ResT, RetT]) merge(pages reflect.Value) (reflect.Value, error) {
+	mergeable := p.mergeable()
+	if mergeable {
+		if p.page == 2 {
+			pages = reflect.ValueOf(p.currentPage)
+		} else {
+			if err := pages.Interface().(Mergeable).Merge(p.Page()); err != nil {
+				return pages, err
+			}
+		}
+	} else {
+		pages = reflect.AppendSlice(pages, reflect.ValueOf(p.Page()))
+	}
+	return pages, nil
+}
+
 func (p *typedPaginator[ResT, RetT]) All() (RetT, error) {
 	pages := reflect.New(p.returnType).Elem()
-	mergeable := p.mergeable()
 	for p.Continue() {
-		if err := p.Next(); err != nil {
+		var err error
+		// Fetch the next page...
+		if err = p.Next(); err != nil {
 			return pages.Interface().(RetT), err
 		}
 
-		if mergeable {
-			if p.page == 2 {
-				pages = reflect.ValueOf(p.currentPage)
-			} else {
-				if err := pages.Interface().(Mergeable).Merge(p.Page()); err != nil {
-					return pages.Interface().(RetT), err
-				}
-			}
-		} else {
-			pages = reflect.AppendSlice(pages, reflect.ValueOf(p.Page()))
+		// ...merge the current page into the aggregation of all pages
+		if pages, err = p.merge(pages); err != nil {
+			return pages.Interface().(RetT), err
 		}
 	}
 	return pages.Interface().(RetT), nil
@@ -323,22 +335,33 @@ func (p *typedPaginator[ResT, RetT]) All() (RetT, error) {
 
 func (p *typedPaginator[ResT, RetT]) Pages(pageNo int) (RetT, error) {
 	pages := reflect.New(p.returnType).Elem()
-	mergeable := p.mergeable()
 	for p.Continue() && p.page <= pageNo {
-		if err := p.Next(); err != nil {
+		var err error
+		// Fetch the next page...
+		if err = p.Next(); err != nil {
 			return pages.Interface().(RetT), err
 		}
 
-		if mergeable {
-			if p.page == 2 {
-				pages = reflect.ValueOf(p.currentPage)
-			} else {
-				if err := pages.Interface().(Mergeable).Merge(p.Page()); err != nil {
-					return pages.Interface().(RetT), err
-				}
-			}
-		} else {
-			pages = reflect.AppendSlice(pages, reflect.ValueOf(p.Page()))
+		// ...merge the current page into the aggregation of all pages
+		if pages, err = p.merge(pages); err != nil {
+			return pages.Interface().(RetT), err
+		}
+	}
+	return pages.Interface().(RetT), nil
+}
+
+func (p *typedPaginator[ResT, RetT]) Until(predicate func(paginator Paginator[ResT, RetT]) bool) (RetT, error) {
+	pages := reflect.New(p.returnType).Elem()
+	for p.Continue() && predicate(p) {
+		var err error
+		// Fetch the next page...
+		if err = p.Next(); err != nil {
+			return pages.Interface().(RetT), err
+		}
+
+		// ...merge the current page into the aggregation of all pages
+		if pages, err = p.merge(pages); err != nil {
+			return pages.Interface().(RetT), err
 		}
 	}
 	return pages.Interface().(RetT), nil
@@ -498,25 +521,35 @@ func (p *paginator) Next() (err error) {
 	return
 }
 
+func (p *paginator) merge(pages reflect.Value) (reflect.Value, error) {
+	mergeable := p.mergeable()
+	if mergeable {
+		// If we have just fetched the first page then we will set pages to be the value of the first page
+		if p.page == 2 {
+			pages = reflect.ValueOf(p.currentPage)
+		} else {
+			if err := pages.Interface().(Mergeable).Merge(p.Page()); err != nil {
+				return reflect.ValueOf(nil), err
+			}
+		}
+	} else {
+		pages = reflect.AppendSlice(pages, reflect.ValueOf(p.Page()))
+	}
+	return pages, nil
+}
+
 func (p *paginator) All() (any, error) {
 	pages := reflect.New(p.returnType).Elem()
-	mergeable := p.mergeable()
 	for p.Continue() {
-		if err := p.Next(); err != nil {
-			return pages, err
+		var err error
+		// Fetch the next page...
+		if err = p.Next(); err != nil {
+			return pages.Interface(), err
 		}
 
-		if mergeable {
-			// If we have just fetched the first page then we will set pages to be the value of the first page
-			if p.page == 2 {
-				pages = reflect.ValueOf(p.currentPage)
-			} else {
-				if err := pages.Interface().(Mergeable).Merge(p.Page()); err != nil {
-					return nil, err
-				}
-			}
-		} else {
-			pages = reflect.AppendSlice(pages, reflect.ValueOf(p.Page()))
+		// ...merge the current page into the aggregation of all pages
+		if pages, err = p.merge(pages); err != nil {
+			return pages.Interface(), err
 		}
 	}
 	return pages.Interface(), nil
@@ -524,22 +557,33 @@ func (p *paginator) All() (any, error) {
 
 func (p *paginator) Pages(pageNo int) (any, error) {
 	pages := reflect.New(p.returnType).Elem()
-	mergeable := p.mergeable()
 	for p.Continue() && p.page <= pageNo {
-		if err := p.Next(); err != nil {
-			return pages, err
+		var err error
+		// Fetch the next page...
+		if err = p.Next(); err != nil {
+			return pages.Interface(), err
 		}
 
-		if mergeable {
-			if p.page == 2 {
-				pages = reflect.ValueOf(p.currentPage)
-			} else {
-				if err := pages.Interface().(Mergeable).Merge(p.Page()); err != nil {
-					return nil, err
-				}
-			}
-		} else {
-			pages = reflect.AppendSlice(pages, reflect.ValueOf(p.Page()))
+		// ...merge the current page into the aggregation of all pages
+		if pages, err = p.merge(pages); err != nil {
+			return pages.Interface(), err
+		}
+	}
+	return pages.Interface(), nil
+}
+
+func (p *paginator) Until(predicate func(paginator Paginator[any, any]) bool) (any, error) {
+	pages := reflect.New(p.returnType).Elem()
+	for p.Continue() && predicate(p) {
+		var err error
+		// Fetch the next page...
+		if err = p.Next(); err != nil {
+			return pages.Interface(), err
+		}
+
+		// ...merge the current page into the aggregation of all pages
+		if pages, err = p.merge(pages); err != nil {
+			return pages.Interface(), err
 		}
 	}
 	return pages.Interface(), nil

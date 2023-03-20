@@ -414,15 +414,6 @@ func (t *Things) add(things ...Thing) {
 	}
 }
 
-type Listings []Listing
-
-func (l Listings) After() any {
-	if len(l) > 0 {
-		return l[len(l)-1].After()
-	}
-	return ""
-}
-
 type Listing struct {
 	after     *string `json:"after"`
 	Before    string  `json:"before"`
