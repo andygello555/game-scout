@@ -778,6 +778,10 @@ func (pc *PostAndComments) Merge(postAndComments any) (err error) {
 }
 
 func (pc *PostAndComments) Count() int {
+	if pc == nil {
+		return 0
+	}
+
 	count := len(pc.Comments)
 	for _, comment := range pc.Comments {
 		count += comment.Count()

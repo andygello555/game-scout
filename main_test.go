@@ -845,6 +845,6 @@ func TestSubredditFetch(t *testing.T) {
 		if b, err = json.MarshalIndent(postsCommentsAndUsers, "", "  "); err != nil {
 			t.Errorf("Could not marshal []*PostCommentsAndUser to JSON: %v", err)
 		}
-		fmt.Println(string(b))
+		fmt.Println(string(b), len(postsCommentsAndUsers))
 	}
 }

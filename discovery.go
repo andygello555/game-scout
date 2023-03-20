@@ -13,6 +13,7 @@ import (
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
+	"math"
 	"time"
 )
 
@@ -294,12 +295,32 @@ func SubredditFetch(subreddit string, state *ScoutState) (postsCommentsAndUsers 
 	)
 
 	skipPosts := 0
-	if len(posts) > globalConfig.Scrape.Constants.RedditPostsPerSubreddit {
-		skipPosts = len(posts) / globalConfig.Scrape.Constants.RedditPostsPerSubreddit
+	currentSkip := 0
+	postsPerSubreddit := globalConfig.Scrape.Constants.RedditPostsPerSubreddit
+	if len(posts) > postsPerSubreddit {
+		skipPosts = int(math.Round(float64(len(posts)) / float64(postsPerSubreddit)))
+		currentSkip = skipPosts - 1
+		log.WARNING.Printf(
+			"Because there are %d more total posts on %q (top weekly) than the limit of %d, we will skip every %s post",
+			len(posts)-postsPerSubreddit, subreddit, postsPerSubreddit, skipPosts,
+		)
 	}
 
 	postsCommentsAndUsers = make([]*PostCommentsAndUser, 0, len(posts))
 	for _, post := range posts {
+		if skipPosts > 0 && currentSkip != 0 {
+			log.WARNING.Printf(
+				"Skipping post %q (%s) on %q: currentSkip != 0 == %d",
+				post.Title, post.ID, subreddit, currentSkip,
+			)
+
+			currentSkip++
+			if currentSkip == skipPosts {
+				currentSkip = 0
+			}
+			continue
+		}
+
 		start = time.Now()
 		log.INFO.Printf(
 			"Fetching comments and user for post %q (%s) on subreddit %q",
@@ -343,6 +364,7 @@ func SubredditFetch(subreddit string, state *ScoutState) (postsCommentsAndUsers 
 		postCommentsAndUser.User = user.(*reddit.User)
 		postsCommentsAndUsers = append(postsCommentsAndUsers, &postCommentsAndUser)
 	}
+	log.INFO.Printf("Gathered OPs and comments for %d/%d posts for subreddit %q", len(postsCommentsAndUsers), len(posts), subreddit)
 	return
 }
 

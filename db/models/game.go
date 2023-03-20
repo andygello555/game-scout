@@ -666,7 +666,7 @@ func (g *GameSteamStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, minD
 			return fmt.Errorf("cannot find \"type\" key in common details for %d", appID)
 		}
 		sofType := strings.ToLower(appType.(string))
-		log.INFO.Printf("App %v has type: %s", appID, g.Game.IsGame)
+		log.INFO.Printf("App %v IsGame = %t", appID, g.Game.IsGame)
 
 		// We exit out of the scrape if the Game is not a Game. This is so we can not waste anymore time with app.
 		if sofType != "game" {
