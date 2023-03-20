@@ -240,6 +240,7 @@ All configuration variables for game-scout exist in a `config.json` file that mu
     }
   },
   "SteamWebPipes": {
+    "Disable": false,
     "BinaryLocation": "ScoutWebPipes/bin/Debug/<OS_ARCH>/publish/ScoutWebPipes", 
     "Location": "ws://0.0.0.0:8181", 
     "DatabaseConnectionString": "", 
@@ -466,6 +467,7 @@ This contains the settings for the Steam web pipes co-process. This is an additi
 
 | Key                        | Type     | Description                                                                                                                                                                                               |
 |----------------------------|----------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `Disable`                  | `bool`   | Whether to disable the `ScoutWebPipes` co-process.                                                                                                                                                        |
 | `BinaryLocation`           | `string` | The relative location to the built `ScoutWebPipes`/`SteamWebPipes` binary                                                                                                                                 |
 | `Location`                 | `string` | The address on which to start the websocket                                                                                                                                                               |
 | `DatabaseConnectionString` | `string` | This is only provided for completeness for the `SteamWebPipes` process and is not used as we keep track of any [`models.SteamApp`s](db/models/steam_app.go) that we scrape in game-scout's PostgreSQL DB. |
