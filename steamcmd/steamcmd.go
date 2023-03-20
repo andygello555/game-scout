@@ -24,7 +24,7 @@ const (
 	// InteractivePrompt is the prompt that SteamCMD uses in interactive mode.
 	InteractivePrompt = "Steam>"
 	// ExpectTimeout is the timeout for the Expect calls.
-	ExpectTimeout = time.Second * 15
+	ExpectTimeout = time.Minute
 )
 
 // SteamCMD is a wrapper for the Steam CLI client (steamcmd). It can run a sequence of Command in both interactive and
