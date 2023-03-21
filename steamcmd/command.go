@@ -166,11 +166,11 @@ func CommandTypeFromString(s string) (CommandType, error) {
 }
 
 // CommandOutputValidator validates whether a Command has completed successfully by validating the output of the
-// Command.
-type CommandOutputValidator func([]byte) bool
+// Command as well as which try the command is currently on.
+type CommandOutputValidator func(tryNo int, output []byte) bool
 
 // CommandOutputParser parses the output of a Command to a more usable format. Usually, JSON (map[string]any).
-type CommandOutputParser func([]byte) (any, error)
+type CommandOutputParser func(output []byte) (any, error)
 
 // Command represents a command that can be executed in SteamCMD. User defined Command are possible, but users should
 // stick to executing Commands via their CommandType instead.
@@ -231,12 +231,16 @@ func (c *Command) Parse(out []byte) (any, error) {
 	return string(out), nil
 }
 
-// ValidateOutput of the Command by using the Validator of the Command. If this is nil then true will be returned.
-func (c *Command) ValidateOutput(out []byte) bool {
+// ValidateOutput of the Command by using the Validator of the Command. It also must be given the current try for the
+// Command. When SteamCMD is in interactive mode we might keep executing a Command until we can validate its output.
+//
+// If the Command.Validator is nil, then we will return tryNo > 0. This is useful for the Quit command that should be
+// executed at least once but has no output to validate.
+func (c *Command) ValidateOutput(tryNo int, out []byte) bool {
 	if c.Validator == nil {
-		return true
+		return tryNo > 0
 	}
-	return c.Validator(out)
+	return c.Validator(tryNo, out)
 }
 
 // commands contains the default Command bindings for SteamCMD.
@@ -254,15 +258,15 @@ var commands = map[CommandType]Command{
 			// Remove the header of the response
 			jsonBody := strings.TrimSpace(string(b)[indices[1]+1:])
 			//fmt.Println("jsonBody 1", strings.Join(strings.Split(jsonBody, "\r\n")[:200], "\r\n"))
-			//fmt.Println("jsonBody 1", jsonBody)
+			//fmt.Printf("jsonBody 1\n%q\n", jsonBody)
 			// Replace openings of json Objects with the correct syntax.
-			jsonBody = regexp.MustCompile(`"([^"]+)"\r\n\t+\{`).ReplaceAllString(jsonBody, "\"$1\": {")
+			jsonBody = regexp.MustCompile(`"([^"]+)"\r{0,2}\n\t+\{`).ReplaceAllString(jsonBody, "\"$1\": {")
 			//fmt.Println("jsonBody 2", strings.Join(strings.Split(jsonBody, "\r\n")[:200], "\r\n"))
-			//fmt.Println("jsonBody 2", jsonBody)
+			//fmt.Printf("jsonBody 2\n%q\n", jsonBody)
 			// Replace key-value pairs with proper JSON syntax
 			jsonBody = regexp.MustCompile(`"([^"]+)"\t\t"(([^\\]\\"|[^"])*?)"`).ReplaceAllString(jsonBody, "\"$1\": '''$2\n'''")
 			//fmt.Println("jsonBody 3", strings.Join(strings.Split(jsonBody, "\r\n")[:200], "\r\n"))
-			//fmt.Println("jsonBody 3", jsonBody)
+			//fmt.Printf("jsonBody 3\n%q\n", jsonBody)
 
 			var json map[string]any
 			if err := hjson.Unmarshal([]byte(jsonBody), &json); err != nil {
@@ -270,7 +274,7 @@ var commands = map[CommandType]Command{
 			}
 			return json, nil
 		},
-		Validator: func(b []byte) bool {
+		Validator: func(tryNo int, b []byte) bool {
 			return regexp.MustCompile(`, change number : [1-9]`).Match(b)
 		},
 		Args: []*Arg{

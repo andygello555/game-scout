@@ -15,6 +15,7 @@ import (
 	"github.com/Netflix/go-expect"
 	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/pkg/errors"
+	"io"
 	"os/exec"
 	"strings"
 	"time"
@@ -32,6 +33,12 @@ const (
 type SteamCMD struct {
 	// commands is a list of Command that are queued up.
 	commands []*Command
+	// stdout is an additional io.Writer to write the stdout of the cmd to. This can be set in NewDebug, but it will be
+	// defaulted to io.Discard in the New constructor.
+	stdout io.Writer
+	// stderr is an additional io.Writer to write the stderr of the cmd to. This can be set in NewDebug, but it will be
+	// defaulted to io.Discard in the New constructor.
+	stderr io.Writer
 	// serialisedCommands is a list of serialised Command (with their args).
 	serialisedCommands []string
 	// interactive indicates whether the SteamCMD was started in interactive mode.
@@ -58,8 +65,14 @@ type SteamCMD struct {
 
 // New creates a new SteamCMD. You can specify whether to run Command in interactive mode or not.
 func New(interactive bool) *SteamCMD {
+	return NewDebug(interactive, io.Discard, io.Discard)
+}
+
+func NewDebug(interactive bool, stdout, stderr io.Writer) *SteamCMD {
 	return &SteamCMD{
 		commands:           make([]*Command, 0),
+		stdout:             stdout,
+		stderr:             stderr,
 		serialisedCommands: []string{"+login anonymous"},
 		interactive:        interactive,
 		ParsedOutputs:      make([]any, 0),
@@ -87,16 +100,6 @@ func (sc *SteamCMD) expectString(serialisedCommand string, s string) error {
 	return nil
 }
 
-// expectEOF will do a similar thing as expectString, but instead will call ExpectEOF on the console.
-func (sc *SteamCMD) expectEOF() error {
-	msg, err := sc.console.Expect(expect.EOF, expect.PTSClosed, expect.WithTimeout(ExpectTimeout))
-	if err != nil {
-		return errors.Wrap(err, "error whilst expecting EOF from interactive SteamCMD")
-	}
-	sc.setBuffers("quit", msg, "")
-	return nil
-}
-
 // closeInteractive will clean up the cmd and console that are used to manage the interactive mode.
 func (sc *SteamCMD) closeInteractive() (err error) {
 	if sc.cmd != nil {
@@ -105,7 +108,6 @@ func (sc *SteamCMD) closeInteractive() (err error) {
 			err = sc.AddCommandType(Quit)
 		}
 
-		err = myErrors.MergeErrors(err, errors.Wrap(sc.cmd.Process.Kill(), "process kill failed"))
 		_, waitErr := sc.cmd.Process.Wait()
 		err = myErrors.MergeErrors(err, errors.Wrap(waitErr, "wait failed"))
 		sc.cmd = nil
@@ -136,8 +138,8 @@ func (sc *SteamCMD) startInteractive() (err error) {
 
 	sc.cmd = exec.Command("steamcmd", sc.serialisedCommands...)
 	sc.cmd.Stdin = sc.console.Tty()
-	sc.cmd.Stdout = sc.console.Tty()
-	sc.cmd.Stderr = sc.console.Tty()
+	sc.cmd.Stdout = io.MultiWriter(sc.console.Tty(), sc.stdout)
+	sc.cmd.Stderr = io.MultiWriter(sc.console.Tty(), sc.stderr)
 	if err = sc.cmd.Start(); err != nil {
 		return errors.Wrap(err, "could not start SteamCMD binary")
 	}
@@ -155,22 +157,21 @@ func (sc *SteamCMD) executeInteractive(command *Command, args ...any) (err error
 	sc.before.Reset()
 	sc.after.Reset()
 	serialisedCommand := command.Serialise(args...)[1:]
+
 	// We keep executing the command until we can validate the output
-	for !command.ValidateOutput(sc.before.Bytes()) {
+	tryNo := 0
+	for !command.ValidateOutput(tryNo, sc.before.Bytes()) {
 		//fmt.Printf("Sending line: \"%s\"\n", serialisedCommand)
 		if _, err = sc.console.SendLine(serialisedCommand); err != nil {
 			return errors.Wrapf(err, "could not send command \"%s\" to the interactive SteamCMD", serialisedCommand)
 		}
 
-		if command.Type == Quit {
-			if err = sc.expectEOF(); err != nil {
-				return errors.Wrap(err, "could not expect EOF after Quit command")
-			}
-		} else {
+		if command.Type != Quit {
 			if err = sc.expectString(serialisedCommand, InteractivePrompt); err != nil {
 				return errors.Wrapf(err, "could not expect SteamCMD prompt after %s command", command.Type.String())
 			}
 		}
+		tryNo++
 		//fmt.Printf("before: \"%s\"\n", sc.before.String())
 		//fmt.Printf("after: \"%s\"\n", sc.after.String())
 	}
@@ -209,7 +210,7 @@ func (sc *SteamCMD) AddCommand(command *Command, args ...any) (err error) {
 	// Check if the command's type is Quit and set the quitYet flag accordingly
 	if command.Type == Quit {
 		if sc.quitYet {
-			return errors.New("cannot quit the SteamCMD twice")
+			return errors.New("cannot quit SteamCMD more than once")
 		}
 		sc.quitYet = true
 	}
@@ -314,7 +315,7 @@ func NewCommandWithArgs(commandType CommandType, args ...any) *CommandWithArgs {
 	}
 }
 
-// Flow will start the SteamCMD by running SteamCMD.Start, queue up a flow of CommandWithArgs all at once, then finally
+// Flow will start the SteamCMD by running SteamCMD.Start, queue up a flow of CommandWithArgs one at a time, then finally
 // call Close on the SteamCMD.
 func (sc *SteamCMD) Flow(commandWithArgs ...*CommandWithArgs) (err error) {
 	defer func(sc *SteamCMD) {
