@@ -149,7 +149,7 @@ func UpdateDeveloper(
 		// Run DiscoveryBatch for this batch of tweet dictionaries (if there are any)
 		var subGameIDs mapset.Set[uuid.UUID]
 		if subGameIDs, err = DiscoveryBatch(
-			developerNo, tweetRaw.TweetDictionaries(), gameScrapers, state,
+			developerNo, Tweets(tweetRaw.TweetDictionaries()), gameScrapers, state,
 		); err != nil && !myErrors.IsTemporary(err) {
 			log.FATAL.Printf("Error returned by DiscoveryBatch is not temporary: %s. We have to stop :(", err.Error())
 			return gameIDs, myErrors.TemporaryWrapf(

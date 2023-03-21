@@ -40,6 +40,9 @@ type DeveloperSnapshot struct {
 	// TweetIDs is the IDs of the Tweets captured by this DeveloperSnapshot. Using these, we can generate links for each
 	// Tweet.
 	TweetIDs pq.StringArray `gorm:"type:varchar(64)[];default:'{}'"`
+	// RedditPostIDs are subreddit name, post ID pairs captured by this DeveloperSnapshot. I.e. a subreddit name
+	// followed by a Reddit post ID. Using these, we can generate links for each post.
+	RedditPostIDs pq.StringArray `gorm:"type:varchar(32)[];default:'{}'"`
 	// TweetTimeRange is the time.Duration between the Developer's earliest tweet (that was scraped) and their latest
 	// tweet (that was scraped). This is set to nil when only one tweet was scraped.
 	TweetTimeRange NullDuration

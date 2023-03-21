@@ -1,6 +1,7 @@
 package models
 
 import (
+	"database/sql/driver"
 	"encoding/gob"
 	"fmt"
 	"github.com/g8rswimmer/go-twitter/v2"
@@ -15,6 +16,73 @@ func init() {
 	gob.Register(TrendingDev{})
 }
 
+type DeveloperType string
+
+const (
+	UnknownDeveloperType DeveloperType = "U"
+	TwitterDeveloperType DeveloperType = "T"
+	RedditDeveloperType  DeveloperType = "R"
+)
+
+// Index returns the index of the DeveloperType.
+func (dt DeveloperType) Index() int {
+	switch dt {
+	case TwitterDeveloperType:
+		return 1
+	case RedditDeveloperType:
+		return 2
+	default:
+		return 0
+	}
+}
+
+// String returns the formal name of the DeveloperType.
+func (dt DeveloperType) String() string {
+	switch dt {
+	case UnknownDeveloperType:
+		return "Unknown"
+	case TwitterDeveloperType:
+		return "Twitter"
+	case RedditDeveloperType:
+		return "Reddit"
+	default:
+		return "<nil>"
+	}
+}
+
+func (dt *DeveloperType) Scan(value interface{}) error {
+	switch value.(type) {
+	case []byte:
+		*dt = DeveloperType(value.([]byte))
+	case string:
+		*dt = DeveloperType(value.(string))
+	default:
+		panic(fmt.Errorf("could not convert DB value to DeveloperType"))
+	}
+	return nil
+}
+
+func (dt DeveloperType) Value() (driver.Value, error) {
+	return string(dt), nil
+}
+
+func (dt DeveloperType) Type() string {
+	return "developer_type"
+}
+
+func (dt DeveloperType) Values() []string {
+	return []string{
+		string(UnknownDeveloperType),
+		string(TwitterDeveloperType),
+		string(RedditDeveloperType),
+	}
+}
+
+type RedditUserMetrics struct {
+	PostKarma    int
+	CommentKarma int
+}
+
 // Developer represents a potential indie developer's Twitter account. This also contains some current metrics for their
 // profile.
 type Developer struct {
@@ -26,10 +94,14 @@ type Developer struct {
 	Username string
 	// Description is the bio of the Twitter user that this developer corresponds to.
 	Description string
+	// Type denotes whether we found this Developer on Twitter or Reddit.
+	Type DeveloperType `gorm:"type:developer_type"`
 	// ProfileCreated is when the Developer's Twitter profile was created. Note how we avoid using CreatedAt.
 	ProfileCreated time.Time
 	// PublicMetrics is the most up-to-date public metrics for this Developer's Twitter profile.
 	PublicMetrics *twitter.UserMetricsObj `gorm:"embedded;embeddedPrefix:current_"`
+	// RedditPublicMetrics contains the user's karma if they are a RedditDeveloperType Developer.
+	RedditPublicMetrics *RedditUserMetrics `gorm:"embedded;embeddedPrefix:current_reddit_"`
 	// UpdatedAt is when this developer was updated. So we know up until when the PublicMetrics are fresh to.
 	UpdatedAt time.Time
 	// TimesHighlighted is the number of times this Developer has been highlighted by the Measure phase.

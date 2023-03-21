@@ -57,9 +57,9 @@ type Game struct {
 	// Games this is set to the URL of the header image on the Game's Itch.IO page.
 	ImageURL null.String `gorm:"default:null"`
 	// Developers are the Twitter usernames that could be developers for this Game.
-	Developers pq.StringArray `gorm:"type:varchar(15)[];default:'{}'"`
+	Developers pq.StringArray `gorm:"type:varchar(20)[];default:'{}'"`
 	// VerifiedDeveloperUsernames are the Twitter usernames that can be found somewhere on the Game's Website.
-	VerifiedDeveloperUsernames pq.StringArray `gorm:"type:varchar(15)[];default:'{}'"`
+	VerifiedDeveloperUsernames pq.StringArray `gorm:"type:varchar(20)[];default:'{}'"`
 	// Updates is the number of times this app has been updated. 0 means that the Game has just been created. Please
 	// don't set this yourself when creating a Game.
 	Updates uint64

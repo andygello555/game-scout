@@ -89,7 +89,7 @@ func TestDiscoveryBatch(t *testing.T) {
 
 		var subGameIDs mapset.Set[uuid.UUID]
 		//if subGameIDs, err = DiscoveryBatch(1, sampleTweets, gameScrapeQueue, state); err != nil {
-		if subGameIDs, err = DiscoveryBatch(1, sampleTweets, gameScrapers, state); err != nil {
+		if subGameIDs, err = DiscoveryBatch(1, Tweets(sampleTweets), gameScrapers, state); err != nil {
 			t.Errorf("Could not run DiscoveryBatch: %s", err.Error())
 		}
 		state.GetIterableCachedField(GameIDsType).Merge(&GameIDs{subGameIDs})
@@ -833,18 +833,40 @@ func TestCreateInitialSteamApps(t *testing.T) {
 	}
 }
 
+const testSubreddit = "GameDevelopment"
+
 func TestSubredditFetch(t *testing.T) {
 	reddit.CreateClient(globalConfig.Reddit)
-	const subreddit = "GameDevelopment"
-	state := StateInMemory()
-
-	if postsCommentsAndUsers, err := SubredditFetch(subreddit, state); err != nil {
-		t.Errorf("Error occurred whilst fetching posts, comments, and users for top in %q: %v", subreddit, err)
+	if postsCommentsAndUsers, err := SubredditFetch(testSubreddit); err != nil {
+		t.Errorf("Error occurred whilst fetching posts, comments, and users for top in %q: %v", testSubreddit, err)
 	} else {
-		var b []byte
-		if b, err = json.MarshalIndent(postsCommentsAndUsers, "", "  "); err != nil {
-			t.Errorf("Could not marshal []*PostCommentsAndUser to JSON: %v", err)
+		if len(postsCommentsAndUsers) > globalConfig.Scrape.Constants.RedditPostsPerSubreddit {
+			t.Errorf(
+				"There are %d posts, comments, and users returned by SubredditFetch for %q which exceeds the %d max",
+				len(postsCommentsAndUsers), testSubreddit, globalConfig.Scrape.Constants.RedditPostsPerSubreddit,
+			)
 		}
-		fmt.Println(string(b), len(postsCommentsAndUsers))
+	}
+}
+
+func TestRedditDiscoveryPhase(t *testing.T) {
+	reddit.CreateClient(globalConfig.Reddit)
+	state := StateInMemory()
+	gameScrapers := models.NewStorefrontScrapers[string](
+		globalConfig.Scrape, db.DB, 5, 4,
+		globalConfig.Scrape.Constants.RedditPostsPerSubreddit*globalConfig.Scrape.Constants.MaxGamesPerTweet,
+		globalConfig.Scrape.Constants.MinScrapeStorefrontsForGameWorkerWaitTime.Duration,
+		globalConfig.Scrape.Constants.MaxScrapeStorefrontsForGameWorkerWaitTime.Duration,
+	)
+	gameScrapers.Start()
+
+	if err := RedditDiscoveryPhase(state, gameScrapers, testSubreddit); err != nil {
+		t.Errorf("Error occurred whilst performing discovery phase for subreddit %q: %v", testSubreddit, err)
+	} else {
+		fmt.Printf("user tweet times: %v (%d)\n", state.GetIterableCachedField(UserTweetTimesType), state.GetIterableCachedField(UserTweetTimesType).Len())
+		fmt.Printf("developer snapshots: %v (%d)\n", state.GetIterableCachedField(DeveloperSnapshotsType), state.GetIterableCachedField(DeveloperSnapshotsType).Len())
+		fmt.Printf("game IDs: %v (%d)\n", state.GetIterableCachedField(GameIDsType), state.GetIterableCachedField(GameIDsType).Len())
+		fmt.Printf("deleted developers: %v (%d)\n", state.GetIterableCachedField(DeletedDevelopersType), state.GetIterableCachedField(DeletedDevelopersType).Len())
+		fmt.Printf("state: %#+v\n", state.GetCachedField(StateType))
 	}
 }

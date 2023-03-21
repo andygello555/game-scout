@@ -633,10 +633,12 @@ type ScrapeConstants struct {
 	// ScoutTimeout is the maximum duration that the Scout procedure should be run for. If it runs longer than this it
 	// will be stopped using a panic.
 	ScoutTimeout Duration `json:"scout_timeout"`
-	// TransformTweetWorkers is the number of transformTweetWorker that will be spun up in the DiscoveryBatch.
+	// TransformTweetWorkers is the number of TransformWorker that will be spun up in the DiscoveryBatch.
 	TransformTweetWorkers int `json:"transform_tweet_workers"`
 	// RedditSubredditScrapeWorkers is the number of redditSubredditScraper workers to start in RedditDiscoveryPhase.
 	RedditSubredditScrapeWorkers int `json:"reddit_subreddit_scrape_workers"`
+	// RedditDiscoveryBatchWorkers is the number of redditDiscoveryBatchWorker to start in RedditDiscoveryPhase.
+	RedditDiscoveryBatchWorkers int `json:"reddit_discovery_batch_workers"`
 	// RedditBindingPaginatorWaitTime is the time is the "waitTime" to supply to any api.Paginator created for the
 	// Reddit api.API.
 	RedditBindingPaginatorWaitTime Duration `json:"reddit_binding_paginator_wait_time"`

@@ -9,6 +9,7 @@ import (
 	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/andygello555/game-scout/reddit"
 	myTwitter "github.com/andygello555/game-scout/twitter"
+	"github.com/andygello555/gotils/v2/numbers"
 	"github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/google/uuid"
@@ -16,6 +17,93 @@ import (
 	"math"
 	"time"
 )
+
+type PostIterable interface {
+	Len() int
+	UnitName() string
+	Queue(jobs chan<- *TransformJob, args ...any)
+}
+
+type Tweets map[string]*twitter.TweetDictionary
+
+func (t Tweets) Len() int         { return len(t) }
+func (t Tweets) UnitName() string { return "tweet" }
+func (t Tweets) Queue(jobs chan<- *TransformJob, args ...any) {
+	tweetNo := 1
+	for id, tweet := range t {
+		log.INFO.Printf("%squeued tweet no. %d (%s)", args[0].(string), tweetNo, id)
+		jobs <- &TransformJob{
+			no:    tweetNo,
+			tweet: tweet,
+		}
+		tweetNo++
+	}
+}
+
+type PostCommentsAndUser struct {
+	*reddit.PostAndComments
+	*reddit.User
+}
+
+type Posts []*PostCommentsAndUser
+
+func (p Posts) Len() int         { return len(p) }
+func (p Posts) UnitName() string { return "post" }
+
+func (p Posts) Queue(jobs chan<- *TransformJob, args ...any) {
+	for no, post := range p {
+		log.INFO.Printf(
+			"%squeued post no. %d %q (%s) for subreddit %q",
+			args[0].(string), no, post.Post.Title, post.Post.ID, post.Post.SubredditName,
+		)
+		jobs <- &TransformJob{
+			no:   no,
+			post: post,
+		}
+	}
+}
+
+// TransformJob wraps the arguments of TransformTweet for TransformWorker.
+type TransformJob struct {
+	no    int
+	tweet *twitter.TweetDictionary
+	post  *PostCommentsAndUser
+}
+
+// TransformResult wraps the return values of TransformTweet for TransformWorker.
+type TransformResult struct {
+	no            int
+	developer     *models.Developer
+	developerSnap *models.DeveloperSnapshot
+	game          *models.Game
+	postCreatedAt time.Time
+	err           error
+}
+
+// TransformWorker takes a channel of twitter.TweetDictionary, and queues up the return values of TransformTweet as
+// TransformResult in a results channel.
+func TransformWorker(
+	jobs <-chan *TransformJob,
+	results chan<- *TransformResult,
+	gameScrapers *models.StorefrontScrapers[string],
+) {
+	for job := range jobs {
+		result := &TransformResult{no: job.no}
+		switch {
+		case job.tweet == nil:
+			result.developer, result.developerSnap, result.game, result.postCreatedAt, result.err = TransformTweet(
+				job.tweet,
+				gameScrapers,
+			)
+		case job.post == nil:
+			result.developer, result.developerSnap, result.game, result.postCreatedAt, result.err = TransformPost(
+				job.post,
+				gameScrapers,
+			)
+		}
+		results <- result
+	}
+}
 
 // TransformTweet takes a twitter.TweetDictionary and splits it out into instances of the models.Developer,
 // models.DeveloperSnapshot, and models.Game models. It also returns the time when the tweet was created so that we can
@@ -53,6 +141,7 @@ func TransformTweet(
 	}
 
 	developer.ID = tweet.Author.ID
+	developer.Type = models.TwitterDeveloperType
 	developerSnap.TweetIDs = []string{tweet.Tweet.ID}
 	developerSnap.DeveloperID = developer.ID
 	developer.Name = tweet.Author.Name
@@ -119,51 +208,42 @@ out:
 	return
 }
 
-// transformTweetJob wraps the arguments of TransformTweet for transformTweetWorker.
-type transformTweetJob struct {
-	tweetNo int
-	tweet   *twitter.TweetDictionary
-}
-
-// transformTweetResult wraps the return values of TransformTweet for transformTweetWorker.
-type transformTweetResult struct {
-	tweetNo        int
-	developer      *models.Developer
-	developerSnap  *models.DeveloperSnapshot
-	game           *models.Game
-	tweetCreatedAt time.Time
-	err            error
-}
-
-// transformTweetWorker takes a channel of twitter.TweetDictionary, and queues up the return values of TransformTweet as
-// transformTweetResult in a results channel.
-func transformTweetWorker(
-	jobs <-chan *transformTweetJob,
-	results chan<- *transformTweetResult,
-	gameScrapers *models.StorefrontScrapers[string],
+func TransformPost(post *PostCommentsAndUser, gameScrapers *models.StorefrontScrapers[string]) (
+	developer *models.Developer,
+	developerSnap *models.DeveloperSnapshot,
+	game *models.Game,
+	postCreatedAt time.Time,
+	err error,
 ) {
-	for job := range jobs {
-		result := &transformTweetResult{}
-		result.developer, result.developerSnap, result.game, result.tweetCreatedAt, result.err = TransformTweet(
-			job.tweet,
-			gameScrapers,
-		)
-		result.tweetNo = job.tweetNo
-		results <- result
+	developer = &models.Developer{}
+	developer.ID = post.User.ID
+	developer.Name = post.User.Name
+	developer.Username = post.User.Name
+	developer.Type = models.RedditDeveloperType
+	developer.ProfileCreated = post.User.Created.Time
+	developer.RedditPublicMetrics = &models.RedditUserMetrics{
+		PostKarma:    post.User.PostKarma,
+		CommentKarma: post.User.CommentKarma,
 	}
+
+	developerSnap = &models.DeveloperSnapshot{}
+	developerSnap.DeveloperID = developer.ID
+	return
 }
 
-// DiscoveryBatch takes a twitter.TweetDictionary and runs TransformTweet on each tweet that is within it. It also takes
-// references to userTweetTimes and developerSnapshots, which are passed in from either Scout, or UpdateDeveloper. Due
-// to the rate limiting by Steam on their store API, you can also pass in how many gameWorkers (a worker which scrapes a
-// game) to start, and how many of these game workers can be executing at once.
+// DiscoveryBatch takes a PostIterable and runs TransformTweet/TransformPost on each tweet/post that is within it. It
+// also takes fills out the userTweetTimes and developerSnapshots cached fields within the given ScoutState, which are
+// passed in from either DiscoveryPhase, RedditDiscoveryPhase, or UpdateDeveloper. Due to the rate limiting by Steam on
+// their store API, you can also pass in how many gameWorkers (a worker which scrapes a game) to start, and how many of
+// these game workers can be executing at once.
 //
 // The gameScrapeQueue is the channel to which games are queued to be scraped. This channel, along with the workers,
 // should be created and close outside DiscoveryBatch. If DiscoveryBatch is being run in the discovery phase, then it
-// will be created in Scout. Otherwise, if it is running in UpdateDeveloper, they should be created in UpdatePhase.
+// will be created in DiscoveryPhase. Otherwise, if it is running in UpdateDeveloper, they should be created in
+// UpdatePhase.
 func DiscoveryBatch(
 	batchNo int,
-	dictionary map[string]*twitter.TweetDictionary,
+	posts PostIterable,
 	gameScrapers *models.StorefrontScrapers[string],
 	state *ScoutState,
 ) (gameIDs mapset.Set[uuid.UUID], err error) {
@@ -171,25 +251,17 @@ func DiscoveryBatch(
 	log.INFO.Printf("Starting DiscoveryBatch no. %d", batchNo)
 
 	// Create the job and result channels for the transformTweetWorkers
-	jobs := make(chan *transformTweetJob, len(dictionary))
-	results := make(chan *transformTweetResult, len(dictionary))
+	jobs := make(chan *TransformJob, posts.Len())
+	results := make(chan *TransformResult, posts.Len())
 	gameIDs = mapset.NewThreadUnsafeSet[uuid.UUID]()
 
 	// Start the transformTweetWorkers
 	for i := 0; i < globalConfig.Scrape.Constants.TransformTweetWorkers; i++ {
-		go transformTweetWorker(jobs, results, gameScrapers)
+		go TransformWorker(jobs, results, gameScrapers)
 	}
 
 	// Queue up all the jobs
-	tweetNo := 1
-	for id, tweet := range dictionary {
-		log.INFO.Printf("%squeued tweet no. %d (%s)", logPrefix, tweetNo, id)
-		jobs <- &transformTweetJob{
-			tweetNo: tweetNo,
-			tweet:   tweet,
-		}
-		tweetNo++
-	}
+	posts.Queue(jobs, logPrefix)
 	close(jobs)
 
 	phase := func() Phase {
@@ -213,7 +285,7 @@ func DiscoveryBatch(
 	}
 
 	// Dequeue the results and save them
-	for i := 0; i < len(dictionary); i++ {
+	for i := 0; i < posts.Len(); i++ {
 		result := <-results
 		if result.err == nil {
 			var (
@@ -221,8 +293,8 @@ func DiscoveryBatch(
 				gameErr error
 			)
 
-			log.INFO.Printf("%stransformed tweet no. %d successfully", logPrefix, result.tweetNo)
-			state.GetIterableCachedField(UserTweetTimesType).SetOrAdd(result.developer.ID, result.tweetCreatedAt)
+			log.INFO.Printf("%stransformed %s no. %d successfully", logPrefix, posts.UnitName(), result.no)
+			state.GetIterableCachedField(UserTweetTimesType).SetOrAdd(result.developer.ID, result.postCreatedAt)
 			state.GetCachedField(StateType).SetOrAdd("Result", resultKey(), "TweetsConsumed", models.SetOrAddInc.Func())
 
 			// At this point we only save the developer and the game. We still need to aggregate all the possible
@@ -259,19 +331,14 @@ func DiscoveryBatch(
 			state.GetCachedField(StateType).SetOrAdd("Result", resultKey(), "TotalSnapshots", models.SetOrAddInc.Func())
 			log.INFO.Printf("%sadded DeveloperSnapshot to mapping (%d developer IDs in DeveloperSnapshots)", logPrefix, state.GetIterableCachedField(DeveloperSnapshotsType).Len())
 		} else {
-			log.WARNING.Printf("%scouldn't transform tweet no. %d: %s. Skipping...", logPrefix, result.tweetNo, err.Error())
+			log.WARNING.Printf("%scouldn't transform %s no. %d: %s. Skipping...", logPrefix, posts.UnitName(), result.no, err.Error())
 		}
 	}
 	return
 }
 
-type PostCommentsAndUser struct {
-	*reddit.PostAndComments
-	*reddit.User
-}
-
 // SubredditFetch will retrieve the top posts, with their comments, and OP's.
-func SubredditFetch(subreddit string, state *ScoutState) (postsCommentsAndUsers []*PostCommentsAndUser, err error) {
+func SubredditFetch(subreddit string) (postsCommentsAndUsers []*PostCommentsAndUser, err error) {
 	var paginator api.Paginator[any, any]
 	if paginator, err = reddit.API.Paginator(
 		"top", globalConfig.Scrape.Constants.RedditBindingPaginatorWaitTime.Duration,
@@ -297,34 +364,36 @@ func SubredditFetch(subreddit string, state *ScoutState) (postsCommentsAndUsers 
 	skipPosts := 0
 	currentSkip := 0
 	postsPerSubreddit := globalConfig.Scrape.Constants.RedditPostsPerSubreddit
+	postsToScrape := len(posts)
 	if len(posts) > postsPerSubreddit {
 		skipPosts = int(math.Round(float64(len(posts)) / float64(postsPerSubreddit)))
 		currentSkip = skipPosts - 1
+		postsToScrape = int(math.Ceil(float64(len(posts)) / float64(skipPosts)))
 		log.WARNING.Printf(
-			"Because there are %d more total posts on %q (top weekly) than the limit of %d, we will skip every %s post",
-			len(posts)-postsPerSubreddit, subreddit, postsPerSubreddit, skipPosts,
+			"Because there are %d more total posts on %q (top weekly) than the limit of %d, we will only scrape every %s post (%d posts total)",
+			len(posts)-postsPerSubreddit, subreddit, postsPerSubreddit, numbers.Ordinal(skipPosts), postsToScrape,
 		)
 	}
 
 	postsCommentsAndUsers = make([]*PostCommentsAndUser, 0, len(posts))
 	for _, post := range posts {
-		if skipPosts > 0 && currentSkip != 0 {
-			log.WARNING.Printf(
-				"Skipping post %q (%s) on %q: currentSkip != 0 == %d",
-				post.Title, post.ID, subreddit, currentSkip,
-			)
-
+		if skipPosts > 0 {
 			currentSkip++
 			if currentSkip == skipPosts {
 				currentSkip = 0
+			} else {
+				log.WARNING.Printf(
+					"Skipping post %q (%s) on %q: currentSkip != 0 == %d",
+					post.Title, post.ID, subreddit, currentSkip,
+				)
+				continue
 			}
-			continue
 		}
 
 		start = time.Now()
 		log.INFO.Printf(
-			"Fetching comments and user for post %q (%s) on subreddit %q",
-			post.Title, post.ID, subreddit,
+			"%q(%d/%d): Fetching comments and user for post %q (%s) on subreddit %q",
+			subreddit, len(postsCommentsAndUsers)+1, postsToScrape, post.Title, post.ID, subreddit,
 		)
 
 		if paginator, err = reddit.API.Paginator(
@@ -343,83 +412,186 @@ func SubredditFetch(subreddit string, state *ScoutState) (postsCommentsAndUsers 
 			return paginator.Page() == nil || paginator.Page().(*reddit.PostAndComments).Count() < globalConfig.Scrape.Constants.RedditCommentsPerPost
 		}); err != nil {
 			log.ERROR.Printf(
-				"Could not find %d comments for post %q (%s), only found %d: %v",
-				globalConfig.Scrape.Constants.RedditCommentsPerPost, post.Title, post.ID, postAndComments.(*reddit.PostAndComments).Count(), err,
+				"%q(%d/%d): Could not find %d comments for post %q (%s), only found %d: %v",
+				subreddit, len(postsCommentsAndUsers)+1, postsToScrape,
+				globalConfig.Scrape.Constants.RedditCommentsPerPost, post.Title, post.ID,
+				postAndComments.(*reddit.PostAndComments).Count(), err,
 			)
 		}
 
 		postCommentsAndUser := PostCommentsAndUser{PostAndComments: postAndComments.(*reddit.PostAndComments)}
 		if postCommentsAndUser.PostAndComments == nil {
-			log.WARNING.Printf("PostAndComments is nil, which means we couldn't get past the first page")
+			log.WARNING.Printf(
+				"%q(%d/%d): PostAndComments is nil, which means we couldn't get past the first page",
+				subreddit, len(postsCommentsAndUsers)+1, postsToScrape,
+			)
 			continue
 		}
 
-		log.INFO.Printf("Found %d comments for post %q (%s) in %s", postCommentsAndUser.Count(), post.Title, post.ID, time.Now().Sub(start))
+		log.INFO.Printf(
+			"%q(%d/%d): Found %d comments for post %q (%s) in %s",
+			subreddit, len(postsCommentsAndUsers)+1, postsToScrape, postCommentsAndUser.Count(), post.Title, post.ID,
+			time.Now().Sub(start),
+		)
 
 		var user any
 		if user, err = reddit.API.Execute("user_about", post.Author); err != nil {
-			log.WARNING.Printf("Could not get user_about for post %q (%s)'s author %q: %v", post.Title, post.ID, post.Author, err)
+			log.WARNING.Printf(
+				"%q(%d/%d): Could not get user_about for post %q (%s)'s author %q: %v",
+				subreddit, len(postsCommentsAndUsers)+1, postsToScrape, post.Title, post.ID, post.Author, err,
+			)
 			continue
 		}
 		postCommentsAndUser.User = user.(*reddit.User)
+		log.INFO.Printf(
+			"%q(%d/%d): OP for post %q (%s) is %q",
+			subreddit, len(postsCommentsAndUsers)+1, postsToScrape, post.Title, post.ID,
+			postCommentsAndUser.User.Name,
+		)
 		postsCommentsAndUsers = append(postsCommentsAndUsers, &postCommentsAndUser)
 	}
 	log.INFO.Printf("Gathered OPs and comments for %d/%d posts for subreddit %q", len(postsCommentsAndUsers), len(posts), subreddit)
 	return
 }
 
-type redditSubredditScrapeJob struct {
-	subreddit string
-	state     *ScoutState
-}
-
 type redditSubredditScrapeResult struct {
-	redditSubredditScrapeJob
+	subreddit             string
 	postsCommentsAndUsers []*PostCommentsAndUser
 	err                   error
 }
 
-func redditSubredditScraper(jobs <-chan redditSubredditScrapeJob, results chan<- redditSubredditScrapeResult) {
+func redditSubredditScraper(jobs <-chan string, results chan<- redditSubredditScrapeResult) {
 	for job := range jobs {
-		result := redditSubredditScrapeResult{redditSubredditScrapeJob: job}
-		result.postsCommentsAndUsers, result.err = SubredditFetch(job.subreddit, job.state)
+		result := redditSubredditScrapeResult{subreddit: job}
+		result.postsCommentsAndUsers, result.err = SubredditFetch(job)
+		results <- result
+	}
+}
+
+type redditDiscoveryBatchJob struct {
+	no        int
+	subreddit string
+	posts     PostIterable
+}
+
+type redditDiscoveryBatchResult struct {
+	*redditDiscoveryBatchJob
+	tempState *ScoutState
+	err       error
+}
+
+func redditDiscoveryBatchWorker(
+	jobs <-chan redditDiscoveryBatchJob,
+	results chan<- redditDiscoveryBatchResult,
+	gameScrapers *models.StorefrontScrapers[string],
+) {
+	for job := range jobs {
+		result := redditDiscoveryBatchResult{
+			redditDiscoveryBatchJob: &job,
+			tempState:               StateInMemory(),
+		}
+		result.tempState.GetCachedField(StateType).SetOrAdd("Phase", Discovery)
+		var subGameIDs mapset.Set[uuid.UUID]
+		subGameIDs, result.err = DiscoveryBatch(job.no, job.posts, gameScrapers, result.tempState)
+		result.tempState.GetIterableCachedField(GameIDsType).Merge(&GameIDs{subGameIDs})
 		results <- result
 	}
 }
 
 // RedditDiscoveryPhase will iterate over each subreddit in the config and find all the top posts for them. It will then
 // iterate over each post found, and fetch a max of 100 comments for each post. From these comments, it will filter any
-// out that are not the OP's. It will then look in the body of these comments for a link to any game store pages.
+// out that are not the OP's. It will then look in the body of these comments (and posts) for a link to any game store
+// pages.
 //
-// This can run in parallel to DiscoveryPhase.
-func RedditDiscoveryPhase(state *ScoutState, gameScrapers *models.StorefrontScrapers[string]) (err error) {
-	subreddits := globalConfig.Reddit.RedditSubreddits()
-	jobs := make(chan redditSubredditScrapeJob, len(subreddits))
-	results := make(chan redditSubredditScrapeResult, len(subreddits))
+// This can run in parallel to DiscoveryPhase, but should be passed a ScoutState that is in memory which can then be
+// merged back into the main ScoutState.
+func RedditDiscoveryPhase(state *ScoutState, gameScrapers *models.StorefrontScrapers[string], subreddits ...string) (err error) {
+	if len(subreddits) == 0 {
+		subreddits = globalConfig.Reddit.RedditSubreddits()
+	}
+	subredditJobs := make(chan string, len(subreddits))
+	subredditResults := make(chan redditSubredditScrapeResult, len(subreddits))
+	postJobs := make(chan redditDiscoveryBatchJob, len(subreddits))
+	postResults := make(chan redditDiscoveryBatchResult, len(subreddits))
 
 	for i := 0; i < globalConfig.Scrape.Constants.RedditSubredditScrapeWorkers; i++ {
-		go redditSubredditScraper(jobs, results)
+		go redditSubredditScraper(subredditJobs, subredditResults)
+	}
+
+	for i := 0; i < globalConfig.Scrape.Constants.RedditDiscoveryBatchWorkers; i++ {
+		go redditDiscoveryBatchWorker(postJobs, postResults, gameScrapers)
 	}
 
 	for _, subreddit := range subreddits {
-		jobs <- redditSubredditScrapeJob{
-			subreddit: subreddit,
-			state:     StateInMemory(),
-		}
+		subredditJobs <- subreddit
 	}
+	close(subredditJobs)
 
-	for r := 0; r < len(subreddits); r++ {
-		result := <-results
+	// Create a goroutine to consume all PostCommentsAndUsers for each subreddit and queue each one up to be transformed
+	// into a Developer, DeveloperSnapshot, and a Game.
+	go func() {
+		for r := 0; r < len(subreddits); r++ {
+			result := <-subredditResults
+			if result.err != nil {
+				log.ERROR.Printf("Subreddit %q could not be scraped: %v", result.subreddit, result.err)
+				if !myErrors.IsTemporary(result.err) {
+					err = errors.Wrap(result.err, "reddit scrape could not recover from non-temp error")
+					return
+				}
+				continue
+			}
+
+			// Queue up all PostCommentsAndUser to be transformed into a Developer, DeveloperSnapshot, and a Game
+			postJobs <- redditDiscoveryBatchJob{
+				no:        r,
+				subreddit: result.subreddit,
+				posts:     Posts(result.postsCommentsAndUsers),
+			}
+		}
+
+		// We can close subredditResults as we have processed them all
+		close(subredditResults)
+		// We can also close postJobs as we have queued up all posts that need to be transformed
+		close(postJobs)
+	}()
+
+	// Consume all redditDiscoveryBatchResults from the redditDiscoveryBatchWorkers.
+	for result := range postResults {
 		if result.err != nil {
-			log.ERROR.Printf("Subreddit %q could not be scraped: %v", result.subreddit, result.err)
+			log.ERROR.Printf(
+				"%d posts for subreddit %q could not be DiscoveryBatched: %v",
+				result.posts.Len(), result.subreddit, result.err,
+			)
 			if !myErrors.IsTemporary(result.err) {
-				err = errors.Wrap(result.err, "reddit scrape could not recover from non-temp error")
+				err = errors.Wrap(result.err, "reddit DiscoveryBatch-ing could not recover from non-temp error")
 				return
 			}
 			continue
 		}
 
+		// MergeIterableCachedFields the gameIDs, userTweetTimes, and developerSnapshots from the result into
+		// the state passed in (which should be an in memory state).
+		log.INFO.Printf(
+			"Merging gameIDs, userTweetTimes, and developerSnapshots from the result for subreddit %q, back into the "+
+				"ScoutState for RedditDiscoveryPhase",
+			result.subreddit,
+		)
+		state.MergeIterableCachedFields(result.tempState)
+
+		// Then we add all the properties of the ScoutResult within the temp state in the result returned from
+		// DiscoveryBatch.
+		scoutResultAny, _ := result.tempState.GetCachedField(StateType).Get("Result")
+		scoutResult := scoutResultAny.(*models.ScoutResult)
+		log.INFO.Printf(
+			"Merging temp ScoutResult properties collected from posts for subreddit %q back into the ScoutResult for RedditDiscoveryPhase: %#+v",
+			result.subreddit, scoutResult.DiscoveryStats,
+		)
+		state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "Developers", models.SetOrAddAdd.Func(scoutResult.DiscoveryStats.Developers))
+		state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "Games", models.SetOrAddAdd.Func(scoutResult.DiscoveryStats.Games))
+		state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "TweetsConsumed", models.SetOrAddAdd.Func(scoutResult.DiscoveryStats.TweetsConsumed))
+		state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "TotalSnapshots", models.SetOrAddAdd.Func(scoutResult.DiscoveryStats.TotalSnapshots))
 	}
+	close(postResults)
 	return
 }
 
@@ -510,7 +682,7 @@ func DiscoveryPhase(state *ScoutState) (gameIDs mapset.Set[uuid.UUID], err error
 		var subGameIDs mapset.Set[uuid.UUID]
 		if subGameIDs, err = DiscoveryBatch(
 			batchNo,
-			tweetRaw.TweetDictionaries(),
+			Tweets(tweetRaw.TweetDictionaries()),
 			gameScrapers,
 			state,
 		); err != nil && !myErrors.IsTemporary(err) {

@@ -96,6 +96,7 @@ func init() {
 	RegisterModel(&myModels.SteamApp{})
 	RegisterModel(&myModels.ScoutResult{})
 	RegisterEnum(myModels.UnknownStorefront)
+	RegisterEnum(myModels.UnknownDeveloperType)
 	RegisterExtension("uuid-ossp")
 }
 
