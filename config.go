@@ -795,6 +795,8 @@ func (sc *ScrapeConfig) String() string {
 // SteamWebPipesConfig stores the configuration for the SteamWebPipes co-process that's started when the machinery workers
 // are started. The SteamWebPipes binary is a slightly modified version of this project: https://github.com/xPaw/SteamWebPipes.
 type SteamWebPipesConfig struct {
+	// Disable is whether to not run the ScoutWebPipes co-process.
+	Disable                  bool   `json:"Disable"`
 	BinaryLocation           string `json:"BinaryLocation"`
 	Location                 string `json:"Location"`
 	DatabaseConnectionString string `json:"DatabaseConnectionString"`
