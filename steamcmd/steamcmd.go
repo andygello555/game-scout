@@ -26,6 +26,8 @@ const (
 	InteractivePrompt = "Steam>"
 	// ExpectTimeout is the timeout for the Expect calls.
 	ExpectTimeout = time.Minute
+	// WaitTimeout is the amount of time to wait for the process to shut down.
+	WaitTimeout = time.Second * 5
 )
 
 // SteamCMD is a wrapper for the Steam CLI client (steamcmd). It can run a sequence of Command in both interactive and
@@ -108,7 +110,22 @@ func (sc *SteamCMD) closeInteractive() (err error) {
 			err = sc.AddCommandType(Quit)
 		}
 
-		_, waitErr := sc.cmd.Process.Wait()
+		waitErrChan := make(chan error)
+		go func() {
+			_, waitErr := sc.cmd.Process.Wait()
+			waitErrChan <- waitErr
+		}()
+
+		var waitErr error
+		select {
+		case <-time.After(WaitTimeout):
+			// If the initial wait times out then we will kill the process. The goroutine that was started above should
+			// then wait until the process' resources are cleared.
+			err = myErrors.MergeErrors(err, errors.Wrap(sc.cmd.Process.Kill(), "process kill failed"))
+			waitErr = <-waitErrChan
+		case waitErr = <-waitErrChan:
+			break
+		}
 		err = myErrors.MergeErrors(err, errors.Wrap(waitErr, "wait failed"))
 		sc.cmd = nil
 	}
