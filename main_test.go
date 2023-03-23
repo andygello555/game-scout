@@ -25,6 +25,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -687,7 +688,7 @@ func TestDeletePhase(t *testing.T) {
 			&models.Game{},
 		).Where(
 			"? = ANY(developers)",
-			deletedDev.Developer.Username,
+			deletedDev.Developer.TypedUsername(),
 		).Count(&gamesForDev).Error; err != nil {
 			t.Errorf(
 				"Unexpected error whilst finding the number of games for deleted dev. %s: %v",
@@ -755,8 +756,18 @@ func ExampleStateLoadOrCreate() {
 
 	if err = db.DB.Create(&models.Developer{
 		ID:       "1234",
+		Type:     models.TwitterDeveloperType,
 		Name:     "Enabled Developer",
 		Username: "enabled",
+	}).Error; err != nil {
+		fmt.Printf("Error occurred: %v\n", err)
+	}
+
+	if err = db.DB.Create(&models.Developer{
+		ID:       "r1234",
+		Type:     models.RedditDeveloperType,
+		Name:     "Enabled Developer",
+		Username: "renabled",
 	}).Error; err != nil {
 		fmt.Printf("Error occurred: %v\n", err)
 	}
@@ -768,7 +779,9 @@ func ExampleStateLoadOrCreate() {
 	state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "Developers", models.SetOrAddInc.Func())
 	state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "Games", models.SetOrAddAdd.Func(int64(2)))
 	state.GetCachedField(UserTweetTimesType).SetOrAdd("1234", time.Now().UTC(), "12345", time.Now().UTC())
+	state.GetCachedField(RedditUserPostTimesType).SetOrAdd("r1234", time.Now().UTC(), "r12345", time.Now().UTC())
 	state.GetCachedField(DeveloperSnapshotsType).SetOrAdd("1234", &models.DeveloperSnapshot{DeveloperID: "1234"})
+	state.GetCachedField(RedditDeveloperSnapshotsType).SetOrAdd("r1234", &models.DeveloperSnapshot{DeveloperID: "r1234"})
 	state.GetCachedField(GameIDsType).SetOrAdd(uuid.New(), uuid.New(), uuid.New())
 	state.GetCachedField(DeletedDevelopersType).SetOrAdd(&models.TrendingDev{
 		Developer: &models.Developer{
@@ -804,7 +817,9 @@ func ExampleStateLoadOrCreate() {
 	fmt.Println("state.Result.DiscoveryStats:", result.DiscoveryStats)
 	fmt.Printf("state.Result.DisableStats: %+v\n", result.DisableStats)
 	fmt.Println("userTweetTimes:", state.GetIterableCachedField(UserTweetTimesType).Len())
+	fmt.Println("redditUserPostTimes:", state.GetIterableCachedField(RedditUserPostTimesType).Len())
 	fmt.Println("developerSnapshots:", state.GetIterableCachedField(DeveloperSnapshotsType).Len())
+	fmt.Println("redditDeveloperSnapshots:", state.GetIterableCachedField(RedditDeveloperSnapshotsType).Len())
 	fmt.Println("gameIDs:", state.GetIterableCachedField(GameIDsType).Len())
 	fmt.Println("deletedDevelopers:", state.GetIterableCachedField(DeletedDevelopersType).Len())
 	deletedDeveloperOne, _ := state.GetIterableCachedField(DeletedDevelopersType).Get(0)
@@ -816,9 +831,11 @@ func ExampleStateLoadOrCreate() {
 	state.Delete()
 	// Output:
 	// state.Result.DiscoveryStats: &{1 2 0 0 0}
-	// state.Result.DisableStats: &{EnabledDevelopersBefore:0 DisabledDevelopersBefore:0 EnabledDevelopersAfter:1 DisabledDevelopersAfter:0 DeletedDevelopers:0 TotalSampledDevelopers:0}
+	// state.Result.DisableStats: &{EnabledDevelopersBefore:0 DisabledDevelopersBefore:0 EnabledDevelopersAfter:2 DisabledDevelopersAfter:0 DeletedDevelopers:0 TotalSampledDevelopers:0 TotalFinishedSamples:0}
 	// userTweetTimes: 2
+	// redditUserPostTimes: 2
 	// developerSnapshots: 1
+	// redditDeveloperSnapshots: 1
 	// gameIDs: 3
 	// deletedDevelopers: 1
 	// deletedDevelopers[0].Developer.ID: 1234
@@ -860,13 +877,70 @@ func TestRedditDiscoveryPhase(t *testing.T) {
 	)
 	gameScrapers.Start()
 
-	if err := RedditDiscoveryPhase(state, gameScrapers, testSubreddit); err != nil {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	if err := RedditDiscoveryPhase(&wg, state, gameScrapers, testSubreddit); err != nil {
 		t.Errorf("Error occurred whilst performing discovery phase for subreddit %q: %v", testSubreddit, err)
 	} else {
-		fmt.Printf("user tweet times: %v (%d)\n", state.GetIterableCachedField(UserTweetTimesType), state.GetIterableCachedField(UserTweetTimesType).Len())
-		fmt.Printf("developer snapshots: %v (%d)\n", state.GetIterableCachedField(DeveloperSnapshotsType), state.GetIterableCachedField(DeveloperSnapshotsType).Len())
-		fmt.Printf("game IDs: %v (%d)\n", state.GetIterableCachedField(GameIDsType), state.GetIterableCachedField(GameIDsType).Len())
-		fmt.Printf("deleted developers: %v (%d)\n", state.GetIterableCachedField(DeletedDevelopersType), state.GetIterableCachedField(DeletedDevelopersType).Len())
-		fmt.Printf("state: %#+v\n", state.GetCachedField(StateType))
+		if testing.Verbose() {
+			fmt.Printf("user post times: %v (%d)\n", state.GetIterableCachedField(RedditUserPostTimesType), state.GetIterableCachedField(RedditUserPostTimesType).Len())
+			fmt.Printf("developer snapshots: %v (%d)\n", state.GetIterableCachedField(RedditDeveloperSnapshotsType), state.GetIterableCachedField(RedditDeveloperSnapshotsType).Len())
+			fmt.Printf("game IDs: %v (%d)\n", state.GetIterableCachedField(GameIDsType), state.GetIterableCachedField(GameIDsType).Len())
+			fmt.Printf("deleted developers: %v (%d)\n", state.GetIterableCachedField(DeletedDevelopersType), state.GetIterableCachedField(DeletedDevelopersType).Len())
+			fmt.Printf("state: %#+v\n", state.GetCachedField(StateType))
+		}
+
+		postTimes := state.GetIterableCachedField(RedditUserPostTimesType).Len()
+		devSnaps := state.GetIterableCachedField(RedditDeveloperSnapshotsType).Len()
+		if postTimes != devSnaps {
+			t.Errorf(
+				"The number of user times %d, does not match the number of developer snapshots %d",
+				postTimes, devSnaps,
+			)
+		}
+
+		if postTimes > globalConfig.Scrape.Constants.RedditPostsPerSubreddit {
+			t.Errorf(
+				"There are %d user post times, but we should have only scraped %d posts",
+				postTimes, globalConfig.Scrape.Constants.RedditPostsPerSubreddit,
+			)
+		}
+
+		if devSnaps > globalConfig.Scrape.Constants.RedditPostsPerSubreddit {
+			t.Errorf(
+				"There are %d dev snaps, but we should have only scraped %d posts",
+				devSnaps, globalConfig.Scrape.Constants.RedditPostsPerSubreddit,
+			)
+		}
+	}
+}
+
+func TestDiscoveryPhase(t *testing.T) {
+	reddit.CreateClient(globalConfig.Reddit)
+	if err := myTwitter.ClientCreate(globalConfig.Twitter); err != nil {
+		t.Errorf("Could not setup Twitter client: %v", err)
+	}
+	clearDB(t)
+
+	state := StateInMemory()
+	state.GetCachedField(StateType).SetOrAdd("Phase", Discovery)
+	state.GetCachedField(StateType).SetOrAdd("DiscoveryTweets", 200)
+	state.GetCachedField(StateType).SetOrAdd("BatchSize", 100)
+
+	if gameIDs, err := DiscoveryPhase(state); err != nil {
+		t.Errorf("Error occurred whilst running DiscoveryPhase: %v", err)
+	} else {
+		if testing.Verbose() {
+			fmt.Printf("user tweet times: %v (%d)\n", state.GetIterableCachedField(UserTweetTimesType), state.GetIterableCachedField(UserTweetTimesType).Len())
+			fmt.Printf("user post times: %v (%d)\n", state.GetIterableCachedField(RedditUserPostTimesType), state.GetIterableCachedField(RedditUserPostTimesType).Len())
+			fmt.Printf("developer snapshots: %v (%d)\n", state.GetIterableCachedField(DeveloperSnapshotsType), state.GetIterableCachedField(DeveloperSnapshotsType).Len())
+			fmt.Printf("reddit developer snapshots: %v (%d)\n", state.GetIterableCachedField(RedditDeveloperSnapshotsType), state.GetIterableCachedField(RedditDeveloperSnapshotsType).Len())
+			fmt.Printf("game IDs: %v (%d)\n", state.GetIterableCachedField(GameIDsType), state.GetIterableCachedField(GameIDsType).Len())
+			fmt.Printf("returned game IDs: %v (%d)\n", gameIDs, gameIDs.Cardinality())
+			fmt.Printf("deleted developers: %v (%d)\n", state.GetIterableCachedField(DeletedDevelopersType), state.GetIterableCachedField(DeletedDevelopersType).Len())
+			fmt.Printf("state: %#+v\n", state.GetCachedField(StateType))
+			result, _ := state.GetCachedField(StateType).Get("Result")
+			fmt.Printf("scout result %#+v\n", result)
+		}
 	}
 }

@@ -10,11 +10,14 @@ import (
 	"github.com/andygello555/game-scout/reddit"
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	"github.com/andygello555/gotils/v2/numbers"
+	"github.com/andygello555/gotils/v2/slices"
 	"github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"math"
+	"regexp"
+	"sync"
 	"time"
 )
 
@@ -72,7 +75,7 @@ type TransformJob struct {
 
 // TransformResult wraps the return values of TransformTweet for TransformWorker.
 type TransformResult struct {
-	no            int
+	*TransformJob
 	developer     *models.Developer
 	developerSnap *models.DeveloperSnapshot
 	game          *models.Game
@@ -88,14 +91,14 @@ func TransformWorker(
 	gameScrapers *models.StorefrontScrapers[string],
 ) {
 	for job := range jobs {
-		result := &TransformResult{no: job.no}
+		result := &TransformResult{TransformJob: job}
 		switch {
-		case job.tweet == nil:
+		case job.tweet != nil:
 			result.developer, result.developerSnap, result.game, result.postCreatedAt, result.err = TransformTweet(
 				job.tweet,
 				gameScrapers,
 			)
-		case job.post == nil:
+		case job.post != nil:
 			result.developer, result.developerSnap, result.game, result.postCreatedAt, result.err = TransformPost(
 				job.post,
 				gameScrapers,
@@ -103,6 +106,38 @@ func TransformWorker(
 		}
 		results <- result
 	}
+}
+
+func createStorefrontMap(urls []string, maxGames int, maxWarn string) map[models.Storefront]mapset.Set[string] {
+	// Continue we find if there are any SteamURLAppPages that are linked in the tweet
+	storefrontMap := make(map[models.Storefront]mapset.Set[string])
+	totalGames := 0
+out:
+	for _, url := range urls {
+		for _, storefront := range []models.Storefront{
+			models.SteamStorefront,
+			models.ItchIOStorefront,
+		} {
+			// If the expanded URL is in the same format as the ScrapeURL
+			if storefront.ScrapeURL().Match(url) {
+				if _, ok := storefrontMap[storefront]; !ok {
+					storefrontMap[storefront] = mapset.NewThreadUnsafeSet[string]()
+				}
+				if !storefrontMap[storefront].Contains(url) {
+					storefrontMap[storefront].Add(url)
+					// Because we know that this is a new game, we will increment the game total
+					totalGames++
+				}
+			}
+
+			// If we have reached the maximum number of games, then we will exit out of these loops
+			if totalGames == maxGames {
+				log.WARNING.Println(maxWarn)
+				break out
+			}
+		}
+	}
+	return storefrontMap
 }
 
 // TransformTweet takes a twitter.TweetDictionary and splits it out into instances of the models.Developer,
@@ -157,44 +192,24 @@ func TransformTweet(
 	developerSnap.UserPublicMetrics = developer.PublicMetrics
 	developerSnap.ContextAnnotationSet = myTwitter.NewContextAnnotationSet(tweet.Tweet.ContextAnnotations...)
 
-	// Continue we find if there are any SteamURLAppPages that are linked in the tweet
-	storefrontMap := make(map[models.Storefront]mapset.Set[string])
-	totalGames := 0
-out:
-	for _, url := range tweet.Tweet.Entities.URLs {
-		for _, storefront := range []models.Storefront{
-			models.SteamStorefront,
-			models.ItchIOStorefront,
-		} {
-			// If the expanded URL is in the same format as the ScrapeURL
-			if storefront.ScrapeURL().Match(url.ExpandedURL) {
-				if _, ok := storefrontMap[storefront]; !ok {
-					storefrontMap[storefront] = mapset.NewThreadUnsafeSet[string]()
-				}
-				if !storefrontMap[storefront].Contains(url.ExpandedURL) {
-					storefrontMap[storefront].Add(url.ExpandedURL)
-					// Because we know that this is a new game, we will increment the game total
-					totalGames++
-				}
-			}
-
-			// If we have reached the maximum number of games, then we will exit out of these loops
-			if totalGames == globalConfig.Scrape.Constants.MaxGamesPerTweet {
-				log.WARNING.Printf(
-					"We have reached the maximum number of games found in tweet: %s, for author %s (%s)",
-					tweet.Tweet.ID, developer.Username, developer.ID,
-				)
-				break out
-			}
-		}
-	}
+	// Create the storefront map for the gameScrapers
+	storefrontMap := createStorefrontMap(
+		slices.Comprehension[twitter.EntityURLObj, string](tweet.Tweet.Entities.URLs, func(idx int, value twitter.EntityURLObj, arr []twitter.EntityURLObj) string {
+			return value.ExpandedURL
+		}),
+		globalConfig.Scrape.Constants.MaxGamesPerTweet,
+		fmt.Sprintf(
+			"We have reached the maximum number of games found in tweet: %s, for author %s (%s)",
+			tweet.Tweet.ID, developer.Username, developer.ID,
+		),
+	)
 
 	// Scrape metrics from all the storefronts found for the game. We set the Developer field of the Game so that we can
 	// match any username's found on the Game's website. We only do this if there are Storefronts in the storefrontMap,
 	// otherwise we'll end up waiting for nothing
 	game = nil
 	if len(storefrontMap) > 0 {
-		if gameChannel, ok := gameScrapers.Add(false, &models.Game{Developers: []string{developer.Username}}, storefrontMap); ok {
+		if gameChannel, ok := gameScrapers.Add(false, &models.Game{Developers: []string{developer.TypedUsername()}}, storefrontMap); ok {
 			gameModel := <-gameChannel
 			if gameModel != nil {
 				game = gameModel.(*models.Game)
@@ -206,6 +221,29 @@ out:
 		}
 	}
 	return
+}
+
+var urlInTextPattern = regexp.MustCompile(`(?mi)\b(?:https?://|www\.|ftp\.)[-A-Z0-9+&@#/%=~_|$?!:,.]*[A-Z0-9+&@#/%=~_|$]`)
+
+func findURLsInPostComments(comments []*reddit.Comment, urls mapset.Set[string]) {
+	for _, comment := range comments {
+		// We are only concerned about comments that were written by the OP
+		if comment.IsSubmitter {
+			// Find any <a> tags within the BodyHTML's soup
+			for _, a := range comment.Soup().FindAll("a") {
+				if href, ok := a.Attrs()["href"]; ok {
+					urls.Add(href)
+				}
+			}
+
+			// Find any URLs in the plain-text Body by using regex
+			for _, url := range urlInTextPattern.FindAllString(comment.Body, -1) {
+				urls.Add(url)
+			}
+
+			findURLsInPostComments(comment.Replies.Comments, urls)
+		}
+	}
 }
 
 func TransformPost(post *PostCommentsAndUser, gameScrapers *models.StorefrontScrapers[string]) (
@@ -228,6 +266,63 @@ func TransformPost(post *PostCommentsAndUser, gameScrapers *models.StorefrontScr
 
 	developerSnap = &models.DeveloperSnapshot{}
 	developerSnap.DeveloperID = developer.ID
+	developerSnap.RedditPostIDs = []string{post.Post.SubredditName, post.Post.ID}
+	developerSnap.RedditPublicMetrics = developer.RedditPublicMetrics
+	developerSnap.PostPublicMetrics = &models.RedditPostMetrics{
+		Ups:                  post.Post.Ups,
+		Downs:                post.Post.Downs,
+		Score:                post.Post.Score,
+		UpvoteRatio:          post.Post.UpvoteRatio,
+		NumberOfComments:     post.Post.NumberOfComments,
+		SubredditSubscribers: post.Post.SubredditSubscribers,
+	}
+	postCreatedAt = post.Post.Created.Time
+
+	urls := mapset.NewSet[string]()
+	// First we find any URLs in the post's body
+	for _, a := range post.Post.Soup().FindAll("a") {
+		if href, ok := a.Attrs()["href"]; ok {
+			urls.Add(href)
+		}
+	}
+
+	for _, url := range urlInTextPattern.FindAllString(post.Post.Body, -1) {
+		urls.Add(url)
+	}
+
+	// Then we recursively look through all comments and find all URLs
+	findURLsInPostComments(post.Comments, urls)
+	log.INFO.Printf(
+		"Found %d URLs within post %q (%s) from subreddit %q and from comments made by OP: %v",
+		urls.Cardinality(), post.Post.Title, post.Post.ID, post.Post.SubredditName, urls,
+	)
+
+	// Then we create the storefront map for the gameScrapers
+	storefrontMap := createStorefrontMap(
+		urls.ToSlice(),
+		globalConfig.Scrape.Constants.MaxGamesPerPost,
+		fmt.Sprintf(
+			"We have reached the maximum number of games (%d) found in post %q (%s) from subreddit %q",
+			globalConfig.Scrape.Constants.MaxGamesPerPost, post.Post.Title, post.Post.ID, post.Post.SubredditName,
+		),
+	)
+
+	// Scrape metrics from all the storefronts found for the game. We set the Developer field of the Game so that we can
+	// match any username's found on the Game's website. We only do this if there are Storefronts in the storefrontMap,
+	// otherwise we'll end up waiting for nothing
+	game = nil
+	if len(storefrontMap) > 0 {
+		if gameChannel, ok := gameScrapers.Add(false, &models.Game{Developers: []string{developer.TypedUsername()}}, storefrontMap); ok {
+			gameModel := <-gameChannel
+			if gameModel != nil {
+				game = gameModel.(*models.Game)
+				// Don't save games that are not games
+				if !game.IsGame {
+					game = nil
+				}
+			}
+		}
+	}
 	return
 }
 
@@ -289,17 +384,26 @@ func DiscoveryBatch(
 		result := <-results
 		if result.err == nil {
 			var (
-				created bool
-				gameErr error
+				created                         bool
+				gameErr                         error
+				cachedTimeType, cachedSnapsType CachedFieldType
 			)
 
+			// We access different cached fields within the state depending on the post type
+			switch {
+			case result.tweet != nil:
+				cachedTimeType, cachedSnapsType = UserTweetTimesType, DeveloperSnapshotsType
+			case result.post != nil:
+				cachedTimeType, cachedSnapsType = RedditUserPostTimesType, RedditDeveloperSnapshotsType
+			}
+
 			log.INFO.Printf("%stransformed %s no. %d successfully", logPrefix, posts.UnitName(), result.no)
-			state.GetIterableCachedField(UserTweetTimesType).SetOrAdd(result.developer.ID, result.postCreatedAt)
+			state.GetIterableCachedField(cachedTimeType).SetOrAdd(result.developer.ID, result.postCreatedAt)
 			state.GetCachedField(StateType).SetOrAdd("Result", resultKey(), "TweetsConsumed", models.SetOrAddInc.Func())
 
 			// At this point we only save the developer and the game. We still need to aggregate all the possible
 			// developerSnapshots
-			if snapshots, ok := state.GetIterableCachedField(DeveloperSnapshotsType).Get(result.developer.ID); !ok {
+			if snapshots, ok := state.GetIterableCachedField(cachedSnapsType).Get(result.developer.ID); !ok {
 				// Create/update the developer if a developer snapshot for it hasn't been added yet
 				log.INFO.Printf("%sthis is the first time we have seen Developer %v", logPrefix, result.developer)
 				if created, err = db.Upsert(result.developer); resultAddDevOrGame(created) {
@@ -327,9 +431,9 @@ func DiscoveryBatch(
 			}
 
 			// Add the developerSnap to the developerSnapshots
-			state.GetIterableCachedField(DeveloperSnapshotsType).SetOrAdd(result.developer.ID, result.developerSnap)
+			state.GetIterableCachedField(cachedSnapsType).SetOrAdd(result.developer.ID, result.developerSnap)
 			state.GetCachedField(StateType).SetOrAdd("Result", resultKey(), "TotalSnapshots", models.SetOrAddInc.Func())
-			log.INFO.Printf("%sadded DeveloperSnapshot to mapping (%d developer IDs in DeveloperSnapshots)", logPrefix, state.GetIterableCachedField(DeveloperSnapshotsType).Len())
+			log.INFO.Printf("%sadded DeveloperSnapshot to mapping (%d developer IDs in DeveloperSnapshots)", logPrefix, state.GetIterableCachedField(cachedSnapsType).Len())
 		} else {
 			log.WARNING.Printf("%scouldn't transform %s no. %d: %s. Skipping...", logPrefix, posts.UnitName(), result.no, err.Error())
 		}
@@ -505,7 +609,8 @@ func redditDiscoveryBatchWorker(
 //
 // This can run in parallel to DiscoveryPhase, but should be passed a ScoutState that is in memory which can then be
 // merged back into the main ScoutState.
-func RedditDiscoveryPhase(state *ScoutState, gameScrapers *models.StorefrontScrapers[string], subreddits ...string) (err error) {
+func RedditDiscoveryPhase(wg *sync.WaitGroup, state *ScoutState, gameScrapers *models.StorefrontScrapers[string], subreddits ...string) (err error) {
+	defer wg.Done()
 	if len(subreddits) == 0 {
 		subreddits = globalConfig.Reddit.RedditSubreddits()
 	}
@@ -513,6 +618,16 @@ func RedditDiscoveryPhase(state *ScoutState, gameScrapers *models.StorefrontScra
 	subredditResults := make(chan redditSubredditScrapeResult, len(subreddits))
 	postJobs := make(chan redditDiscoveryBatchJob, len(subreddits))
 	postResults := make(chan redditDiscoveryBatchResult, len(subreddits))
+
+	// Make an initial request with the reddit API to make sure that the rate limits are fresh
+	log.INFO.Printf("Making an initial request to the top binding for the subreddit %q to ensure rate limits are fresh", subreddits[0])
+	if _, err = reddit.API.Execute("top", subreddits[0], reddit.Week, 1); err != nil {
+		err = myErrors.TemporaryWrapf(
+			false, err, "could not execute initial \"top\" binding for subreddit %q",
+			subreddits[0],
+		)
+		return
+	}
 
 	for i := 0; i < globalConfig.Scrape.Constants.RedditSubredditScrapeWorkers; i++ {
 		go redditSubredditScraper(subredditJobs, subredditResults)
@@ -555,8 +670,10 @@ func RedditDiscoveryPhase(state *ScoutState, gameScrapers *models.StorefrontScra
 		close(postJobs)
 	}()
 
-	// Consume all redditDiscoveryBatchResults from the redditDiscoveryBatchWorkers.
-	for result := range postResults {
+	// Consume all redditDiscoveryBatchResults from the redditDiscoveryBatchWorkers, and merge each temporary state
+	// created within DiscoveryBatch back into the ScoutState passed into the procedure.
+	for r := 0; r < len(subreddits); r++ {
+		result := <-postResults
 		if result.err != nil {
 			log.ERROR.Printf(
 				"%d posts for subreddit %q could not be DiscoveryBatched: %v",
@@ -647,11 +764,25 @@ func DiscoveryPhase(state *ScoutState) (gameIDs mapset.Set[uuid.UUID], err error
 		globalConfig.Scrape, db.DB,
 		globalConfig.Scrape.Constants.DiscoveryGameScrapeWorkers,
 		globalConfig.Scrape.Constants.DiscoveryMaxConcurrentGameScrapeWorkers,
-		batchSize*globalConfig.Scrape.Constants.MaxGamesPerTweet,
+		(batchSize*globalConfig.Scrape.Constants.MaxGamesPerTweet)+(len(globalConfig.Reddit.RedditSubreddits())*globalConfig.Scrape.Constants.RedditPostsPerSubreddit*globalConfig.Scrape.Constants.MaxGamesPerPost),
 		globalConfig.Scrape.Constants.MinScrapeStorefrontsForGameWorkerWaitTime.Duration,
 		globalConfig.Scrape.Constants.MaxScrapeStorefrontsForGameWorkerWaitTime.Duration,
 	)
 	gameScrapers.Start()
+
+	start := time.Now()
+	var (
+		redditDiscoveryWg       sync.WaitGroup
+		redditDiscoveryDuration time.Duration
+		redditDiscoveryErr      error
+	)
+
+	redditDiscoveryWg.Add(1)
+	redditDiscoveryState := StateInMemory()
+	go func() {
+		redditDiscoveryErr = RedditDiscoveryPhase(&redditDiscoveryWg, redditDiscoveryState, gameScrapers)
+		redditDiscoveryDuration = time.Now().Sub(start)
+	}()
 
 	log.INFO.Println("Starting Discovery phase")
 	for i := batchNo * batchSize; i < discoveryTweets; i += batchSize {
@@ -716,9 +847,30 @@ func DiscoveryPhase(state *ScoutState) (gameIDs mapset.Set[uuid.UUID], err error
 		)
 		sleepBar(globalConfig.Scrape.Constants.SecondsBetweenDiscoveryBatches.Duration)
 	}
+	log.INFO.Printf("Finished Tweet discovery in %s", time.Now().Sub(start))
+
+	// Wait for the RedditDiscoveryPhase to complete that is running in a goroutine
+	log.INFO.Println("Waiting for RedditDiscoveryPhase to finish...")
+	redditDiscoveryWg.Wait()
+	log.INFO.Printf("RedditDiscoveryPhase has finished in %s", redditDiscoveryDuration.String())
+
+	// Merge everything back into the main state
+	state.MergeIterableCachedFields(redditDiscoveryState)
+	scoutResultAny, _ := redditDiscoveryState.GetCachedField(StateType).Get("Result")
+	scoutResult := scoutResultAny.(*models.ScoutResult)
+	log.INFO.Printf(
+		"Merging RedditDiscoveryPhase state back into the main ScoutState's ScoutResult: %#+v",
+		scoutResult.DiscoveryStats,
+	)
+	state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "Developers", models.SetOrAddAdd.Func(scoutResult.DiscoveryStats.Developers))
+	state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "Games", models.SetOrAddAdd.Func(scoutResult.DiscoveryStats.Games))
+	state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "TweetsConsumed", models.SetOrAddAdd.Func(scoutResult.DiscoveryStats.TweetsConsumed))
+	state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "TotalSnapshots", models.SetOrAddAdd.Func(scoutResult.DiscoveryStats.TotalSnapshots))
+
+	// Merge any errors that occurred whilst running the RedditDiscoveryPhase
+	err = myErrors.MergeErrors(err, redditDiscoveryErr)
 
 	gameScrapers.Wait()
 	log.INFO.Println("StorefrontScrapers have finished")
-
 	return
 }

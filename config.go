@@ -690,6 +690,9 @@ type ScrapeConstants struct {
 	// MaxGamesPerTweet is the maximum number of games for each tweet we process in the Discovery and Update Phase. This
 	// is needed so that we don't overload the queue to the models.StorefrontScrapers.
 	MaxGamesPerTweet int `json:"max_games_per_tweet"`
+	// MaxGamesPerPost is the maximum number of games for each Reddit post we process in the Discovery and Update Phase.
+	// This is needed so that we don't overload the queue to the models.StorefrontScrapers.
+	MaxGamesPerPost int `json:"max_games_per_post"`
 
 	// MaxTrendWorkers is the maximum number of trendFinder workers to start to find the models.Trend,
 	// models.DeveloperSnapshot, and models.Game for a models.Developer to use in the models.TrendingDev field in

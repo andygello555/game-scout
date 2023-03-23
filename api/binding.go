@@ -8,6 +8,7 @@ import (
 	"github.com/andygello555/gotils/v2/slices"
 	"github.com/pkg/errors"
 	"reflect"
+	"sync"
 )
 
 // Binding represents an action in an API that can be executed. It takes two type parameters:
@@ -126,7 +127,9 @@ type bindingProto[ResT any, RetT any] struct {
 	name                    string
 	nameSet                 bool
 	attrs                   map[string]any
+	attrsMutex              *sync.Mutex
 	attrFuncs               []Attr
+	attrFuncsMutex          *sync.Mutex
 }
 
 func (b bindingProto[ResT, RetT]) GetRequestMethod() BindingRequestMethod[ResT, RetT] {
@@ -433,7 +436,9 @@ func (b bindingProto[ResT, RetT]) SetName(name string) Binding[ResT, RetT] {
 func (b bindingProto[ResT, RetT]) Attrs() map[string]any { return b.attrs }
 
 func (b bindingProto[ResT, RetT]) AddAttrs(attrs ...Attr) Binding[ResT, RetT] {
+	b.attrFuncsMutex.Lock()
 	b.attrFuncs = append(b.attrFuncs, attrs...)
+	b.attrFuncsMutex.Unlock()
 	b.evaluateAttrs(nil)
 	return &b
 }
@@ -455,12 +460,16 @@ func (b bindingProto[ResT, RetT]) evaluateAttrs(client Client) {
 		key, val, ok := evaluate(attr)
 		if ok {
 			evaluatedAttrIndexes = append(evaluatedAttrIndexes, i)
+			b.attrsMutex.Lock()
 			b.attrs[key] = val
+			b.attrsMutex.Unlock()
 		}
 	}
 
 	if len(evaluatedAttrIndexes) > 0 {
+		b.attrFuncsMutex.Lock()
 		b.attrFuncs = slices.RemoveElems(b.attrFuncs, evaluatedAttrIndexes...)
+		b.attrFuncsMutex.Unlock()
 	}
 }
 
@@ -514,6 +523,7 @@ func NewBinding[ResT any, RetT any](
 	paginated bool,
 	attrs ...Attr,
 ) Binding[ResT, RetT] {
+	var attrsMutex, attrFuncsMutex sync.Mutex
 	b := &bindingProto[ResT, RetT]{
 		requestMethod:           request,
 		responseWrapperMethod:   wrap,
@@ -522,7 +532,9 @@ func NewBinding[ResT any, RetT any](
 		paramsMethod:            params,
 		paginated:               paginated,
 		attrs:                   make(map[string]any),
+		attrsMutex:              &attrsMutex,
 		attrFuncs:               attrs,
+		attrFuncsMutex:          &attrFuncsMutex,
 	}
 	// We pre-evaluate any attributes that don't need access to the client
 	b.evaluateAttrs(nil)
@@ -550,10 +562,13 @@ func NewWrappedBinding[ResT any, RetT any](
 // default implementation) the returned Binding can then have its methods and properties set using the various setters
 // available on the Binding interface.
 func NewBindingChain[ResT any, RetT any](request BindingRequestMethod[ResT, RetT]) Binding[ResT, RetT] {
+	var attrsMutex, attrFuncsMutex sync.Mutex
 	b := &bindingProto[ResT, RetT]{
-		requestMethod: request,
-		attrs:         make(map[string]any),
-		attrFuncs:     make([]Attr, 0),
+		requestMethod:  request,
+		attrs:          make(map[string]any),
+		attrsMutex:     &attrsMutex,
+		attrFuncs:      make([]Attr, 0),
+		attrFuncsMutex: &attrFuncsMutex,
 	}
 	return b
 }

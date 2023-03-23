@@ -12,6 +12,7 @@ import (
 	"github.com/andygello555/game-scout/monday"
 	"github.com/andygello555/game-scout/steamcmd"
 	"github.com/andygello555/gotils/v2/numbers"
+	"github.com/andygello555/gotils/v2/slices"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -56,10 +57,12 @@ type Game struct {
 	// set to: "https://cdn.cloudflare.steamstatic.com/steam/apps/{{ $appid }}/header.jpg", and for ItchIOStorefront
 	// Games this is set to the URL of the header image on the Game's Itch.IO page.
 	ImageURL null.String `gorm:"default:null"`
-	// Developers are the Twitter usernames that could be developers for this Game.
-	Developers pq.StringArray `gorm:"type:varchar(20)[];default:'{}'"`
-	// VerifiedDeveloperUsernames are the Twitter usernames that can be found somewhere on the Game's Website.
-	VerifiedDeveloperUsernames pq.StringArray `gorm:"type:varchar(20)[];default:'{}'"`
+	// Developers are the Twitter/Reddit usernames that could be developers for this Game. Each username is prefixed with
+	// their Developer.Type's character (i.e. "T" or "R").
+	Developers pq.StringArray `gorm:"type:varchar(21)[];default:'{}'"`
+	// VerifiedDeveloperUsernames are the Twitter/Reddit usernames that can be found somewhere on the Game's Website.
+	// Each username is prefixed with their Developer.Type's character (i.e. "T" or "R").
+	VerifiedDeveloperUsernames pq.StringArray `gorm:"type:varchar(21)[];default:'{}'"`
 	// Updates is the number of times this app has been updated. 0 means that the Game has just been created. Please
 	// don't set this yourself when creating a Game.
 	Updates uint64
@@ -567,7 +570,8 @@ func (g *Game) VerifiedDeveloper(db *gorm.DB) *Developer {
 		return nil
 	}
 	developer := Developer{}
-	if err := db.Limit(1).Find(&developer, "username IN ?", g.VerifiedDeveloperUsernames).Error; err != nil {
+	devType, firstVerified := DevTypeFromUsername(g.VerifiedDeveloperUsernames[0])
+	if err := db.Limit(1).Find(&developer, "username = ? AND type = ?", firstVerified, devType).Error; err != nil {
 		return nil
 	}
 	return &developer
@@ -1000,7 +1004,9 @@ func (g *GameSteamStorefront) ScrapeExtra(config ScrapeConfig, maxTries int, min
 				}
 
 				usernames.Remove("steam")
-				g.Game.VerifiedDeveloperUsernames = usernames.ToSlice()
+				g.Game.VerifiedDeveloperUsernames = slices.Comprehension(usernames.ToSlice(), func(idx int, value string, arr []string) string {
+					return fmt.Sprintf("T%s", value)
+				})
 				log.INFO.Printf("Twitter usernames found for %d: %v", appID, usernames)
 			}
 
@@ -1113,7 +1119,7 @@ func (g *GameItchIOStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, min
 
 		// Find the verified developer usernames for this game. This can be found in meta[property='twitter:creator']
 		if creator := doc.Find("meta", "property", "twitter:creator"); creator.Error == nil {
-			g.Game.VerifiedDeveloperUsernames = []string{strings.Trim(creator.Attrs()["content"], "@")}
+			g.Game.VerifiedDeveloperUsernames = []string{fmt.Sprintf("T%s", strings.Trim(creator.Attrs()["content"], "@"))}
 			log.INFO.Printf(
 				"Found verified developer(s): %v, for Itch.IO title %s (dev: %s)",
 				g.Game.VerifiedDeveloperUsernames, gameSlug, developer,

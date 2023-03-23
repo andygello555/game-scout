@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/api"
 	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/pkg/errors"
@@ -120,6 +121,7 @@ func (c *Client) AddRateLimit(bindingName string, rateLimit api.RateLimit) {
 
 func (c *Client) LatestRateLimit(bindingName string) api.RateLimit {
 	var latestRateLimit api.RateLimit
+	totalRateLimits := 0
 	c.rateLimits.Range(func(key, value any) bool {
 		rl := value.(api.RateLimit)
 		if latestRateLimit == nil {
@@ -131,9 +133,14 @@ func (c *Client) LatestRateLimit(bindingName string) api.RateLimit {
 				latestRateLimit = rl
 			}
 		}
+		totalRateLimits++
 		return true
 	})
 	return latestRateLimit
+}
+
+func (c *Client) Log(msg string) {
+	log.WARNING.Println(msg)
 }
 
 func CreateClient(config Config) {

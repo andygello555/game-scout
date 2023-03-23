@@ -315,7 +315,7 @@ func DeletePhase(state *ScoutState) (err error) {
 				gameIDs,
 			).Update(
 				"developers",
-				gorm.Expr("array_remove(developers, ?)", deletedDev.Developer.Username),
+				gorm.Expr("array_remove(developers, ?)", deletedDev.Developer.TypedUsername()),
 			).Error; err != nil {
 				log.ERROR.Printf(
 					"\tCould not remove \"%s\" from the developers field of all Games related to Developer %v: %v",

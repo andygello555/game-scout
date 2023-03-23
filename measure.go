@@ -377,13 +377,14 @@ func MeasurePhase(state *ScoutState) (err error) {
 						log.ERROR.Printf("\tCould not save Game %q after setting Watched to nil: %v", watchedGame.String(), err)
 					}
 				}
-			} else {
+			} else if len(watchedGame.VerifiedDeveloperUsernames) > 0 {
 				log.INFO.Printf("\tGame %q is still being watched on Monday getting TrendingDev", watchedGame.String())
 				watchedTrendingDev := models.TrendingDev{
 					Games: []*models.Game{watchedGame},
 				}
 				developer := models.Developer{}
-				if err = db.DB.Limit(1).Find(&developer, "username IN ?", []string(watchedGame.VerifiedDeveloperUsernames)).Error; err != nil {
+				devType, firstVerified := models.DevTypeFromUsername(watchedGame.VerifiedDeveloperUsernames[0])
+				if err = db.DB.Limit(1).Find(&developer, "username = ? AND type = ?", firstVerified, devType).Error; err != nil {
 					log.WARNING.Printf("\tCould not find verified developer for Game %q: %v", watchedGame.String(), err)
 				} else {
 					log.INFO.Printf("\tFound verified Developer for Game %q: %v", watchedGame.String(), developer)
@@ -403,6 +404,8 @@ func MeasurePhase(state *ScoutState) (err error) {
 					}
 					measureContext.WatchedDevelopers = append(measureContext.WatchedDevelopers, &watchedTrendingDev)
 				}
+			} else {
+				log.WARNING.Printf("\tThere are no verified developers for Game %q", watchedGame.String())
 			}
 		}
 

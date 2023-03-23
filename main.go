@@ -964,7 +964,7 @@ func main() {
 					}
 
 					if c.Bool("printBefore") {
-						fmt.Printf("\t%v\n", developer)
+						fmt.Printf("\t%#+v\n", developer)
 					}
 
 					if c.Bool("games") {
@@ -1062,7 +1062,7 @@ func main() {
 					}
 
 					if c.Bool("printAfter") {
-						fmt.Printf("\t%v\n", developer)
+						fmt.Printf("\t%#+v\n", developer)
 					}
 				}
 

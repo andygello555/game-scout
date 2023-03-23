@@ -177,6 +177,7 @@ func (p *typedPaginator[ResT, RetT]) Page() RetT { return p.currentPage }
 
 func paginatorCheckRateLimit(
 	client Client,
+	waitTime time.Duration,
 	bindingName string,
 	limitArg **float64,
 	page int,
@@ -184,22 +185,41 @@ func paginatorCheckRateLimit(
 	params []BindingParam,
 	args []any,
 ) (ignoreFirstRequest bool, ok bool, err error) {
-	cont := func() bool {
-		return page == 1 || reflect.ValueOf(currentPage).Len() > 0
-	}
-
 	var rateLimitedClient RateLimitedClient
 	if rateLimitedClient, ok = client.(RateLimitedClient); ok {
 		rl := rateLimitedClient.LatestRateLimit(bindingName)
+		tries := 3
+		for rl == nil && tries > 0 {
+			rateLimitedClient.Log(fmt.Sprintf(
+				"Could not get latest rate limit for %q%v on page no. %d. Trying again in %s (%d tries left)...",
+				bindingName, args, page, waitTime.String(), tries,
+			))
+			time.Sleep(waitTime)
+			rl = rateLimitedClient.LatestRateLimit(bindingName)
+			tries--
+		}
+
 		if rl != nil && rl.Reset().After(time.Now()) {
 			sleepTime := rl.Reset().Sub(time.Now())
 			switch rl.Type() {
 			case RequestRateLimit:
 				if rl.Remaining() == 0 {
+					rateLimitedClient.Log(fmt.Sprintf(
+						"Latest request rate limit for %q%v has expired on page no. %d. Sleeping for %s until %s...",
+						bindingName, args, page, sleepTime.String(), rl.Reset(),
+					))
 					time.Sleep(sleepTime)
 				}
 			case ResourceRateLimit:
+				cont := func() bool {
+					return page == 1 || reflect.ValueOf(currentPage).Len() > 0
+				}
+
 				if reflect.ValueOf(currentPage).Len() > rl.Remaining() {
+					rateLimitedClient.Log(fmt.Sprintf(
+						"Latest resource rate limit for %q%v has expired on page no. %d. Sleeping for %s until %s...",
+						bindingName, args, page, sleepTime.String(), rl.Reset(),
+					))
 					time.Sleep(sleepTime)
 				} else if cont() {
 					if limitArg == nil {
@@ -233,18 +253,31 @@ func paginatorCheckRateLimit(
 					}
 
 					if **limitArg > float64(rl.Remaining()) {
+						rateLimitedClient.Log(fmt.Sprintf(
+							"Latest resource rate limit for %q%v has expired on page no. %d. Sleeping for %s until %s...",
+							bindingName, args, page, sleepTime.String(), rl.Reset(),
+						))
 						time.Sleep(sleepTime)
 					}
 				}
 			}
 		} else if page == 1 {
 			ignoreFirstRequest = true
-		} else {
+		} else if rl == nil {
+			rateLimitedClient.Log(fmt.Sprintf(
+				"Could not get the latest rate limit for %q%v on page no. %d",
+				bindingName, args, page,
+			))
 			err = fmt.Errorf(
 				"could not get the latest RateLimit/RateLimit has expired but we are on page %d, check Client.Run",
 				page,
 			)
 			return
+		} else {
+			rateLimitedClient.Log(fmt.Sprintf(
+				"Latest rate limit for %q is before the current time: %s - %s = %s, so we are going to execute the binding anyway",
+				bindingName, time.Now().Format("15:04:05"), rl.Reset().Format("15:04:05"), time.Now().Sub(rl.Reset()),
+			))
 		}
 	}
 	return
@@ -271,7 +304,7 @@ func (p *typedPaginator[ResT, RetT]) Next() (err error) {
 	var ignoreFirstRequest bool
 	execute := func() (ret RetT, err error) {
 		if ignoreFirstRequest, p.usingRateLimitedClient, err = paginatorCheckRateLimit(
-			p.client, p.binding.Name(), &p.limitArg, p.page, p.currentPage, p.params, p.args,
+			p.client, p.waitTime, p.binding.Name(), &p.limitArg, p.page, p.currentPage, p.params, p.args,
 		); err != nil {
 			return
 		}
@@ -489,7 +522,7 @@ func (p *paginator) Next() (err error) {
 	var ignoreFirstRequest bool
 	execute := func() (err error) {
 		if ignoreFirstRequest, p.usingRateLimitedClient, err = paginatorCheckRateLimit(
-			p.client, p.binding.Name(), &p.limitArg, p.page, p.currentPage, p.params, p.args,
+			p.client, p.waitTime, p.binding.Name(), &p.limitArg, p.page, p.currentPage, p.params, p.args,
 		); err != nil {
 			return
 		}

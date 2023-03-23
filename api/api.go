@@ -80,6 +80,9 @@ type RateLimitedClient interface {
 	// LatestRateLimit should return the latest RateLimit for the Binding of the given name. If multiple Binding(s)
 	// share the same RateLimit(s) then this can also be encoded into this method.
 	LatestRateLimit(bindingName string) RateLimit
+	// Log should be implemented for debugging purposes. If you do not require it then you can define it but have it do
+	// nothing.
+	Log(string)
 }
 
 // BindingWrapper wraps a Binding value with its name. This is used within the Schema map so that we don't have to use

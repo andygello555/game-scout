@@ -8,6 +8,7 @@ import (
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"strings"
 	"time"
 )
 
@@ -23,6 +24,17 @@ const (
 	TwitterDeveloperType DeveloperType = "T"
 	RedditDeveloperType  DeveloperType = "R"
 )
+
+// DevTypeFromUsername returns the DeveloperType of the given Developer.Username, as well as the given
+// Developer.Username without the prefixed DeveloperType character.
+func DevTypeFromUsername(username string) (DeveloperType, string) {
+	for _, devType := range UnknownDeveloperType.Values() {
+		if strings.HasPrefix(username, devType) {
+			return DeveloperType(devType), strings.TrimPrefix(username, devType)
+		}
+	}
+	return UnknownDeveloperType, username
+}
 
 // Index returns the index of the DeveloperType.
 func (dt DeveloperType) Index() int {
@@ -123,6 +135,9 @@ func (d *Developer) Link() string {
 	return fmt.Sprintf("https://twitter.com/%s", d.Username)
 }
 
+// TypedUsername returns the Developer's Username prefixed with the string representation of Type.
+func (d *Developer) TypedUsername() string { return fmt.Sprintf("%s%s", string(d.Type), d.Username) }
+
 func (d *Developer) GetObservedName() string { return "Snapshot Weighted Score" }
 
 func (d *Developer) GetVariableNames() []string { return []string{"Snapshot Date"} }
@@ -161,7 +176,7 @@ func (d *Developer) LatestDeveloperSnapshot(db *gorm.DB) (developerSnap *Develop
 
 // Games returns the games for this developer ordered by weighted score descending.
 func (d *Developer) Games(db *gorm.DB) (games []*Game, err error) {
-	if err = db.Model(&Game{}).Where("? = ANY(developers)", d.Username).Order("weighted_score desc").Find(&games).Error; err != nil {
+	if err = db.Model(&Game{}).Where("? = ANY(developers)", d.TypedUsername()).Order("weighted_score desc").Find(&games).Error; err != nil {
 		return games, errors.Wrapf(err, "could not find Games for %v", d)
 	}
 	return

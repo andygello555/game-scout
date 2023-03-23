@@ -10,6 +10,8 @@ import (
 	"github.com/deckarep/golang-set/v2"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -87,74 +89,287 @@ func (cfi *CachedFieldIterator) Next() {
 	cfi.queue = cfi.queue[1:]
 }
 
-// UserTweetTimes is used in the Scout procedure to store the times of the tweets for a Twitter user. The keys are
-// comprised of Twitter user IDs. UserTweetTimes are serialised straight to JSON.
-type UserTweetTimes map[string][]time.Time
+var developerTypeUserTimesPrefix = map[models.DeveloperType]string{
+	models.UnknownDeveloperType: "unknownUserPost",
+	models.TwitterDeveloperType: "userTweet",
+	models.RedditDeveloperType:  "redditUserPost",
+}
 
-func (utt *UserTweetTimes) BaseDir() string { return "" }
+func userTimesName(devType models.DeveloperType) string {
+	return fmt.Sprintf("%sTimes", developerTypeUserTimesPrefix[devType])
+}
 
-func (utt *UserTweetTimes) Path(paths ...string) string { return "userTweetTimes.json" }
+func userTimesTitle(devType models.DeveloperType) string {
+	return cases.Title(language.Und).String(userTimesName(devType))
+}
 
-func (utt *UserTweetTimes) Serialise(pathsToBytes PathsToBytesWriter) (err error) {
+func userTimesPath(devType models.DeveloperType, paths ...string) string {
+	return fmt.Sprintf("%s.json", userTimesName(devType))
+}
+
+func userTimesSerialise(ut IterableCachedField, devType models.DeveloperType, writer PathsToBytesWriter) (err error) {
 	var data []byte
-	if data, err = json.Marshal(&utt); err != nil {
-		err = errors.Wrap(err, "cannot serialise UserTweetTimes")
+	if data, err = json.Marshal(&ut); err != nil {
+		err = errors.Wrapf(err, "cannot serialise %s", userTimesTitle(devType))
 		return
 	}
-	pathsToBytes.AddFilenameBytes(utt.Path(), data)
+	writer.AddFilenameBytes(ut.Path(), data)
 	return
 }
 
-func (utt *UserTweetTimes) Deserialise(pathsToBytes PathsToBytesReader) (err error) {
+func userTimesDeserialise(ut IterableCachedField, devType models.DeveloperType, reader PathsToBytesReader) (err error) {
 	var data []byte
-	if data, err = pathsToBytes.BytesForFilename(utt.Path()); err != nil {
-		err = errors.Wrap(err, "UserTweetTimes does not exist in cache")
+	if data, err = reader.BytesForFilename(ut.Path()); err != nil {
+		err = errors.Wrapf(err, "%s does not exist in cache", userTimesTitle(devType))
 		return
 	}
-	if err = json.Unmarshal(data, utt); err != nil {
+	if err = json.Unmarshal(data, ut); err != nil {
 		err = errors.Wrap(err, "could not deserialise UserTweetTimes")
 		return
 	}
 	return
 }
 
-func (utt *UserTweetTimes) SetOrAdd(args ...any) {
+func userTimesSetOrAdd(ut map[string][]time.Time, args ...any) {
 	for argNo := 0; argNo < len(args); argNo += 2 {
 		developerID := args[argNo].(string)
-		tweetTime := args[argNo+1].(time.Time)
-		if _, ok := (*utt)[developerID]; !ok {
-			(*utt)[developerID] = make([]time.Time, 0)
+		postTime := args[argNo+1].(time.Time)
+		if _, ok := ut[developerID]; !ok {
+			ut[developerID] = make([]time.Time, 0)
 		}
-		(*utt)[developerID] = append((*utt)[developerID], tweetTime)
+		ut[developerID] = append(ut[developerID], postTime)
 	}
 }
 
-func (utt *UserTweetTimes) Len() int { return len(*utt) }
-
-func (utt *UserTweetTimes) Iter() *CachedFieldIterator {
+func userTimesIter(ut any) *CachedFieldIterator {
+	utCached := ut.(IterableCachedField)
 	iter := &CachedFieldIterator{
-		cachedField: utt,
-		queue:       make([]any, utt.Len()),
+		cachedField: utCached,
+		queue:       make([]any, utCached.Len()),
 	}
+
+	var utMap map[string][]time.Time
+	switch ut.(type) {
+	case *UserTweetTimes:
+		utMap = *ut.(*UserTweetTimes)
+	case *RedditUserPostTimes:
+		utMap = *ut.(*RedditUserPostTimes)
+	default:
+		panic(errors.New("user times are not *UserTweetTimes or *RedditUserPostTimes"))
+	}
+
 	i := 0
-	for key := range *utt {
+	for key := range utMap {
 		iter.queue[i] = key
 		i++
 	}
 	return iter
 }
 
-func (utt *UserTweetTimes) Get(key any) (any, bool) {
-	return (*utt)[key.(string)], false
+func userTimesMerge(ut map[string][]time.Time, field CachedField) {
+	var fieldMap map[string][]time.Time
+	switch field.(type) {
+	case *UserTweetTimes:
+		fieldMap = *field.(*UserTweetTimes)
+	case *RedditUserPostTimes:
+		fieldMap = *field.(*RedditUserPostTimes)
+	}
+
+	for developerID, tweetTimes := range fieldMap {
+		if _, ok := ut[developerID]; !ok {
+			ut[developerID] = make([]time.Time, len(tweetTimes))
+			copy(ut[developerID], tweetTimes)
+		} else {
+			ut[developerID] = append(ut[developerID], tweetTimes...)
+		}
+	}
 }
 
-func (utt *UserTweetTimes) Merge(field CachedField) {
-	for developerID, tweetTimes := range *field.(*UserTweetTimes) {
-		if _, ok := (*utt)[developerID]; !ok {
-			(*utt)[developerID] = make([]time.Time, len(tweetTimes))
-			copy((*utt)[developerID], tweetTimes)
+// UserTweetTimes is used in the Scout procedure to store the times of the tweets for a Twitter user. The keys are
+// comprised of Twitter user IDs. UserTweetTimes are serialised straight to JSON.
+type UserTweetTimes map[string][]time.Time
+
+func (utt *UserTweetTimes) BaseDir() string { return "" }
+
+func (utt *UserTweetTimes) Path(paths ...string) string {
+	return userTimesPath(models.TwitterDeveloperType, paths...)
+}
+
+func (utt *UserTweetTimes) Serialise(pathsToBytes PathsToBytesWriter) error {
+	return userTimesSerialise(utt, models.TwitterDeveloperType, pathsToBytes)
+}
+
+func (utt *UserTweetTimes) Deserialise(pathsToBytes PathsToBytesReader) error {
+	return userTimesDeserialise(utt, models.TwitterDeveloperType, pathsToBytes)
+}
+
+func (utt *UserTweetTimes) SetOrAdd(args ...any) { userTimesSetOrAdd(*utt, args...) }
+
+func (utt *UserTweetTimes) Len() int { return len(*utt) }
+
+func (utt *UserTweetTimes) Iter() *CachedFieldIterator { return userTimesIter(utt) }
+
+func (utt *UserTweetTimes) Get(key any) (any, bool) { return (*utt)[key.(string)], false }
+
+func (utt *UserTweetTimes) Merge(field CachedField) { userTimesMerge(*utt, field) }
+
+// RedditUserPostTimes is used in the Scout procedure to store the times of the posts for a Reddit user. The keys are
+// comprised of Reddit user IDs. RedditUserPostTimes are serialised straight to JSON.
+type RedditUserPostTimes map[string][]time.Time
+
+func (r *RedditUserPostTimes) BaseDir() string { return "" }
+
+func (r *RedditUserPostTimes) Path(paths ...string) string {
+	return userTimesPath(models.RedditDeveloperType, paths...)
+}
+
+func (r *RedditUserPostTimes) Serialise(pathsToBytes PathsToBytesWriter) error {
+	return userTimesSerialise(r, models.RedditDeveloperType, pathsToBytes)
+}
+
+func (r *RedditUserPostTimes) Deserialise(pathsToBytes PathsToBytesReader) error {
+	return userTimesDeserialise(r, models.RedditDeveloperType, pathsToBytes)
+}
+
+func (r *RedditUserPostTimes) SetOrAdd(args ...any) { userTimesSetOrAdd(*r, args...) }
+
+func (r *RedditUserPostTimes) Get(key any) (any, bool) { return (*r)[key.(string)], false }
+
+func (r *RedditUserPostTimes) Len() int { return len(*r) }
+
+func (r *RedditUserPostTimes) Iter() *CachedFieldIterator { return userTimesIter(r) }
+
+func (r *RedditUserPostTimes) Merge(field CachedField) { userTimesMerge(*r, field) }
+
+var developerTypeSnapshotsPrefix = map[models.DeveloperType]string{
+	models.UnknownDeveloperType: "unknownDeveloperSnapshots",
+	models.TwitterDeveloperType: "developerSnapshots",
+	models.RedditDeveloperType:  "redditDeveloperSnapshots",
+}
+
+func devSnapsBaseDir(devType models.DeveloperType) string {
+	return developerTypeSnapshotsPrefix[devType]
+}
+
+func devSnapsPath(ds IterableCachedField, paths ...string) string {
+	return filepath.Join(ds.BaseDir(), strings.Join(paths, "_")+binExtension)
+}
+
+func devSnapsSerialise(ds any, devType models.DeveloperType, writer PathsToBytesWriter) (err error) {
+	dsCached := ds.(IterableCachedField)
+	// We create an info file so that BaseDir is always created
+	writer.AddFilenameBytes(
+		filepath.Join(dsCached.BaseDir(), "meta.json"),
+		[]byte(fmt.Sprintf(
+			"{\"type\": %q, \"count\": %d, \"ids\": [%s]}",
+			devType.String(),
+			dsCached.Len(),
+			strings.Join(strings.Split(strings.Trim(fmt.Sprintf("%v", dsCached.Iter().queue), "[]"), " "), ", "),
+		)),
+	)
+
+	var dsMap map[string][]*models.DeveloperSnapshot
+	switch ds.(type) {
+	case *DeveloperSnapshots:
+		dsMap = *ds.(*DeveloperSnapshots)
+	case *RedditDeveloperSnapshots:
+		dsMap = *ds.(*RedditDeveloperSnapshots)
+	}
+
+	for developerID, snapshots := range dsMap {
+		var data bytes.Buffer
+		enc := gob.NewEncoder(&data)
+		if err = enc.Encode(snapshots); err != nil {
+			err = errors.Wrapf(err, "could not encode %d snapshots for %s developer \"%s\"", len(snapshots), devType.String(), developerID)
+			return
+		}
+		writer.AddFilenameBytes(dsCached.Path(developerID), data.Bytes())
+	}
+	return
+}
+
+func devSnapsDeserialise(ds any, devType models.DeveloperType, reader PathsToBytesReader) (err error) {
+	dsCached := ds.(IterableCachedField)
+	var dsMap map[string][]*models.DeveloperSnapshot
+	switch ds.(type) {
+	case *DeveloperSnapshots:
+		dsMap = *ds.(*DeveloperSnapshots)
+	case *RedditDeveloperSnapshots:
+		dsMap = *ds.(*RedditDeveloperSnapshots)
+	}
+	dsFtb := reader.BytesForDirectory(dsCached.BaseDir())
+	for filename, data := range dsFtb.inner {
+		if filepath.Base(filename) != "meta.json" {
+			// Trim the PathToBytes BaseDir, the DeveloperSnapshots BaseDir, and the file extension
+			developerID := strings.TrimSuffix(filepath.Base(filename), binExtension)
+			dec := gob.NewDecoder(bytes.NewReader(data))
+			var snapshots []*models.DeveloperSnapshot
+			if err = dec.Decode(&snapshots); err != nil {
+				err = errors.Wrapf(err, "cannot deserialise snapshots for %s developer \"%s\"", devType.String(), developerID)
+				return
+			}
+
+			if _, ok := dsMap[developerID]; !ok {
+				dsMap[developerID] = make([]*models.DeveloperSnapshot, len(snapshots))
+				copy(dsMap[developerID], snapshots)
+			} else {
+				dsMap[developerID] = append(dsMap[developerID], snapshots...)
+			}
+		}
+	}
+	dsFtb = nil
+	return
+}
+
+func devSnapsSetOrAdd(ds map[string][]*models.DeveloperSnapshot, args ...any) {
+	for argNo := 0; argNo < len(args); argNo += 2 {
+		developerID := args[argNo].(string)
+		snapshot := args[argNo+1].(*models.DeveloperSnapshot)
+		if _, ok := ds[developerID]; !ok {
+			ds[developerID] = make([]*models.DeveloperSnapshot, 0)
+		}
+		ds[developerID] = append(ds[developerID], snapshot)
+	}
+}
+
+func devSnapsIter(ds any) *CachedFieldIterator {
+	dsCached := ds.(IterableCachedField)
+	iter := &CachedFieldIterator{
+		cachedField: dsCached,
+		queue:       make([]any, dsCached.Len()),
+	}
+
+	var dsMap map[string][]*models.DeveloperSnapshot
+	switch ds.(type) {
+	case *DeveloperSnapshots:
+		dsMap = *ds.(*DeveloperSnapshots)
+	case *RedditDeveloperSnapshots:
+		dsMap = *ds.(*RedditDeveloperSnapshots)
+	}
+
+	i := 0
+	for key := range dsMap {
+		iter.queue[i] = key
+		i++
+	}
+	return iter
+}
+
+func devSnapsMerge(ds map[string][]*models.DeveloperSnapshot, field CachedField) {
+	var fieldMap map[string][]*models.DeveloperSnapshot
+	switch field.(type) {
+	case *DeveloperSnapshots:
+		fieldMap = *field.(*DeveloperSnapshots)
+	case *RedditDeveloperSnapshots:
+		fieldMap = *field.(*RedditDeveloperSnapshots)
+	}
+
+	for developerID, snapshots := range fieldMap {
+		if _, ok := ds[developerID]; !ok {
+			ds[developerID] = make([]*models.DeveloperSnapshot, len(snapshots))
+			copy(ds[developerID], snapshots)
 		} else {
-			(*utt)[developerID] = append((*utt)[developerID], tweetTimes...)
+			ds[developerID] = append(ds[developerID], snapshots...)
 		}
 	}
 }
@@ -169,101 +384,53 @@ func (utt *UserTweetTimes) Merge(field CachedField) {
 // The keys here are the IDs of the Twitter user that the snapshots apply to.
 type DeveloperSnapshots map[string][]*models.DeveloperSnapshot
 
-func (ds *DeveloperSnapshots) BaseDir() string { return "developerSnapshots" }
+func (ds *DeveloperSnapshots) BaseDir() string { return devSnapsBaseDir(models.TwitterDeveloperType) }
 
-func (ds *DeveloperSnapshots) Path(paths ...string) string {
-	return filepath.Join(ds.BaseDir(), strings.Join(paths, "_")+binExtension)
+func (ds *DeveloperSnapshots) Path(paths ...string) string { return devSnapsPath(ds, paths...) }
+
+func (ds *DeveloperSnapshots) Serialise(pathsToBytes PathsToBytesWriter) error {
+	return devSnapsSerialise(ds, models.TwitterDeveloperType, pathsToBytes)
 }
 
-func (ds *DeveloperSnapshots) Serialise(pathsToBytes PathsToBytesWriter) (err error) {
-	// We create an info file so that BaseDir is always created
-	pathsToBytes.AddFilenameBytes(
-		filepath.Join(ds.BaseDir(), "meta.json"),
-		[]byte(fmt.Sprintf(
-			"{\"count\": %d, \"ids\": [%s]}",
-			ds.Len(),
-			strings.Join(strings.Split(strings.Trim(fmt.Sprintf("%v", ds.Iter().queue), "[]"), " "), ", "),
-		)),
-	)
-	for developerID, snapshots := range *ds {
-		var data bytes.Buffer
-		enc := gob.NewEncoder(&data)
-		if err = enc.Encode(snapshots); err != nil {
-			err = errors.Wrapf(err, "could not encode %d snapshots for developer \"%s\"", len(snapshots), developerID)
-			return
-		}
-		pathsToBytes.AddFilenameBytes(ds.Path(developerID), data.Bytes())
-	}
-	return
+func (ds *DeveloperSnapshots) Deserialise(pathsToBytes PathsToBytesReader) error {
+	return devSnapsDeserialise(ds, models.TwitterDeveloperType, pathsToBytes)
 }
 
-func (ds *DeveloperSnapshots) Deserialise(pathsToBytes PathsToBytesReader) (err error) {
-	dsFtb := pathsToBytes.BytesForDirectory(ds.BaseDir())
-	for filename, data := range dsFtb.inner {
-		if filepath.Base(filename) != "meta.json" {
-			// Trim the PathToBytes BaseDir, the DeveloperSnapshots BaseDir, and the file extension
-			developerID := strings.TrimSuffix(filepath.Base(filename), binExtension)
-			dec := gob.NewDecoder(bytes.NewReader(data))
-			var snapshots []*models.DeveloperSnapshot
-			if err = dec.Decode(&snapshots); err != nil {
-				err = errors.Wrapf(err, "cannot deserialise snapshots for developer \"%s\"", developerID)
-				return
-			}
+func (ds *DeveloperSnapshots) SetOrAdd(args ...any) { devSnapsSetOrAdd(*ds, args...) }
 
-			if _, ok := (*ds)[developerID]; !ok {
-				(*ds)[developerID] = make([]*models.DeveloperSnapshot, len(snapshots))
-				copy((*ds)[developerID], snapshots)
-			} else {
-				(*ds)[developerID] = append((*ds)[developerID], snapshots...)
-			}
-		}
-	}
-	dsFtb = nil
-	return
+func (ds *DeveloperSnapshots) Len() int { return len(*ds) }
+
+func (ds *DeveloperSnapshots) Iter() *CachedFieldIterator { return devSnapsIter(ds) }
+
+func (ds *DeveloperSnapshots) Get(key any) (any, bool) { return (*ds)[key.(string)], false }
+
+func (ds *DeveloperSnapshots) Merge(field CachedField) { devSnapsMerge(*ds, field) }
+
+type RedditDeveloperSnapshots map[string][]*models.DeveloperSnapshot
+
+func (r *RedditDeveloperSnapshots) BaseDir() string {
+	return devSnapsBaseDir(models.RedditDeveloperType)
 }
 
-func (ds *DeveloperSnapshots) SetOrAdd(args ...any) {
-	for argNo := 0; argNo < len(args); argNo += 2 {
-		developerID := args[argNo].(string)
-		snapshot := args[argNo+1].(*models.DeveloperSnapshot)
-		if _, ok := (*ds)[developerID]; !ok {
-			(*ds)[developerID] = make([]*models.DeveloperSnapshot, 0)
-		}
-		(*ds)[developerID] = append((*ds)[developerID], snapshot)
-	}
+func (r *RedditDeveloperSnapshots) Path(paths ...string) string { return devSnapsPath(r, paths...) }
+
+func (r *RedditDeveloperSnapshots) Serialise(pathsToBytes PathsToBytesWriter) error {
+	return devSnapsSerialise(r, models.RedditDeveloperType, pathsToBytes)
 }
 
-func (ds *DeveloperSnapshots) Len() int {
-	return len(*ds)
+func (r *RedditDeveloperSnapshots) Deserialise(pathsToBytes PathsToBytesReader) error {
+	return devSnapsDeserialise(r, models.RedditDeveloperType, pathsToBytes)
 }
 
-func (ds *DeveloperSnapshots) Iter() *CachedFieldIterator {
-	iter := &CachedFieldIterator{
-		cachedField: ds,
-		queue:       make([]any, ds.Len()),
-	}
-	i := 0
-	for key := range *ds {
-		iter.queue[i] = key
-		i++
-	}
-	return iter
-}
+func (r *RedditDeveloperSnapshots) SetOrAdd(args ...any) { devSnapsSetOrAdd(*r, args...) }
 
-func (ds *DeveloperSnapshots) Get(key any) (any, bool) {
-	return (*ds)[key.(string)], false
-}
+func (r *RedditDeveloperSnapshots) Get(key any) (any, bool) { return (*r)[key.(string)], false }
 
-func (ds *DeveloperSnapshots) Merge(field CachedField) {
-	for developerID, snapshots := range *field.(*DeveloperSnapshots) {
-		if _, ok := (*ds)[developerID]; !ok {
-			(*ds)[developerID] = make([]*models.DeveloperSnapshot, len(snapshots))
-			copy((*ds)[developerID], snapshots)
-		} else {
-			(*ds)[developerID] = append((*ds)[developerID], snapshots...)
-		}
-	}
-}
+func (r *RedditDeveloperSnapshots) Len() int { return len(*r) }
+
+func (r *RedditDeveloperSnapshots) Iter() *CachedFieldIterator { return devSnapsIter(r) }
+
+func (r *RedditDeveloperSnapshots) Merge(field CachedField) { devSnapsMerge(*r, field) }
 
 // GameIDs is the set of all models.Game IDs that have been scraped/updated so far in the Scout procedure. GameIDs is
 // serialised to a JSON array.
@@ -693,10 +860,26 @@ func (s *State) Get(key any) (any, bool) {
 type CachedFieldType int
 
 const (
+	// UserTweetTimesType is the type of UserTweetTimes, a mapping of Developer IDs to arrays of times on which a post
+	// was created by that Developer. The Developer IDs are prefixed with the Developer's models.DeveloperType character.
 	UserTweetTimesType CachedFieldType = iota
+	// RedditUserPostTimesType is the type of RedditUserPostTimes, which is identical to UserTweetTimes but for Reddit
+	// Developers rather than Twitter ones.
+	RedditUserPostTimesType
+	// DeveloperSnapshotsType is the type of DeveloperSnapshots, a mapping of Developer IDs to arrays of partial
+	// DeveloperSnapshots that will be aggregated in the Snapshot Phase. The Developer IDs are prefixed with the
+	// Developer's models.DeveloperType character.
 	DeveloperSnapshotsType
+	// RedditDeveloperSnapshotsType is the type of RedditDeveloperSnapshots, which is identical to DeveloperSnapshots
+	// but for Reddit Developers rather than Twitter ones.
+	RedditDeveloperSnapshotsType
+	// GameIDsType is the type of GameIDs, a set of UUIDs for each scraped models.Game.
 	GameIDsType
+	// DeletedDevelopersType is the type of DeletedDevelopers, a list of models.TrendingDev that will be deleted at the
+	// end of the Delete Phase and collected within the Measure Phase.
 	DeletedDevelopersType
+	// StateType is the type of State, a struct containing a variety of fields that keep track of a Scout procedure
+	// execution.
 	StateType
 )
 
@@ -706,9 +889,15 @@ func (cft CachedFieldType) Make() CachedField {
 	case UserTweetTimesType:
 		utt := make(UserTweetTimes)
 		return &utt
+	case RedditUserPostTimesType:
+		rutt := make(RedditUserPostTimes)
+		return &rutt
 	case DeveloperSnapshotsType:
 		ds := make(DeveloperSnapshots)
 		return &ds
+	case RedditDeveloperSnapshotsType:
+		rds := make(RedditDeveloperSnapshots)
+		return &rds
 	case GameIDsType:
 		return &GameIDs{mapset.NewThreadUnsafeSet[uuid.UUID]()}
 	case DeletedDevelopersType:
@@ -739,8 +928,12 @@ func (cft CachedFieldType) String() string {
 	switch cft {
 	case UserTweetTimesType:
 		return "UserTweetTimes"
+	case RedditUserPostTimesType:
+		return "RedditUserPostTimes"
 	case DeveloperSnapshotsType:
 		return "DeveloperSnapshots"
+	case RedditDeveloperSnapshotsType:
+		return "RedditDeveloperSnapshots"
 	case GameIDsType:
 		return "GameIDs"
 	case DeletedDevelopersType:
@@ -756,7 +949,9 @@ func (cft CachedFieldType) String() string {
 func (cft CachedFieldType) Types() []CachedFieldType {
 	return []CachedFieldType{
 		UserTweetTimesType,
+		RedditUserPostTimesType,
 		DeveloperSnapshotsType,
+		RedditDeveloperSnapshotsType,
 		GameIDsType,
 		DeletedDevelopersType,
 		StateType,
