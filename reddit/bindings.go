@@ -24,8 +24,8 @@ var API = api.NewAPI(nil, api.Schema{
 		client := binding.Attrs()["client"].(*Client)
 		client.AccessToken = &AccessToken{
 			accessTokenResponse: response,
-			FetchedTime:         time.Now(),
-			ExpireTime:          time.Now().Add(time.Second * time.Duration(response.ExpiresIn)),
+			FetchedTime:         time.Now().UTC(),
+			ExpireTime:          time.Now().UTC().Add(time.Second * time.Duration(response.ExpiresIn)),
 		}
 		return *client.AccessToken
 	}).AddAttrs(
@@ -139,7 +139,7 @@ var API = api.NewAPI(nil, api.Schema{
 		return response.Data.(*User)
 	}).SetParamsMethod(func(binding api.Binding[Thing, *User]) []api.BindingParam {
 		return api.Params("username", "", true)
-	})),
+	}).SetName("user_about")),
 
 	"user_where": api.WrapBinding(api.NewBindingChain(func(binding api.Binding[listingWrapper, *Listing], args ...any) (request api.Request) {
 		username := args[0].(string)

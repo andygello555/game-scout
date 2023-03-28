@@ -377,17 +377,19 @@ func (t *Thing) UnmarshalJSON(b []byte) (err error) {
 type Things struct {
 	Comments []*Comment
 	Posts    []*Post
+	Users    []*User
 	Mores    []*More
 }
 
 func (t *Things) Merge(t2 *Things) {
 	t.Comments = append(t.Comments, t2.Comments...)
 	t.Posts = append(t.Posts, t2.Posts...)
+	t.Users = append(t.Users, t2.Users...)
 	t.Mores = append(t.Mores, t2.Mores...)
 }
 
 func (t *Things) Len() int {
-	return len(t.Comments) + len(t.Posts) + len(t.Mores)
+	return len(t.Comments) + len(t.Posts) + len(t.Users) + len(t.Mores)
 }
 
 // UnmarshalJSON implements the json.Unmarshaler interface.
@@ -408,6 +410,8 @@ func (t *Things) add(things ...Thing) {
 			t.Posts = append(t.Posts, v)
 		case *Comment:
 			t.Comments = append(t.Comments, v)
+		case *User:
+			t.Users = append(t.Users, v)
 		case *More:
 			t.Mores = append(t.Mores, v)
 		}

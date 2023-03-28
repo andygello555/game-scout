@@ -237,8 +237,11 @@ Phase start: %s
 Batch size: %d
 Discovery tweets: %d
 User tweet times: %d
+Reddit user post times: %d
 Developer snapshots: %d
-Game IDs: %d`,
+Reddit Developer snapshots: %d
+Game IDs: %d
+Deleted Developers: %d`,
 		state.BaseDir(),
 		state.createdTime.String(),
 		start.(time.Time).String(),
@@ -248,8 +251,11 @@ Game IDs: %d`,
 		batchSize,
 		discoveryTweets,
 		state.GetIterableCachedField(UserTweetTimesType).Len(),
+		state.GetIterableCachedField(RedditUserPostTimesType).Len(),
 		state.GetIterableCachedField(DeveloperSnapshotsType).Len(),
+		state.GetIterableCachedField(RedditDeveloperSnapshotsType).Len(),
 		state.GetIterableCachedField(GameIDsType).Len(),
+		state.GetIterableCachedField(DeletedDevelopersType).Len(),
 	)
 }
 

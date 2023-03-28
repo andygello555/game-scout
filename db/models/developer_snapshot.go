@@ -52,13 +52,13 @@ type DeveloperSnapshot struct {
 	// RedditPostIDs are subreddit name, post ID pairs captured by this DeveloperSnapshot. I.e. a subreddit name
 	// followed by a Reddit post ID. Using these, we can generate links for each post.
 	RedditPostIDs pq.StringArray `gorm:"type:varchar(32)[];default:'{}'"`
-	// TweetTimeRange is the time.Duration between the Developer's earliest tweet (that was scraped) and their latest
-	// tweet (that was scraped). This is set to nil when only one tweet was scraped.
+	// TweetTimeRange is the time.Duration between the Developer's earliest tweet/post (that was scraped) and their
+	// latest tweet/post (that was scraped). This is set to nil when only one tweet/post was scraped.
 	TweetTimeRange NullDuration
-	// LastTweetTime is the time of the last tweet that was scraped.
+	// LastTweetTime is the time of the last tweet/post that was scraped.
 	LastTweetTime time.Time
-	// TweetTimeRange is the average time.Duration between all the Developer's tweets that were scraped for this
-	// DeveloperSnapshot. This is set to nil when only one tweet was scraped.
+	// TweetTimeRange is the average time.Duration between all the Developer's tweets/posts that were scraped for this
+	// DeveloperSnapshot. This is set to nil when only one tweet/post was scraped.
 	AverageDurationBetweenTweets NullDuration
 	// TweetsPublicMetrics is the sum of all public metrics for the tweets that were scraped for this Developer for this
 	// DeveloperSnapshot.

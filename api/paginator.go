@@ -139,7 +139,7 @@ type Paginator[ResT any, RetT any] interface {
 	// Pages fetches the given number of pages from the Binding whilst appending each response slice together.
 	Pages(pages int) (RetT, error)
 	// Until keeps fetching pages until there are no more pages, or the given predicate function returns false.
-	Until(predicate func(paginator Paginator[ResT, RetT]) bool) (RetT, error)
+	Until(predicate func(paginator Paginator[ResT, RetT], pages RetT) bool) (RetT, error)
 }
 
 type typedPaginator[ResT any, RetT any] struct {
@@ -199,8 +199,8 @@ func paginatorCheckRateLimit(
 			tries--
 		}
 
-		if rl != nil && rl.Reset().After(time.Now()) {
-			sleepTime := rl.Reset().Sub(time.Now())
+		if rl != nil && rl.Reset().After(time.Now().UTC()) {
+			sleepTime := rl.Reset().Sub(time.Now().UTC())
 			switch rl.Type() {
 			case RequestRateLimit:
 				if rl.Remaining() == 0 {
@@ -276,7 +276,7 @@ func paginatorCheckRateLimit(
 		} else {
 			rateLimitedClient.Log(fmt.Sprintf(
 				"Latest rate limit for %q is before the current time: %s - %s = %s, so we are going to execute the binding anyway",
-				bindingName, time.Now().Format("15:04:05"), rl.Reset().Format("15:04:05"), time.Now().Sub(rl.Reset()),
+				bindingName, time.Now().UTC().Format("15:04:05"), rl.Reset().Format("15:04:05"), time.Now().UTC().Sub(rl.Reset()),
 			))
 		}
 	}
@@ -383,9 +383,9 @@ func (p *typedPaginator[ResT, RetT]) Pages(pageNo int) (RetT, error) {
 	return pages.Interface().(RetT), nil
 }
 
-func (p *typedPaginator[ResT, RetT]) Until(predicate func(paginator Paginator[ResT, RetT]) bool) (RetT, error) {
+func (p *typedPaginator[ResT, RetT]) Until(predicate func(paginator Paginator[ResT, RetT], pages RetT) bool) (RetT, error) {
 	pages := reflect.New(p.returnType).Elem()
-	for p.Continue() && predicate(p) {
+	for p.Continue() && predicate(p, pages.Interface().(RetT)) {
 		var err error
 		// Fetch the next page...
 		if err = p.Next(); err != nil {
@@ -605,9 +605,9 @@ func (p *paginator) Pages(pageNo int) (any, error) {
 	return pages.Interface(), nil
 }
 
-func (p *paginator) Until(predicate func(paginator Paginator[any, any]) bool) (any, error) {
+func (p *paginator) Until(predicate func(paginator Paginator[any, any], pages any) bool) (any, error) {
 	pages := reflect.New(p.returnType).Elem()
-	for p.Continue() && predicate(p) {
+	for p.Continue() && predicate(p, pages.Interface()) {
 		var err error
 		// Fetch the next page...
 		if err = p.Next(); err != nil {

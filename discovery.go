@@ -387,19 +387,20 @@ func DiscoveryBatch(
 				created                         bool
 				gameErr                         error
 				cachedTimeType, cachedSnapsType CachedFieldType
+				resultField                     string
 			)
 
 			// We access different cached fields within the state depending on the post type
 			switch {
 			case result.tweet != nil:
-				cachedTimeType, cachedSnapsType = UserTweetTimesType, DeveloperSnapshotsType
+				cachedTimeType, cachedSnapsType, resultField = UserTweetTimesType, DeveloperSnapshotsType, "TweetsConsumed"
 			case result.post != nil:
-				cachedTimeType, cachedSnapsType = RedditUserPostTimesType, RedditDeveloperSnapshotsType
+				cachedTimeType, cachedSnapsType, resultField = RedditUserPostTimesType, RedditDeveloperSnapshotsType, "PostsConsumed"
 			}
 
 			log.INFO.Printf("%stransformed %s no. %d successfully", logPrefix, posts.UnitName(), result.no)
 			state.GetIterableCachedField(cachedTimeType).SetOrAdd(result.developer.ID, result.postCreatedAt)
-			state.GetCachedField(StateType).SetOrAdd("Result", resultKey(), "TweetsConsumed", models.SetOrAddInc.Func())
+			state.GetCachedField(StateType).SetOrAdd("Result", resultKey(), resultField, models.SetOrAddInc.Func())
 
 			// At this point we only save the developer and the game. We still need to aggregate all the possible
 			// developerSnapshots
@@ -452,7 +453,7 @@ func SubredditFetch(subreddit string) (postsCommentsAndUsers []*PostCommentsAndU
 		return
 	}
 
-	start := time.Now()
+	start := time.Now().UTC()
 	log.INFO.Printf("Retrieving all top posts in the last week for %q", subreddit)
 	var listing any
 	if listing, err = paginator.All(); err != nil {
@@ -462,7 +463,7 @@ func SubredditFetch(subreddit string) (postsCommentsAndUsers []*PostCommentsAndU
 	posts := listing.(*reddit.Listing).Children.Posts
 	log.INFO.Printf(
 		"Found %d top posts for the week for %q in %s",
-		len(posts), subreddit, time.Now().Sub(start).String(),
+		len(posts), subreddit, time.Now().UTC().Sub(start).String(),
 	)
 
 	skipPosts := 0
@@ -494,7 +495,7 @@ func SubredditFetch(subreddit string) (postsCommentsAndUsers []*PostCommentsAndU
 			}
 		}
 
-		start = time.Now()
+		start = time.Now().UTC()
 		log.INFO.Printf(
 			"%q(%d/%d): Fetching comments and user for post %q (%s) on subreddit %q",
 			subreddit, len(postsCommentsAndUsers)+1, postsToScrape, post.Title, post.ID, subreddit,
@@ -512,7 +513,7 @@ func SubredditFetch(subreddit string) (postsCommentsAndUsers []*PostCommentsAndU
 		}
 
 		var postAndComments any
-		if postAndComments, err = paginator.Until(func(paginator api.Paginator[any, any]) bool {
+		if postAndComments, err = paginator.Until(func(paginator api.Paginator[any, any], pages any) bool {
 			return paginator.Page() == nil || paginator.Page().(*reddit.PostAndComments).Count() < globalConfig.Scrape.Constants.RedditCommentsPerPost
 		}); err != nil {
 			log.ERROR.Printf(
@@ -535,8 +536,11 @@ func SubredditFetch(subreddit string) (postsCommentsAndUsers []*PostCommentsAndU
 		log.INFO.Printf(
 			"%q(%d/%d): Found %d comments for post %q (%s) in %s",
 			subreddit, len(postsCommentsAndUsers)+1, postsToScrape, postCommentsAndUser.Count(), post.Title, post.ID,
-			time.Now().Sub(start),
+			time.Now().UTC().Sub(start),
 		)
+
+		// Sleep until user_about rate limit reset (if we need to)
+		reddit.API.Client.(*reddit.Client).SleepUntilReset("user_about")
 
 		var user any
 		if user, err = reddit.API.Execute("user_about", post.Author); err != nil {
@@ -705,7 +709,7 @@ func RedditDiscoveryPhase(wg *sync.WaitGroup, state *ScoutState, gameScrapers *m
 		)
 		state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "Developers", models.SetOrAddAdd.Func(scoutResult.DiscoveryStats.Developers))
 		state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "Games", models.SetOrAddAdd.Func(scoutResult.DiscoveryStats.Games))
-		state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "TweetsConsumed", models.SetOrAddAdd.Func(scoutResult.DiscoveryStats.TweetsConsumed))
+		state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "PostsConsumed", models.SetOrAddAdd.Func(scoutResult.DiscoveryStats.PostsConsumed))
 		state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "TotalSnapshots", models.SetOrAddAdd.Func(scoutResult.DiscoveryStats.TotalSnapshots))
 	}
 	close(postResults)
@@ -770,7 +774,7 @@ func DiscoveryPhase(state *ScoutState) (gameIDs mapset.Set[uuid.UUID], err error
 	)
 	gameScrapers.Start()
 
-	start := time.Now()
+	start := time.Now().UTC()
 	var (
 		redditDiscoveryWg       sync.WaitGroup
 		redditDiscoveryDuration time.Duration
@@ -781,12 +785,12 @@ func DiscoveryPhase(state *ScoutState) (gameIDs mapset.Set[uuid.UUID], err error
 	redditDiscoveryState := StateInMemory()
 	go func() {
 		redditDiscoveryErr = RedditDiscoveryPhase(&redditDiscoveryWg, redditDiscoveryState, gameScrapers)
-		redditDiscoveryDuration = time.Now().Sub(start)
+		redditDiscoveryDuration = time.Now().UTC().Sub(start)
 	}()
 
 	log.INFO.Println("Starting Discovery phase")
 	for i := batchNo * batchSize; i < discoveryTweets; i += batchSize {
-		batchStart := time.Now().UTC()
+		batchStart := time.Now().UTC().UTC()
 		offset := batchSize
 		if i+offset > discoveryTweets {
 			offset = discoveryTweets - i
@@ -847,7 +851,7 @@ func DiscoveryPhase(state *ScoutState) (gameIDs mapset.Set[uuid.UUID], err error
 		)
 		sleepBar(globalConfig.Scrape.Constants.SecondsBetweenDiscoveryBatches.Duration)
 	}
-	log.INFO.Printf("Finished Tweet discovery in %s", time.Now().Sub(start))
+	log.INFO.Printf("Finished Tweet discovery in %s", time.Now().UTC().Sub(start))
 
 	// Wait for the RedditDiscoveryPhase to complete that is running in a goroutine
 	log.INFO.Println("Waiting for RedditDiscoveryPhase to finish...")
@@ -864,8 +868,11 @@ func DiscoveryPhase(state *ScoutState) (gameIDs mapset.Set[uuid.UUID], err error
 	)
 	state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "Developers", models.SetOrAddAdd.Func(scoutResult.DiscoveryStats.Developers))
 	state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "Games", models.SetOrAddAdd.Func(scoutResult.DiscoveryStats.Games))
-	state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "TweetsConsumed", models.SetOrAddAdd.Func(scoutResult.DiscoveryStats.TweetsConsumed))
+	state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "PostsConsumed", models.SetOrAddAdd.Func(scoutResult.DiscoveryStats.PostsConsumed))
 	state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "TotalSnapshots", models.SetOrAddAdd.Func(scoutResult.DiscoveryStats.TotalSnapshots))
+
+	// Union the gameIDs fetched from within the RedditDiscovery phase back into the main gameIDs set.
+	gameIDs = gameIDs.Union(state.GetCachedField(GameIDsType).(*GameIDs).Set)
 
 	// Merge any errors that occurred whilst running the RedditDiscoveryPhase
 	err = myErrors.MergeErrors(err, redditDiscoveryErr)

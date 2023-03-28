@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -31,7 +32,7 @@ type AccessToken struct {
 }
 
 func (at AccessToken) Expired() bool {
-	return time.Now().After(at.ExpireTime)
+	return time.Now().UTC().After(at.ExpireTime)
 }
 
 func (at AccessToken) Headers() http.Header {
@@ -77,7 +78,7 @@ func RateLimitFromHeader(header http.Header) (rl *RateLimit, err error) {
 		err = errors.Wrap(err, "cannot \"X-Ratelimit-Reset\" header to int")
 		return
 	}
-	rl.reset = time.Now().Add(time.Second * time.Duration(resetSeconds))
+	rl.reset = time.Now().UTC().Add(time.Second * time.Duration(resetSeconds))
 	return
 }
 
@@ -94,12 +95,24 @@ func (r *RateLimit) String() string {
 	)
 }
 
+// requestsPeriodCountMax is the maximum number of periods to store in the Client.requestsPeriodCount sync.Map. This is
+// just above 24 hours of periods.
+const requestsPeriodCountMax = 300
+
 type Client struct {
 	Config      Config
 	AccessToken *AccessToken
 	// rateLimits is a sync.Map of binding names to references to api.RateLimit(s). I.e.
 	//  map[string]api.RateLimit
 	rateLimits sync.Map
+	// requestsPeriodCount is a sync.Map of timestamps at 5 minute intervals to a counter for how many requests were
+	// made in that interval. sync/atomic is used to atomically increment the counter integers. The type of the map is
+	// as follows:
+	//  map[int64]*atomic.Uint32
+	// The map never contains more than requestsPeriodCountMax periods.
+	requestsPeriodCount sync.Map
+	// requestPeriods is the number of periods currently within requestsPeriodCount.
+	requestPeriods *atomic.Uint32
 }
 
 func (c *Client) RateLimits() *sync.Map { return &c.rateLimits }
@@ -143,11 +156,6 @@ func (c *Client) Log(msg string) {
 	log.WARNING.Println(msg)
 }
 
-func CreateClient(config Config) {
-	DefaultClient = &Client{Config: config}
-	API.Client = DefaultClient
-}
-
 func (c *Client) RefreshToken() (err error) {
 	if c.AccessToken == nil || c.AccessToken.Expired() {
 		if _, err = API.Execute("access_token"); err != nil {
@@ -155,6 +163,67 @@ func (c *Client) RefreshToken() (err error) {
 		}
 	}
 	return
+}
+
+// incrementRequestPeriod increments the current request period (5 minute periods). If there is a new period we will
+// delete the oldest period so that we keep the map at
+func (c *Client) incrementRequestPeriod() {
+	var count atomic.Uint32
+	period := time.Now().UTC().Truncate(time.Minute * 5).Unix()
+	countAny, loaded := c.requestsPeriodCount.LoadOrStore(period, &count)
+	countAny.(*atomic.Uint32).Add(1)
+
+	// Only if we have just stored a new key we will check if the length of the map exceeds the requestsPeriodCountMax.
+	if !loaded {
+		// If it does then we will find the minimum time period and delete it.
+		if c.requestPeriods.Load() == requestsPeriodCountMax {
+			var minTime *int64
+			c.requestsPeriodCount.Range(func(key, value any) bool {
+				t := key.(int64)
+				if minTime == nil {
+					minTime = &t
+				} else if t < *minTime {
+					minTime = &t
+				}
+				return true
+			})
+			// Delete the minimum time period
+			c.requestsPeriodCount.Delete(*minTime)
+		} else {
+			// Otherwise, we will increment the requestPeriods
+			c.requestPeriods.Add(1)
+		}
+	}
+}
+
+// RequestsMadeWithinPeriod returns the number of Reddit API requests made within the given time period.
+func (c *Client) RequestsMadeWithinPeriod(period time.Duration) uint32 {
+	var count uint32
+	today := time.Now().UTC().Truncate(period)
+	c.requestsPeriodCount.Range(func(key, value any) bool {
+		t := time.Unix(key.(int64), 0).Truncate(period)
+		if t.Equal(today) {
+			cUint := value.(*atomic.Uint32)
+			count += cUint.Load()
+		}
+		return true
+	})
+	return count
+}
+
+// SleepUntilReset will sleep until the binding of the given name's rate limit has reset, if the number of requests
+// remaining is 0. No sleep will occur otherwise.
+func (c *Client) SleepUntilReset(bindingName string) {
+	rl := c.LatestRateLimit(bindingName)
+	if rl != nil && rl.Reset().After(time.Now().UTC()) && rl.Remaining() == 0 {
+		// If we have exceeded the rate limit, then we will wait until the reset time
+		sleepDuration := rl.Reset().Sub(time.Now().UTC())
+		c.Log(fmt.Sprintf(
+			"We have reached the rate limit for %q, waiting for %s until %s",
+			bindingName, sleepDuration.String(), rl.Reset().String(),
+		))
+		time.Sleep(sleepDuration)
+	}
 }
 
 func (c *Client) Run(ctx context.Context, bindingName string, attrs map[string]any, req api.Request, res any) (err error) {
@@ -184,14 +253,6 @@ func (c *Client) Run(ctx context.Context, bindingName string, attrs map[string]a
 		err = errors.Wrapf(err, "could not make %s HTTP request to %s", request.Method, request.URL.String())
 		return
 	}
-
-	//i := 0
-	//c.rateLimits.Range(func(key, value any) bool {
-	//	fmt.Printf("%d: %s - %q\n", i+1, key, value)
-	//	i++
-	//	return true
-	//})
-	//fmt.Println()
 
 	if response.Body != nil {
 		defer func(body io.ReadCloser) {
@@ -227,7 +288,35 @@ func (c *Client) Run(ctx context.Context, bindingName string, attrs map[string]a
 
 	if rl.(*RateLimit) != nil {
 		c.AddRateLimit(bindingName, rl)
+		c.incrementRequestPeriod()
 	}
 
+	i := 0
+	c.rateLimits.Range(func(key, value any) bool {
+		c.Log(fmt.Sprintf("%d: Binding %q - %q", i+1, key, value))
+		i++
+		return true
+	})
+
+	i = 0
+	c.requestsPeriodCount.Range(func(key, value any) bool {
+		count := value.(*atomic.Uint32)
+		c.Log(fmt.Sprintf(
+			"%d: Period %q - %d", i+1,
+			time.Unix(key.(int64), 0).Format("15:04:05"), count.Load(),
+		))
+		i++
+		return true
+	})
+
 	return
+}
+
+func CreateClient(config Config) {
+	var requestPeriods atomic.Uint32
+	DefaultClient = &Client{
+		Config:         config,
+		requestPeriods: &requestPeriods,
+	}
+	API.Client = DefaultClient
 }

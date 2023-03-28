@@ -52,7 +52,7 @@ func init() {
 }
 
 func main() {
-	rand.Seed(time.Now().Unix())
+	rand.Seed(time.Now().UTC().Unix())
 
 	// Compile any compilable configs in the globalConfig
 	start := time.Now().UTC()
@@ -339,7 +339,7 @@ func main() {
 					return cli.NewExitError(err.Error(), 1)
 				}
 
-				rand.Seed(time.Now().Unix())
+				rand.Seed(time.Now().UTC().Unix())
 				var i int
 				developerIDs := make([]string, 10)
 				developerSnapshotIDs := make([]uuid.UUID, 10)
@@ -772,15 +772,15 @@ func main() {
 				switch templatePath {
 				case email.Measure:
 					context = &email.MeasureContext{
-						Start: time.Now(),
-						End:   time.Now(),
+						Start: time.Now().UTC(),
+						End:   time.Now().UTC(),
 					}
 				case email.Started:
 					context = &StartedContext{state}
 				case email.Error:
 					stackTraces := new(strings.Builder)
 					context = &ErrorContext{
-						Time:        time.Now(),
+						Time:        time.Now().UTC(),
 						Error:       myErrors.TemporaryError(false, "this is a made-up error"),
 						State:       state,
 						StackTraces: stackTraces,
@@ -792,8 +792,8 @@ func main() {
 					context = &email.FinishedContext{
 						BatchSize:       100,
 						DiscoveryTweets: 30250,
-						Started:         time.Now().Add(-1 * time.Hour * 3),
-						Finished:        time.Now(),
+						Started:         time.Now().UTC().Add(-1 * time.Hour * 3),
+						Finished:        time.Now().UTC(),
 						Result: &models.ScoutResult{
 							DiscoveryStats: &models.DiscoveryUpdateSnapshotStats{
 								Developers:       rand.Int63(),
@@ -940,8 +940,8 @@ func main() {
 			Usage: "subcommand for viewing resources related to a developer in the DB",
 			Action: func(c *cli.Context) (err error) {
 				measureContext := email.MeasureContext{
-					Start:                  time.Now(),
-					End:                    time.Now(),
+					Start:                  time.Now().UTC(),
+					End:                    time.Now().UTC(),
 					TrendingDevs:           make([]*models.TrendingDev, len(c.StringSlice("id"))),
 					DevelopersBeingDeleted: make([]*models.TrendingDev, 0),
 					WatchedDevelopers:      make([]*models.TrendingDev, 0),
@@ -1516,8 +1516,8 @@ func main() {
 			},
 			Action: func(c *cli.Context) (err error) {
 				measureContext := email.MeasureContext{
-					Start:            time.Now(),
-					End:              time.Now(),
+					Start:            time.Now().UTC(),
+					End:              time.Now().UTC(),
 					TopSteamApps:     make([]*models.SteamApp, len(c.IntSlice("id"))),
 					WatchedSteamApps: make([]*models.SteamApp, len(c.IntSlice("id"))),
 					Config:           globalConfig.Email,

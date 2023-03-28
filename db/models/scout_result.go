@@ -42,8 +42,10 @@ type DiscoveryUpdateSnapshotStats struct {
 	// Games is the number of Game created when in the DiscoveryPhase, the number of Games updated when in the
 	// UpdatePhase, and the number of Games within the GameIDs cached field in the SnapshotPhase.
 	Games int64
-	// TweetsConsumed is the number of Tweets consumed successfully from the Twitter API.
+	// TweetsConsumed is the number of Tweets successfully consumed from the Twitter API.
 	TweetsConsumed int64
+	// PostsConsumed is the number of Reddit posts successfully consumed from the Reddit API.
+	PostsConsumed int64
 	// TotalSnapshots is the total number of partial DeveloperSnapshot before merging for each developer.
 	TotalSnapshots int64
 	// SnapshotsCreated is the total number of DeveloperSnapshot created. Only applies for ScoutResult.SnapshotStats.

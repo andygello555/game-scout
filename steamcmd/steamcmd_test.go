@@ -62,7 +62,7 @@ const (
 
 func benchmarkSteamCMDFlow(workers int, b *testing.B) {
 	var err error
-	s := rand.NewSource(time.Now().Unix())
+	s := rand.NewSource(time.Now().UTC().Unix())
 	r := rand.New(s)
 
 	// First we load the appIDs from the sample game websites into an array

@@ -124,7 +124,7 @@ type Developer struct {
 
 // String returns a string representation of the Developer's Username, ID, and Disabled fields.
 func (d *Developer) String() string {
-	return fmt.Sprintf("\"%s\" (%s, %s)", d.Username, d.ID, map[bool]string{
+	return fmt.Sprintf("\"%s\" (%s, %s, %s)", d.Username, d.ID, d.Type.String(), map[bool]string{
 		true:  "disabled",
 		false: "enabled",
 	}[d.Disabled])

@@ -20,6 +20,8 @@ import (
 
 // CachedField represents a field in ScoutState that can be cached on-disk using the PathsToBytesDirectory lookup.
 type CachedField interface {
+	// Type returns the CachedFieldType for this CachedField.
+	Type() CachedFieldType
 	// BaseDir is the parent directory that the cached field will be stored in when serialised and written to disk.
 	BaseDir() string
 	// Path takes string arguments and returns the path that the cached field will be written to after being
@@ -50,43 +52,84 @@ type IterableCachedField interface {
 	// Len returns the length of the iterable.
 	Len() int
 	// Iter returns the CachedFieldIterator that can be used to iterate over the instance of the CachedField itself.
-	Iter() *CachedFieldIterator
+	Iter() CachedFieldIterator
 	// Merge will perform a union/update procedure between the referred to IterableCachedField and the given
 	// CachedField.
 	Merge(field CachedField)
 }
 
+type CachedFieldIterator interface {
+	// Continue checks whether the CachedFieldIterator has not finished. I.e. there are still more elements to iterate over.
+	Continue() bool
+	// I will return the current i (index) value.
+	I() int
+	// Key will return the current key of the element that is being iterated over.
+	Key() any
+	// Get will return the current element that is being iterated over.
+	Get() (any, bool)
+	// Next will dequeue the current element. This should be called at the end of each loop.
+	Next()
+	// Field will return the IterableCachedField that this CachedFieldIterator is iterating over.
+	Field() IterableCachedField
+	// Len returns the length of the CachedFieldIterator by calling IterableCachedField.Len.
+	Len() int
+}
+
 // CachedFieldIterator is the iterator pattern that is returned by the IterableCachedField.Iter method.
-type CachedFieldIterator struct {
+type cachedFieldIterator struct {
 	i           int
 	cachedField IterableCachedField
 	queue       []any
 }
 
-// Continue checks whether the CachedFieldIterator has not finished. I.e. there are still more elements to iterate over.
-func (cfi *CachedFieldIterator) Continue() bool {
-	return len(cfi.queue) != 0
+func (cfi *cachedFieldIterator) Continue() bool             { return len(cfi.queue) != 0 }
+func (cfi *cachedFieldIterator) I() int                     { return cfi.i }
+func (cfi *cachedFieldIterator) Key() any                   { return cfi.queue[0] }
+func (cfi *cachedFieldIterator) Get() (any, bool)           { return cfi.cachedField.Get(cfi.Key()) }
+func (cfi *cachedFieldIterator) Next()                      { cfi.i++; cfi.queue = cfi.queue[1:] }
+func (cfi *cachedFieldIterator) Field() IterableCachedField { return cfi.cachedField }
+func (cfi *cachedFieldIterator) Len() int                   { return cfi.cachedField.Len() }
+
+type mergedCachedFieldIterator struct {
+	its       []CachedFieldIterator
+	idx       int
+	completed int
 }
 
-// I will return the current i value.
-func (cfi *CachedFieldIterator) I() int {
-	return cfi.i
+func (m *mergedCachedFieldIterator) Continue() bool {
+	// If the current iterator can continue, or the next iterator can continue (if there is one)
+	if len(m.its) == 0 {
+		return false
+	} else if m.its[m.idx].Continue() {
+		return true
+	} else if m.idx < len(m.its)-1 && m.its[m.idx+1].Continue() {
+		// We increment the current iterator ptr if there is another iterator that has not yet been started
+		m.completed += m.its[m.idx].Len()
+		m.idx++
+		return true
+	}
+	return false
 }
 
-// Key will return the current key of the element that is being iterated over.
-func (cfi *CachedFieldIterator) Key() any {
-	return cfi.queue[0]
+func (m *mergedCachedFieldIterator) I() int                     { return m.completed + m.its[m.idx].I() }
+func (m *mergedCachedFieldIterator) Key() any                   { return m.its[m.idx].Key() }
+func (m *mergedCachedFieldIterator) Get() (any, bool)           { return m.its[m.idx].Get() }
+func (m *mergedCachedFieldIterator) Next()                      { m.its[m.idx].Next() }
+func (m *mergedCachedFieldIterator) Field() IterableCachedField { return m.its[m.idx].Field() }
+
+func (m *mergedCachedFieldIterator) Len() int {
+	length := 0
+	for _, field := range m.its {
+		length += field.Len()
+	}
+	return length
 }
 
-// Get will return the current element that is being iterated over.
-func (cfi *CachedFieldIterator) Get() (any, bool) {
-	return cfi.cachedField.Get(cfi.Key())
-}
-
-// Next will dequeue the current element. This should be called at the end of each loop.
-func (cfi *CachedFieldIterator) Next() {
-	cfi.i++
-	cfi.queue = cfi.queue[1:]
+func MergeCachedFieldIterators(iterators ...CachedFieldIterator) CachedFieldIterator {
+	return &mergedCachedFieldIterator{
+		its: iterators,
+		idx: 0,
+	}
 }
 
 var developerTypeUserTimesPrefix = map[models.DeveloperType]string{
@@ -141,9 +184,9 @@ func userTimesSetOrAdd(ut map[string][]time.Time, args ...any) {
 	}
 }
 
-func userTimesIter(ut any) *CachedFieldIterator {
+func userTimesIter(ut any) CachedFieldIterator {
 	utCached := ut.(IterableCachedField)
-	iter := &CachedFieldIterator{
+	iter := &cachedFieldIterator{
 		cachedField: utCached,
 		queue:       make([]any, utCached.Len()),
 	}
@@ -189,6 +232,8 @@ func userTimesMerge(ut map[string][]time.Time, field CachedField) {
 // comprised of Twitter user IDs. UserTweetTimes are serialised straight to JSON.
 type UserTweetTimes map[string][]time.Time
 
+func (utt *UserTweetTimes) Type() CachedFieldType { return UserTweetTimesType }
+
 func (utt *UserTweetTimes) BaseDir() string { return "" }
 
 func (utt *UserTweetTimes) Path(paths ...string) string {
@@ -207,7 +252,7 @@ func (utt *UserTweetTimes) SetOrAdd(args ...any) { userTimesSetOrAdd(*utt, args.
 
 func (utt *UserTweetTimes) Len() int { return len(*utt) }
 
-func (utt *UserTweetTimes) Iter() *CachedFieldIterator { return userTimesIter(utt) }
+func (utt *UserTweetTimes) Iter() CachedFieldIterator { return userTimesIter(utt) }
 
 func (utt *UserTweetTimes) Get(key any) (any, bool) { return (*utt)[key.(string)], false }
 
@@ -216,6 +261,8 @@ func (utt *UserTweetTimes) Merge(field CachedField) { userTimesMerge(*utt, field
 // RedditUserPostTimes is used in the Scout procedure to store the times of the posts for a Reddit user. The keys are
 // comprised of Reddit user IDs. RedditUserPostTimes are serialised straight to JSON.
 type RedditUserPostTimes map[string][]time.Time
+
+func (r *RedditUserPostTimes) Type() CachedFieldType { return RedditUserPostTimesType }
 
 func (r *RedditUserPostTimes) BaseDir() string { return "" }
 
@@ -237,7 +284,7 @@ func (r *RedditUserPostTimes) Get(key any) (any, bool) { return (*r)[key.(string
 
 func (r *RedditUserPostTimes) Len() int { return len(*r) }
 
-func (r *RedditUserPostTimes) Iter() *CachedFieldIterator { return userTimesIter(r) }
+func (r *RedditUserPostTimes) Iter() CachedFieldIterator { return userTimesIter(r) }
 
 func (r *RedditUserPostTimes) Merge(field CachedField) { userTimesMerge(*r, field) }
 
@@ -264,7 +311,19 @@ func devSnapsSerialise(ds any, devType models.DeveloperType, writer PathsToBytes
 			"{\"type\": %q, \"count\": %d, \"ids\": [%s]}",
 			devType.String(),
 			dsCached.Len(),
-			strings.Join(strings.Split(strings.Trim(fmt.Sprintf("%v", dsCached.Iter().queue), "[]"), " "), ", "),
+			strings.Join(
+				strings.Split(
+					strings.Trim(
+						fmt.Sprintf(
+							"%v",
+							dsCached.Iter().(*cachedFieldIterator).queue,
+						),
+						"[]",
+					),
+					" ",
+				),
+				", ",
+			),
 		)),
 	)
 
@@ -332,9 +391,9 @@ func devSnapsSetOrAdd(ds map[string][]*models.DeveloperSnapshot, args ...any) {
 	}
 }
 
-func devSnapsIter(ds any) *CachedFieldIterator {
+func devSnapsIter(ds any) CachedFieldIterator {
 	dsCached := ds.(IterableCachedField)
-	iter := &CachedFieldIterator{
+	iter := &cachedFieldIterator{
 		cachedField: dsCached,
 		queue:       make([]any, dsCached.Len()),
 	}
@@ -384,6 +443,8 @@ func devSnapsMerge(ds map[string][]*models.DeveloperSnapshot, field CachedField)
 // The keys here are the IDs of the Twitter user that the snapshots apply to.
 type DeveloperSnapshots map[string][]*models.DeveloperSnapshot
 
+func (ds *DeveloperSnapshots) Type() CachedFieldType { return DeveloperSnapshotsType }
+
 func (ds *DeveloperSnapshots) BaseDir() string { return devSnapsBaseDir(models.TwitterDeveloperType) }
 
 func (ds *DeveloperSnapshots) Path(paths ...string) string { return devSnapsPath(ds, paths...) }
@@ -400,13 +461,15 @@ func (ds *DeveloperSnapshots) SetOrAdd(args ...any) { devSnapsSetOrAdd(*ds, args
 
 func (ds *DeveloperSnapshots) Len() int { return len(*ds) }
 
-func (ds *DeveloperSnapshots) Iter() *CachedFieldIterator { return devSnapsIter(ds) }
+func (ds *DeveloperSnapshots) Iter() CachedFieldIterator { return devSnapsIter(ds) }
 
 func (ds *DeveloperSnapshots) Get(key any) (any, bool) { return (*ds)[key.(string)], false }
 
 func (ds *DeveloperSnapshots) Merge(field CachedField) { devSnapsMerge(*ds, field) }
 
 type RedditDeveloperSnapshots map[string][]*models.DeveloperSnapshot
+
+func (r *RedditDeveloperSnapshots) Type() CachedFieldType { return RedditDeveloperSnapshotsType }
 
 func (r *RedditDeveloperSnapshots) BaseDir() string {
 	return devSnapsBaseDir(models.RedditDeveloperType)
@@ -428,7 +491,7 @@ func (r *RedditDeveloperSnapshots) Get(key any) (any, bool) { return (*r)[key.(s
 
 func (r *RedditDeveloperSnapshots) Len() int { return len(*r) }
 
-func (r *RedditDeveloperSnapshots) Iter() *CachedFieldIterator { return devSnapsIter(r) }
+func (r *RedditDeveloperSnapshots) Iter() CachedFieldIterator { return devSnapsIter(r) }
 
 func (r *RedditDeveloperSnapshots) Merge(field CachedField) { devSnapsMerge(*r, field) }
 
@@ -437,6 +500,8 @@ func (r *RedditDeveloperSnapshots) Merge(field CachedField) { devSnapsMerge(*r, 
 type GameIDs struct {
 	mapset.Set[uuid.UUID]
 }
+
+func (ids *GameIDs) Type() CachedFieldType { return GameIDsType }
 
 func (ids *GameIDs) BaseDir() string { return "" }
 
@@ -478,8 +543,8 @@ func (ids *GameIDs) Len() int {
 	return ids.Cardinality()
 }
 
-func (ids *GameIDs) Iter() *CachedFieldIterator {
-	cfi := &CachedFieldIterator{
+func (ids *GameIDs) Iter() CachedFieldIterator {
+	cfi := &cachedFieldIterator{
 		cachedField: ids,
 		queue:       make([]any, ids.Len()),
 	}
@@ -502,6 +567,8 @@ func (ids *GameIDs) Merge(field CachedField) {
 }
 
 type DeletedDevelopers []*models.TrendingDev
+
+func (d *DeletedDevelopers) Type() CachedFieldType { return DeletedDevelopersType }
 
 func (d *DeletedDevelopers) BaseDir() string { return "deletedDevelopers" }
 
@@ -683,8 +750,8 @@ func (d *DeletedDevelopers) Len() int {
 	return len(*d)
 }
 
-func (d *DeletedDevelopers) Iter() *CachedFieldIterator {
-	cfi := &CachedFieldIterator{
+func (d *DeletedDevelopers) Iter() CachedFieldIterator {
+	cfi := &cachedFieldIterator{
 		cachedField: d,
 		queue:       make([]any, d.Len()),
 	}
@@ -743,6 +810,8 @@ type State struct {
 	// as not incrementing the TimesHighlighted field of Developers and SteamApps in the Measure Phase.
 	Debug bool
 }
+
+func (s *State) Type() CachedFieldType { return StateType }
 
 func (s *State) BaseDir() string { return "" }
 

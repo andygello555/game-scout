@@ -149,10 +149,10 @@ func (c *TemplateConfig) TemplateMaxImageHeight() int { return c.MaxImageHeight 
 func (c *TemplateConfig) TemplateDebugTo() []string   { return c.DebugTo }
 func (c *TemplateConfig) TemplateTo() []string        { return c.To }
 func (c *TemplateConfig) TemplateSubject() string {
-	return time.Now().Format(c.SubjectFormat)
+	return time.Now().UTC().Format(c.SubjectFormat)
 }
 func (c *TemplateConfig) TemplateAttachmentName() string {
-	return time.Now().Format(c.AttachmentNameFormat)
+	return time.Now().UTC().Format(c.AttachmentNameFormat)
 }
 func (c *TemplateConfig) TemplateSendRetries() int { return c.SendRetries }
 func (c *TemplateConfig) TemplateSendBackoff() (time.Duration, error) {
@@ -456,7 +456,7 @@ var mondayMappingExprFunctions = []expr.Option{
 		return fmt.Sprintf(params[0].(string), params[1:]...), nil
 	}, fmt.Sprintf),
 	expr.Function("now", func(params ...interface{}) (interface{}, error) {
-		return time.Now(), nil
+		return time.Now().UTC(), nil
 	}, time.Now),
 	expr.Function("build_date", func(params ...interface{}) (interface{}, error) {
 		date := params[0].(time.Time)
@@ -650,8 +650,16 @@ type ScrapeConstants struct {
 	RedditPostsPerSubreddit int `json:"reddit_posts_per_subreddit"`
 	// UpdateDeveloperWorkers is the number of updateDeveloperWorker that will be spun up in the update phase.
 	UpdateDeveloperWorkers int `json:"update_developer_workers"`
-	// MaxUpdateTweets is the maximum number of tweets fetched in the update phase.
+	// MaxUpdateTweets is the maximum number of tweets fetched per models.Developer in the update phase.
 	MaxUpdateTweets int `json:"max_update_tweets"`
+	// MaxUpdatePosts is the maximum number of Reddit posts fetched per models.Developer in the update phase.
+	MaxUpdatePosts int `json:"max_update_posts"`
+	// RedditProducerBatchMultiplier is the multiplier that will be applied to the batch size (passed into the Scout
+	// procedure) for the redditBatchProducer in the Update Phase.
+	RedditProducerBatchMultiplier float64 `json:"reddit_producer_batch_multiplier"`
+	// RedditProducerBatchSleepTime is the minimum amount of time to sleep after each queued batch of jobs the
+	// redditBatchProducer routine executes in the Update Phase.
+	RedditProducerBatchSleepTime Duration `json:"reddit_producer_batch_sleep_time"`
 	// SecondsBetweenDiscoveryBatches is the number of seconds to sleep between DiscoveryBatch batches.
 	SecondsBetweenDiscoveryBatches Duration `json:"seconds_between_discovery_batches"`
 	// SecondsBetweenUpdateBatches is the number of seconds to sleep between queue batches of updateDeveloperJob.

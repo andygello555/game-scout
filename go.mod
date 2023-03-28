@@ -7,7 +7,7 @@ require (
 	github.com/RichardKnop/logging v0.0.0-20190827224416-1a693bdd4fae
 	github.com/RichardKnop/machinery v1.10.6
 	github.com/anaskhan96/soup v1.2.5
-	github.com/andygello555/gotils/v2 v2.1.6-0.20230315132654-03a4432206b8
+	github.com/andygello555/gotils/v2 v2.2.0
 	github.com/deckarep/golang-set/v2 v2.1.0
 	github.com/g8rswimmer/go-twitter/v2 v2.1.2
 	github.com/google/uuid v1.3.0
