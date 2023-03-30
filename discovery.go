@@ -716,8 +716,9 @@ func RedditDiscoveryPhase(wg *sync.WaitGroup, state *ScoutState, gameScrapers *m
 	return
 }
 
-// DiscoveryPhase executes batches of DiscoveryBatch sequentially and fills out the userTweetTimes, and
-// developerSnapshots maps with the data returned from each DiscoveryBatch.
+// DiscoveryPhase executes batches of DiscoveryBatch, for both Twitter and Reddit tweets/posts, sequentially and fills
+// out the UserTweetTimes, RedditUserPostTimes, DeveloperSnapshots, and the RedditDeveloperSnapshots cached fields with
+// the data returned from each DiscoveryBatch.
 func DiscoveryPhase(state *ScoutState) (gameIDs mapset.Set[uuid.UUID], err error) {
 	// Set the batchSize and discoveryTweets vars by reading from ScoutState
 	stateState := state.GetCachedField(StateType).(*State)

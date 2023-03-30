@@ -270,6 +270,14 @@ func (c *Client) Run(ctx context.Context, bindingName string, attrs map[string]a
 	}
 
 	if err = json.Unmarshal(body, res); err != nil {
+		// Check to see if we can unmarshal the response body into an Error which we can return instead.
+		var redditError Error
+		if unmarshalErrorErr := json.Unmarshal(body, &redditError); unmarshalErrorErr == nil {
+			redditError.request = request
+			err = &redditError
+			return
+		}
+
 		err = errors.Wrapf(err,
 			"could not unmarshal JSON for response to %s %s",
 			request.Method, request.URL.String(),

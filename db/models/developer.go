@@ -90,9 +90,25 @@ func (dt DeveloperType) Values() []string {
 	}
 }
 
+func (dt DeveloperType) Types() []DeveloperType {
+	return []DeveloperType{
+		TwitterDeveloperType,
+		RedditDeveloperType,
+	}
+}
+
 type RedditUserMetrics struct {
 	PostKarma    int
 	CommentKarma int
+}
+
+// DeveloperMinimal is used within the state cache to save details for a developer that has been updated, disabled, or
+// enabled.
+type DeveloperMinimal struct {
+	// ID is the ID of the Twitter user that this developer corresponds to.
+	ID string
+	// Type denotes whether we found this Developer on Twitter or Reddit.
+	Type DeveloperType
 }
 
 // Developer represents a potential indie developer's Twitter account. This also contains some current metrics for their

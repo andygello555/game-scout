@@ -6,6 +6,7 @@ import (
 	"github.com/anaskhan96/soup"
 	"github.com/andygello555/game-scout/errors"
 	"html"
+	"net/http"
 	"strconv"
 	"time"
 )
@@ -841,4 +842,16 @@ func (pc *PostAndComments) addMoreToTree(more *More) {
 	for _, reply := range pc.Comments {
 		reply.addMoreToReplies(more)
 	}
+}
+
+// Error is a JSON serialised error that can be returned by the Reddit API if there is an error. It also implements
+// the error interface so that it can be returned by Client.Run.
+type Error struct {
+	Message string `json:"message"`
+	Code    int    `json:"error"`
+	request *http.Request
+}
+
+func (e *Error) Error() string {
+	return fmt.Sprintf("%s %s: %s (%d)", e.request.Method, e.request.URL.String(), e.Message, e.Code)
 }

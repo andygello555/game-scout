@@ -513,41 +513,63 @@ const (
 	maxDeveloperSnapshots = 10
 )
 
-func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelopers int, expectedOffset int) (expectedIDs mapset.Set[int]) {
+// createFakeDevelopersWithSnaps creates endDevelopers - startDevelopers number of models.Developer(s) each with 1-5
+// games and 1-10 models.DeveloperSnapshot(s). Each models.Developer is created with a sequential ID between
+// startDevelopers+1 and endDevelopers. Created models.Developer's with a higher relative ID, will be more "desirable"
+// (i.e have more snapshots with better weighted scores). If the current iteration is before the given expected offset
+// then the current models.Developer's ID will be added to the expectedIDs set. If allTypes is true, then the actual
+// created number of models.Developer(s) will be multiplied by the number of available models.DeveloperType(s). In this
+// case, the models.DeveloperType of each created models.Developer will be decided using the following formula:
+//
+//	models.UnknownDeveloperType.Types()[d % len(models.UnknownDeveloperType.Types())]
+//
+// Where "d" is the current index of the iteration (zero-based).
+func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelopers int, expectedOffset int, allTypes bool) (expectedIDs mapset.Set[int]) {
 	var err error
 	expectedIDs = mapset.NewThreadUnsafeSet[int]()
-	// To test the "disable" phase, we need to create some fake developers, snapshots, and games for said developers.
-	// These are created in a way that more "desirable" developers will be given a higher ID.
+	types := 1
+	if allTypes {
+		types = len(models.UnknownDeveloperType.Types())
+	}
+	startDevelopers, endDevelopers, expectedOffset = startDevelopers*types, endDevelopers*types, expectedOffset*types
+
 	previousWeightedScore := 0.0
-	bar := progressbar.Default(int64(endDevelopers - startDevelopers + 1))
-	for d := startDevelopers; d <= endDevelopers; d++ {
+	bar := progressbar.Default(int64(endDevelopers - startDevelopers))
+	for d := startDevelopers; d < endDevelopers; d++ {
+		d1 := d + 1
+		devType := models.UnknownDeveloperType.Types()[d%types]
 		developer := models.Developer{
-			ID:          strconv.Itoa(d),
-			Name:        fmt.Sprintf("Developer: %d", d),
-			Username:    fmt.Sprintf("developer%d", d),
-			Description: fmt.Sprintf("I am developer %d", d),
+			ID:          strconv.Itoa(d1),
+			Name:        fmt.Sprintf("Developer: %d", d1),
+			Username:    fmt.Sprintf("developer%d", d1),
+			Description: fmt.Sprintf("I am developer %d", d1),
+			Type:        devType,
 			PublicMetrics: &twitter.UserMetricsObj{
-				Followers: d * 100,
-				Following: d * 10,
+				Followers: d1 * 100,
+				Following: d1 * 10,
 				Tweets:    100,
-				Listed:    d * 2,
+				Listed:    d1 * 2,
+			},
+			RedditPublicMetrics: &models.RedditUserMetrics{
+				PostKarma:    d1 * 100,
+				CommentKarma: d1 * 200,
 			},
 		}
 		if err = db.DB.Create(&developer).Error; err != nil {
-			t.Errorf("Cannot create developer: \"%s\"", developer.Username)
+			t.Errorf("Cannot create %s developer: %q", developer.Type, developer.String())
 		}
 
-		if d <= expectedOffset {
-			expectedIDs.Add(d)
+		if d < expectedOffset {
+			expectedIDs.Add(d1)
 		}
 
-		games := int(numbers.ScaleRange(float64(d), float64(startDevelopers), float64(endDevelopers), 5.0, 1.0))
+		games := int(numbers.ScaleRange(float64(d1), float64(startDevelopers), float64(endDevelopers), 5.0, 1.0))
 		if testing.Verbose() {
-			fmt.Printf("Creating %d games for developer %s\n", games, developer.Username)
+			fmt.Printf("Creating %d games for developer %q\n", games, developer.String())
 		}
 		for g := 1; g <= games; g++ {
 			game := models.Game{
-				Name:       null.StringFrom(fmt.Sprintf("Game for Developer %d", d)),
+				Name:       null.StringFrom(fmt.Sprintf("Game for Developer %d", d1)),
 				Storefront: models.SteamStorefront,
 				Website: null.StringFrom(fmt.Sprintf(
 					"https://store.steampowered.com/app/%sgame%d",
@@ -566,30 +588,38 @@ func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelop
 				TagScore:                   null.Float64From(0.0),
 			}
 			if err = db.DB.Create(&game).Error; err != nil {
-				t.Errorf("Could not create game no. %d for the developer: %s", g, developer.Username)
+				t.Errorf("Could not create game no. %d for the developer: %q", g, developer.String())
 			}
 			if testing.Verbose() {
 				fmt.Printf(
-					"\tCreated game %s no. %d/%d for developer %s. Weighted score = %f\n",
-					game.Website.String, g, games, developer.Username, game.WeightedScore.Float64,
+					"\tCreated game %s no. %d/%d for developer %q. Weighted score = %f\n",
+					game.Website.String, g, games, developer.String(), game.WeightedScore.Float64,
 				)
 			}
 		}
 
 		snaps := rand.Intn(maxDeveloperSnapshots-minDeveloperSnapshots+1) + minDeveloperSnapshots
-		maxTweetTimeRange := float64(time.Hour) * 24.0 * (float64(d) / (float64(endDevelopers) / 7))
-		maxAverageDurationBetweenTweets := float64(time.Minute) * 30.0 * (float64(d) / (float64(endDevelopers) / 7))
+		maxTweetTimeRange := float64(time.Hour) * 24.0 * (float64(d1) / (float64(endDevelopers) / 7))
+		maxAverageDurationBetweenTweets := float64(time.Minute) * 30.0 * (float64(d1) / (float64(endDevelopers) / 7))
 		maxTweetPublicMetrics := twitter.TweetMetricsObj{
-			Impressions:       d * 2,
-			URLLinkClicks:     d * 5,
-			UserProfileClicks: d,
-			Likes:             d * 10,
-			Replies:           d * 3,
-			Retweets:          d * 2,
+			Impressions:       d1 * 2,
+			URLLinkClicks:     d1 * 5,
+			UserProfileClicks: d1,
+			Likes:             d1 * 10,
+			Replies:           d1 * 3,
+			Retweets:          d1 * 2,
 			Quotes:            0,
 		}
+		maxPostPublicMetrics := models.RedditPostMetrics{
+			Ups:                  d1 * 10,
+			Downs:                d1 * 5,
+			Score:                d1 * 2,
+			UpvoteRatio:          0,
+			NumberOfComments:     d1 * 5,
+			SubredditSubscribers: d1 * 2,
+		}
 		if testing.Verbose() {
-			fmt.Printf("Created Developer %v. Creating %d snapshots for it:\n", developer, snaps)
+			fmt.Printf("Created Developer %q. Creating %d snapshots for it:\n", developer.String(), snaps)
 			fmt.Printf("MaxTweetTimeRange = %f, MaxAverageDurationBetweenTweets = %f\n", maxTweetTimeRange, maxAverageDurationBetweenTweets)
 		}
 		for snap := 1; snap <= snaps; snap++ {
@@ -602,12 +632,14 @@ func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelop
 			developerSnap.TweetTimeRange = models.NullDurationFromPtr(&tweetTimeRange)
 			averageDurationBetweenTweets := time.Duration(maxAverageDurationBetweenTweets * wayThrough)
 			developerSnap.AverageDurationBetweenTweets = models.NullDurationFromPtr(&averageDurationBetweenTweets)
+
 			if testing.Verbose() {
 				fmt.Printf(
 					"\tTweetTimeRange.Minutes = %f, AverageDurationBetweenTweets.Minutes = %f\n",
 					tweetTimeRange.Minutes(), averageDurationBetweenTweets.Minutes(),
 				)
 			}
+
 			developerSnap.TweetsPublicMetrics = &twitter.TweetMetricsObj{
 				Impressions:       int(float64(maxTweetPublicMetrics.Impressions) * wayThrough),
 				URLLinkClicks:     int(float64(maxTweetPublicMetrics.URLLinkClicks) * wayThrough),
@@ -617,14 +649,27 @@ func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelop
 				Retweets:          int(float64(maxTweetPublicMetrics.Retweets) * wayThrough),
 				Quotes:            int(float64(maxTweetPublicMetrics.Quotes) * wayThrough),
 			}
+			developerSnap.PostPublicMetrics = &models.RedditPostMetrics{
+				Ups:                  int(float64(maxPostPublicMetrics.Ups) * wayThrough),
+				Downs:                int(float64(maxPostPublicMetrics.Downs) * wayThrough),
+				Score:                int(float64(maxPostPublicMetrics.Score) * wayThrough),
+				UpvoteRatio:          float32(float64(maxPostPublicMetrics.UpvoteRatio) * wayThrough),
+				NumberOfComments:     int(float64(maxPostPublicMetrics.NumberOfComments) * wayThrough),
+				SubredditSubscribers: int(float64(maxPostPublicMetrics.SubredditSubscribers) * wayThrough),
+			}
 			developerSnap.UserPublicMetrics = &twitter.UserMetricsObj{
 				Followers: int(float64(developer.PublicMetrics.Followers) * wayThrough),
 				Following: int(float64(developer.PublicMetrics.Following) * wayThrough),
 				Tweets:    developer.PublicMetrics.Tweets,
 				Listed:    int(float64(developer.PublicMetrics.Listed) * wayThrough),
 			}
+			developerSnap.RedditPublicMetrics = &models.RedditUserMetrics{
+				PostKarma:    int(float64(developer.RedditPublicMetrics.PostKarma) * wayThrough),
+				CommentKarma: int(float64(developer.RedditPublicMetrics.CommentKarma) * wayThrough),
+			}
+
 			if err = db.DB.Create(&developerSnap).Error; err != nil {
-				t.Errorf("Could not create developer snap no. %d for the developer: %s", snap, developer.Username)
+				t.Errorf("Could not create developer snap no. %d for the developer: %q", snap, developer.String())
 			}
 
 			if snap == snaps {
@@ -632,17 +677,17 @@ func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelop
 					previousWeightedScore = developerSnap.WeightedScore
 				} else {
 					t.Errorf(
-						"Newest snap for developer: \"%s\", has a weighted score that is less than the "+
+						"Newest snap for developer: %q, has a weighted score that is less than the "+
 							"previous developer's latest snap. %f >= %f",
-						developer.Username, previousWeightedScore, developerSnap.WeightedScore,
+						developer.String(), previousWeightedScore, developerSnap.WeightedScore,
 					)
 				}
 			}
 
 			if testing.Verbose() {
 				fmt.Printf(
-					"\tCreated snapshot no. %d/%d for developer %s. Weighted score = %f\n",
-					snap, snaps, developer.Username, developerSnap.WeightedScore,
+					"\tCreated snapshot no. %d/%d for developer %q. Weighted score = %f\n",
+					snap, snaps, developer.String(), developerSnap.WeightedScore,
 				)
 			}
 		}
@@ -656,7 +701,7 @@ func disablePhaseTest(t *testing.T) (state *ScoutState, expectedIDs mapset.Set[i
 	var err error
 	rand.Seed(time.Now().UTC().Unix())
 
-	expectedIDs = createFakeDevelopersWithSnaps(t, 1, fakeDevelopers, extraDevelopers)
+	expectedIDs = createFakeDevelopersWithSnaps(t, 0, fakeDevelopers, extraDevelopers, true)
 
 	state = StateInMemory()
 	if err = DisablePhase(state); err != nil {
@@ -670,47 +715,51 @@ func TestDisablePhase(t *testing.T) {
 	clearDB(t)
 
 	state, expectedIDs := disablePhaseTest(t)
+	seenIDs := mapset.NewThreadUnsafeSet[int]()
 
 	// Check if there are exactly maxNonDisabledDevelopers
-	var enabledDevelopers int64
-	if err = db.DB.Model(&models.Developer{}).Where("NOT disabled").Count(&enabledDevelopers).Error; err != nil {
-		t.Errorf("Could not get count of enabled developers: %s", err.Error())
-	}
+	devTypes := models.UnknownDeveloperType.Types()
+	for _, devType := range devTypes {
+		var enabledDevelopers int64
+		if err = db.DB.Model(&models.Developer{}).Where("NOT disabled AND type = ?", devType).Count(&enabledDevelopers).Error; err != nil {
+			t.Errorf("Could not get count of enabled developers: %s", err.Error())
+		}
 
-	if enabledDevelopers != int64(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase)) {
-		t.Errorf(
-			"The number of enabled developers is not %d, it is %d",
-			int(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase)), enabledDevelopers,
-		)
-	}
+		if enabledDevelopers != int64(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase)) {
+			t.Errorf(
+				"The number of enabled %s developers is not %d, it is %d",
+				devType, int(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase)),
+				enabledDevelopers,
+			)
+		}
 
-	// Then we check if the 100 disabled developers have the IDs 1-100
-	type developerID struct {
-		ID string
-	}
-	var developerIDs []developerID
-	if err = db.DB.Model(&models.Developer{}).Where("disabled").Find(&developerIDs).Error; err != nil {
-		t.Errorf("Could not get IDs of disabled developers: %s", err.Error())
-	}
+		// Then we check if the 100 disabled developers have the IDs 1-100
+		type developerID struct {
+			ID string
+		}
+		var developerIDs []developerID
+		if err = db.DB.Model(&models.Developer{}).Where("disabled AND type = ?", devType).Find(&developerIDs).Error; err != nil {
+			t.Errorf("Could not get IDs of disabled %s developers: %s", devType, err.Error())
+		}
 
-	seenIDs := mapset.NewThreadUnsafeSet[int]()
-	for _, id := range developerIDs {
-		intID, _ := strconv.Atoi(id.ID)
-		seenIDs.Add(intID)
-	}
+		for _, id := range developerIDs {
+			intID, _ := strconv.Atoi(id.ID)
+			seenIDs.Add(intID)
+		}
 
-	disabledDevelopers, _ := state.GetCachedField(StateType).Get("DisabledDevelopers")
-	if disabledDevelopersNo := len(disabledDevelopers.([]string)); disabledDevelopersNo != extraDevelopers {
-		t.Errorf(
-			"List of IDs for the disabled developers does not equal %d (it equals %d)",
-			extraDevelopers, disabledDevelopersNo,
-		)
+		disabledDevelopers, _ := state.GetCachedField(StateType).Get(string(devType) + "DisabledDevelopers")
+		if disabledDevelopersNo := len(disabledDevelopers.([]models.DeveloperMinimal)); disabledDevelopersNo != extraDevelopers {
+			t.Errorf(
+				"List of IDs for %s disabled developers does not equal %d (it equals %d)",
+				devType.String(), extraDevelopers, disabledDevelopersNo,
+			)
+		}
 	}
 
 	if !seenIDs.Equal(expectedIDs) {
 		t.Errorf(
-			"The disabled developers aren't the first %d developers that were created. They are: %s",
-			extraDevelopers, seenIDs.String(),
+			"The disabled developers aren't the first %d developers that were created. They are: %s, vs. %s",
+			extraDevelopers*len(devTypes), seenIDs.String(), expectedIDs.String(),
 		)
 	}
 }
@@ -727,10 +776,12 @@ func enablePhaseTest(t *testing.T) (state *ScoutState, enabledDeveloperCount int
 		log.INFO.Printf("Enabled developers after Disable phase: %d", enabledDeveloperCount)
 	}
 
-	// Create 500 more developers to disable
+	// Create 500 more developers for each DeveloperType to disable
+	noDevTypes := len(models.UnknownDeveloperType.Types())
 	fakeDevelopers := int(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase + float64(extraDevelopers)))
-	start, end := fakeDevelopers+1, fakeDevelopers+additionalDisabledDevelopers
-	createdDevelopers := createFakeDevelopersWithSnaps(t, start, end, end)
+	start, end := fakeDevelopers, fakeDevelopers+additionalDisabledDevelopers
+	fmt.Println("start", start, "end", end, "fakeDevelopers", fakeDevelopers, "noDevTypes", noDevTypes)
+	createdDevelopers := createFakeDevelopersWithSnaps(t, start, end, end, true)
 	if err = db.DB.Model(
 		&models.Developer{},
 	).Where(
@@ -765,16 +816,23 @@ func TestEnablePhase(t *testing.T) {
 	clearDB(t)
 
 	_, enabledDeveloperCount := enablePhaseTest(t)
+	for _, devType := range models.UnknownDeveloperType.Types() {
+		if err = db.DB.Model(&models.Developer{}).Where("not disabled AND type = ?", devType).Count(&enabledDeveloperCount).Error; err != nil {
+			t.Errorf(
+				"Error was not expected to occur whilst getting the final count of the %s Developers in the "+
+					"Developers table",
+				devType,
+			)
+		}
 
-	if err = db.DB.Model(&models.Developer{}).Where("not disabled").Count(&enabledDeveloperCount).Error; err != nil {
-		t.Errorf("Error was not expected to occur whilst getting the final count of the Developers table")
-	}
-
-	if enabledDeveloperCount != int64(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterEnablePhase)) {
-		t.Errorf(
-			"The number of enabled developers after the Enable phase does not equal the expected value: %d (expected) vs. %d (actual)",
-			int64(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterEnablePhase)), enabledDeveloperCount,
-		)
+		if enabledDeveloperCount != int64(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterEnablePhase)) {
+			t.Errorf(
+				"The number of enabled %s developers after the Enable phase does not equal the expected "+
+					"value: %d (expected) vs. %d (actual)",
+				devType, int64(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterEnablePhase)),
+				enabledDeveloperCount,
+			)
+		}
 	}
 }
 

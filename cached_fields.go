@@ -789,16 +789,16 @@ type State struct {
 	CurrentDiscoveryToken string
 	// UpdatedDevelopers are the developer IDs that have been updated in a previous UpdatePhase. This applies to both
 	// the Discovery and Update Phase.
-	UpdatedDevelopers []string
+	UpdatedDevelopers []models.DeveloperMinimal
 	// DisabledDevelopers are the IDs of the models.Developer that have been disabled in a previous DisablePhase. This
 	// applies to both the Disable and Enable Phase.
-	DisabledDevelopers []string
+	DisabledDevelopers []models.DeveloperMinimal
 	// EnabledDevelopers are the IDs of the models.Developer that were re-enabled in a previous EnablePhase. This
 	// applies to only the Enable Phase.
-	EnabledDevelopers []string
+	EnabledDevelopers []models.DeveloperMinimal
 	// DevelopersToEnable is the number of developers to go to be re-enabled in the EnablePhase. This applies only to
 	// the Enable Phase.
-	DevelopersToEnable int
+	DevelopersToEnable map[models.DeveloperType]int
 	// PhaseStart is the time that the most recent Phase was started.
 	PhaseStart time.Time
 	// Start time of the Scout procedure.
@@ -870,13 +870,20 @@ func (s *State) SetOrAdd(args ...any) {
 		s.CurrentDiscoveryToken = args[1].(string)
 	case "UpdatedDevelopers":
 		// We will append to UpdatedDevelopers rather than set it
-		s.UpdatedDevelopers = append(s.UpdatedDevelopers, args[1].(string))
+		s.UpdatedDevelopers = append(s.UpdatedDevelopers, models.DeveloperMinimal{
+			ID:   args[1].(string),
+			Type: args[2].(models.DeveloperType),
+		})
 	case "DisabledDevelopers":
-		s.DisabledDevelopers = args[1].([]string)
+		// We will append an array of IDs onto the DeletedDevelopers
+		s.DisabledDevelopers = append(s.DisabledDevelopers, args[1].([]models.DeveloperMinimal)...)
 	case "EnabledDevelopers":
-		s.EnabledDevelopers = append(s.EnabledDevelopers, args[1].(string))
+		s.EnabledDevelopers = append(s.EnabledDevelopers, models.DeveloperMinimal{
+			ID:   args[1].(string),
+			Type: args[2].(models.DeveloperType),
+		})
 	case "DevelopersToEnable":
-		s.DevelopersToEnable = args[1].(int)
+		s.DevelopersToEnable[args[1].(models.DeveloperType)] = args[2].(int)
 	case "PhaseStart":
 		s.PhaseStart = args[1].(time.Time)
 	case "Start":
@@ -906,12 +913,31 @@ func (s *State) Get(key any) (any, bool) {
 		return s.CurrentDiscoveryToken, true
 	case "UpdatedDevelopers":
 		return s.UpdatedDevelopers, true
+	case "TUpdatedDevelopers", "RUpdatedDevelopers":
+		devType, _ := models.DevTypeFromUsername(key.(string))
+		return slices.Filter(s.UpdatedDevelopers, func(idx int, value models.DeveloperMinimal, arr []models.DeveloperMinimal) bool {
+			return value.Type == devType
+		}), true
 	case "DisabledDevelopers":
 		return s.DisabledDevelopers, true
+	case "TDisabledDevelopers", "RDisabledDevelopers":
+		devType, _ := models.DevTypeFromUsername(key.(string))
+		return slices.Filter(s.DisabledDevelopers, func(idx int, value models.DeveloperMinimal, arr []models.DeveloperMinimal) bool {
+			return value.Type == devType
+		}), true
 	case "EnabledDevelopers":
 		return s.EnabledDevelopers, true
+	case "TEnabledDevelopers", "REnabledDevelopers":
+		devType, _ := models.DevTypeFromUsername(key.(string))
+		return slices.Filter(s.EnabledDevelopers, func(idx int, value models.DeveloperMinimal, arr []models.DeveloperMinimal) bool {
+			return value.Type == devType
+		}), true
 	case "DevelopersToEnable":
 		return s.DevelopersToEnable, true
+	case "TDevelopersToEnable", "RDevelopersToEnable":
+		devType, _ := models.DevTypeFromUsername(key.(string))
+		count, ok := s.DevelopersToEnable[devType]
+		return count, ok
 	case "PhaseStart":
 		return s.PhaseStart, true
 	case "Start":
@@ -983,9 +1009,14 @@ func (cft CachedFieldType) Make() CachedField {
 				DeleteStats:    &models.DisableEnableDeleteStats{},
 				MeasureStats:   &models.MeasureStats{},
 			},
-			UpdatedDevelopers:  make([]string, 0),
-			DisabledDevelopers: make([]string, 0),
-			EnabledDevelopers:  make([]string, 0),
+			UpdatedDevelopers:  make([]models.DeveloperMinimal, 0),
+			DisabledDevelopers: make([]models.DeveloperMinimal, 0),
+			EnabledDevelopers:  make([]models.DeveloperMinimal, 0),
+			DevelopersToEnable: map[models.DeveloperType]int{
+				models.TwitterDeveloperType: 0,
+				models.RedditDeveloperType:  0,
+				models.UnknownDeveloperType: 0,
+			},
 		}
 	default:
 		return nil

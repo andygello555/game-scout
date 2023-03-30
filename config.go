@@ -667,13 +667,17 @@ type ScrapeConstants struct {
 	// MaxTotalDiscoveryTweetsDailyPercent is the maximum percentage that the discoveryTweets number can be out of
 	// myTwitter.TweetsPerDay.
 	MaxTotalDiscoveryTweetsDailyPercent float64 `json:"max_total_discovery_tweets_daily_percent"`
-	// MaxEnabledDevelopersAfterEnablePhase is the number of enabled developers that should exist after the Enable phase.
+	// MaxEnabledDevelopersAfterEnablePhase is the number of enabled developers that should exist after the Enable phase
+	// for each models.DeveloperType.
 	MaxEnabledDevelopersAfterEnablePhase float64 `json:"max_enabled_developers_after_enable_phase"`
-	// MaxEnabledDevelopersAfterDisablePhase is the number of developers to keep in the Disable phase.
+	// MaxEnabledDevelopersAfterDisablePhase is the number of developers to keep enabled in the Disable phase for each
+	// models.DeveloperType.
 	MaxEnabledDevelopersAfterDisablePhase float64 `json:"max_enabled_developers_after_disable_phase"`
-	// MaxDevelopersToEnable is the maximum number of developers that can be re-enabled in the Enable phase.
+	// MaxDevelopersToEnable is the maximum number of developers that can be re-enabled in the Enable phase for each
+	// models.DeveloperType.
 	MaxDevelopersToEnable float64 `json:"max_developers_to_enable"`
-	// PercentageOfDisabledDevelopersToDelete is the percentage of all disabled developers to delete in the Delete phase.
+	// PercentageOfDisabledDevelopersToDelete is the percentage of all disabled developers to delete in the Delete
+	// phase.
 	PercentageOfDisabledDevelopersToDelete float64 `json:"percentage_of_disabled_developers_to_delete"`
 	// StaleDeveloperDays is the number of days after which a developer can become stale if their latest snapshot was
 	// created StaleDeveloperDays ago.

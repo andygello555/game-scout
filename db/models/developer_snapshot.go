@@ -97,7 +97,9 @@ const (
 	TweetTimeRangeWeight               developerSnapshotWeight = 0.35
 	AverageDurationBetweenTweetsWeight developerSnapshotWeight = 0.45
 	TweetsPublicMetricsWeight          developerSnapshotWeight = 0.75
+	PostPublicMetricsWeight            developerSnapshotWeight = 0.8
 	UserPublicMetricsWeight            developerSnapshotWeight = 0.45
+	RedditPublicMetricsWeight          developerSnapshotWeight = 0.55
 	ContextAnnotationSetWeight         developerSnapshotWeight = 0.55
 	GamesWeight                        developerSnapshotWeight = 0.7
 	GameWeightedScoresSumWeight        developerSnapshotWeight = 0.8
@@ -113,7 +115,9 @@ const (
 	TweetTimeRange               developerSnapshotWeightedField = "TweetTimeRange"
 	AverageDurationBetweenTweets developerSnapshotWeightedField = "AverageDurationBetweenTweets"
 	TweetsPublicMetrics          developerSnapshotWeightedField = "TweetsPublicMetrics"
+	PostPublicMetrics            developerSnapshotWeightedField = "PostPublicMetrics"
 	UserPublicMetrics            developerSnapshotWeightedField = "UserPublicMetrics"
+	RedditPublicMetrics          developerSnapshotWeightedField = "RedditPublicMetrics"
 	ContextAnnotationSet         developerSnapshotWeightedField = "ContextAnnotationSet"
 	Games                        developerSnapshotWeightedField = "Games"
 	GameWeightedScoresSum        developerSnapshotWeightedField = "GameWeightedScoresSum"
@@ -135,8 +139,12 @@ func (wf developerSnapshotWeightedField) Weight() (w float64, inverse bool) {
 		w = float64(AverageDurationBetweenTweetsWeight)
 	case TweetsPublicMetrics:
 		w = float64(TweetsPublicMetricsWeight)
+	case PostPublicMetrics:
+		w = float64(PostPublicMetricsWeight)
 	case UserPublicMetrics:
 		w = float64(UserPublicMetricsWeight)
+	case RedditPublicMetrics:
+		w = float64(RedditPublicMetricsWeight)
 	case ContextAnnotationSet:
 		w = float64(ContextAnnotationSetWeight)
 	case Games:
@@ -191,7 +199,7 @@ func (wf developerSnapshotWeightedField) GetValueFromWeightedModel(model Weighte
 	case TweetsPublicMetrics:
 		tweetMetricsObj := f.Interface().(*twitter.TweetMetricsObj)
 		if tweetMetricsObj != nil {
-			// Clamp all tweet public metrics to 5000
+			// Clamp all tweet public metrics to 1000
 			return []float64{
 				float64(numbers.Clamp(tweetMetricsObj.Impressions, 1000)),
 				float64(numbers.Clamp(tweetMetricsObj.URLLinkClicks, 1000)),
@@ -203,6 +211,19 @@ func (wf developerSnapshotWeightedField) GetValueFromWeightedModel(model Weighte
 			}
 		}
 		return []float64{0.0}
+	case PostPublicMetrics:
+		postMetricsObj := f.Interface().(*RedditPostMetrics)
+		if postMetricsObj != nil {
+			return []float64{
+				float64(numbers.Clamp(postMetricsObj.Ups, 1000)),
+				float64(numbers.Clamp(postMetricsObj.Downs, 1000)),
+				float64(numbers.Clamp(postMetricsObj.Score, 1000)),
+				float64(numbers.Clamp(postMetricsObj.UpvoteRatio, 1000)),
+				float64(numbers.Clamp(postMetricsObj.NumberOfComments, 1000)),
+				float64(numbers.Clamp(postMetricsObj.SubredditSubscribers, 1000)),
+			}
+		}
+		return []float64{0.0}
 	case UserPublicMetrics:
 		userMetricsObj := f.Interface().(*twitter.UserMetricsObj)
 		if userMetricsObj != nil {
@@ -211,6 +232,15 @@ func (wf developerSnapshotWeightedField) GetValueFromWeightedModel(model Weighte
 				float64(numbers.Clamp(userMetricsObj.Following, 1000)),
 				numbers.ScaleRange(float64(numbers.Clamp(userMetricsObj.Tweets, 10_000)), 0.0, 10_000.0, 100_000.0, -1_000_000.0),
 				float64(numbers.Clamp(userMetricsObj.Listed, 1000)),
+			}
+		}
+		return []float64{0.0}
+	case RedditPublicMetrics:
+		redditMetricsObj := f.Interface().(*RedditUserMetrics)
+		if redditMetricsObj != nil {
+			return []float64{
+				float64(numbers.Clamp(redditMetricsObj.PostKarma, 5000)),
+				float64(numbers.Clamp(redditMetricsObj.CommentKarma, 5000)),
 			}
 		}
 		return []float64{0.0}

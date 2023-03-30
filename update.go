@@ -522,18 +522,22 @@ func redditBatchProducer(
 // following:
 //
 // • Workers (no = updateDeveloperWorkers): processes updateDeveloperJobs in batches. In these workers the RecentSearch
-// binding will be executed, meaning that we have to manage the rate limit correctly. Once a developer has been updated,
-// the result will be pushed as an updateDeveloperResult into a result channel to be processed by the consumer.
+// Twitter binding, or the user_where + user_about Reddit bindings will be executed, meaning that we have to manage the
+// rate limit correctly. Once a developer has been updated, the result will be pushed as an updateDeveloperResult into a
+// result channel to be processed by the consumer.
 //
-// • Producer (no = 1): the producer queues up updateDeveloperJobs to be processed by the workers. This is done in a way
-// that will not exceed the rate limit for the RecentSearch binding. Internally, this works by queueing up X number of
-// jobs where X is equal to the remaining requests on the most recent rate limit for RecentSearch. Once it has done
-// this, it will wait until the rate limit has reset and the jobs have been processed. After fetching the most recent
-// rate limit for RecentSearch, it will repeat the process for the remaining jobs.
+// • Producer (no = 2): there are two producers: one in charge of queueing up Twitter developers, and another for
+// queueing up Reddit developers. Each producer queues up updateDeveloperJobs to be processed by the workers. The
+// Twitter producer is a bit different from the Reddit producer as it queues up jobs in a way that will not exceed the
+// rate limit for the RecentSearch binding. Internally, this works by queueing up X number of jobs where X is equal to
+// the remaining requests on the most recent rate limit for RecentSearch. Once it has done this, it will wait until the
+// rate limit has reset and the jobs have been processed. After fetching the most recent rate limit for RecentSearch, it
+// will repeat the process for the remaining jobs.
 //
-// • Consumer (no = 1): dequeues results from the results channel and aggregates them into the userTweetTimes,
-// developerSnapshots, and gameIDs instances. Once a result has been processed, the developerNo of the
-// updateDeveloperResult will be pushed to a buffered channel to notify the producer that that job has been processed.
+// • Consumer (no = 1): dequeues results from the results channel and aggregates them into the UserTweetTimes,
+// RedditUserPostTimes, DeveloperSnapshots, RedditDeveloperSnapshots, and GameIDs instances. Once a result has been
+// processed, the ID of the updateDeveloperResult will be pushed to a buffered channel to notify the producer that that
+// job has been processed.
 func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 	// Set the batchSize and discoveryTweets vars by reading from ScoutState
 	stateState := state.GetCachedField(StateType).(*State)
@@ -821,7 +825,7 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 			// Add the developer's ID to the UpdatedDevelopers array in the state info, so that if anything bad
 			// happens we can always continue the UpdatePhase and ignore the developers that we have already
 			// updated.
-			state.GetCachedField(StateType).SetOrAdd("UpdatedDevelopers", result.developer.ID)
+			state.GetCachedField(StateType).SetOrAdd("UpdatedDevelopers", result.developer.ID, result.developer.Type)
 			state.GetCachedField(StateType).SetOrAdd("Result", "UpdateStats", "Developers", models.SetOrAddInc.Func())
 
 			// Then we add all the properties of the ScoutResult within the temp state in the result returned from
