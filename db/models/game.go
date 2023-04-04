@@ -264,6 +264,15 @@ func (g *Game) String() string {
 	return fmt.Sprintf("%s Game \"%s\"", g.Storefront.String(), g.Website.String)
 }
 
+func (g *Game) Advocates(db *gorm.DB) []*Developer {
+	var developers []*Developer
+	db.Where(strings.Join(slices.Comprehension(g.Developers, func(idx int, value string, arr []string) string {
+		devType, username := DevTypeFromUsername(value)
+		return fmt.Sprintf("(developers.type = %s AND developers.username = %s)", string(devType), username)
+	}), " OR ")).Find(&developers)
+	return developers
+}
+
 // CheckCalculateWeightedScore checks if we can calculate the WeightedScore for this Game. This is dependent on the
 // Website field being set and the Storefront not being UnknownStorefront.
 func (g *Game) CheckCalculateWeightedScore() bool {

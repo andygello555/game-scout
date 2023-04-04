@@ -6,8 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
+	"github.com/andygello555/game-scout/browser"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
+	"github.com/andygello555/game-scout/monday"
 	"github.com/andygello555/game-scout/reddit"
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	"github.com/andygello555/gotils/v2/numbers"
@@ -29,6 +31,12 @@ import (
 	"testing"
 	"time"
 )
+
+func closeFile(t *testing.T, file *os.File, filename string) {
+	if err := file.Close(); err != nil {
+		t.Fatalf("Could not close %s: %s", filename, err.Error())
+	}
+}
 
 func TestMain(m *testing.M) {
 	var keep = flag.Bool("keep", false, "keep test DB after tests")
@@ -139,19 +147,13 @@ func TestUpdatePhase(t *testing.T) {
 		discoveryTweets        = 30250
 	)
 
-	closeFile := func(file *os.File, filename string) {
-		if err = file.Close(); err != nil {
-			t.Fatalf("Could not close %s: %s", filename, err.Error())
-		}
-	}
-
 	// First we load all the game websites into an array
 	gameWebsites := make([]null.String, 0)
 	var gameWebsitesFile *os.File
 	if gameWebsitesFile, err = os.Open(sampleGameWebsitesPath); err != nil {
 		t.Fatalf("Cannot open %s: %s", sampleGameWebsitesPath, err.Error())
 	}
-	defer closeFile(gameWebsitesFile, sampleGameWebsitesPath)
+	defer closeFile(t, gameWebsitesFile, sampleGameWebsitesPath)
 
 	scanner = bufio.NewScanner(gameWebsitesFile)
 	for scanner.Scan() {
@@ -163,7 +165,7 @@ func TestUpdatePhase(t *testing.T) {
 	if developerIDsFile, err = os.Open(sampleDeveloperIDsPath); err != nil {
 		t.Fatalf("Cannot open %s: %s", sampleDeveloperIDsPath, err.Error())
 	}
-	defer closeFile(developerIDsFile, sampleDeveloperIDsPath)
+	defer closeFile(t, developerIDsFile, sampleDeveloperIDsPath)
 
 	// Create developers from the sampleDeveloperIDs file and also create a game and a snapshot for each.
 	developerNo := 0
@@ -203,7 +205,7 @@ func TestUpdatePhase(t *testing.T) {
 			Name:       null.StringFrom(fmt.Sprintf("Game for Developer %v", developer)),
 			Storefront: storefront,
 			Website:    gameWebsites[developerNo],
-			Developers: []string{string(developer.Type) + developer.Username},
+			Developers: []string{developer.TypedUsername()},
 		}).Error; err != nil {
 			t.Errorf(
 				"Cannot create game %s for Developer %v: %s",
@@ -570,12 +572,15 @@ func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelop
 		for g := 1; g <= games; g++ {
 			game := models.Game{
 				Name:       null.StringFrom(fmt.Sprintf("Game for Developer %d", d1)),
-				Storefront: models.SteamStorefront,
-				Website: null.StringFrom(fmt.Sprintf(
-					"https://store.steampowered.com/app/%sgame%d",
-					developer.Username, g,
-				)),
-				Developers:                 []string{developer.Username},
+				Storefront: []models.Storefront{models.SteamStorefront, models.ItchIOStorefront}[(g-1)%2],
+				Website: []null.String{
+					null.StringFrom(fmt.Sprintf(
+						"https://store.steampowered.com/app/%sgame%d",
+						developer.Username, g,
+					)),
+					null.StringFrom(browser.ItchIOGamePage.Fill(developer.Username, fmt.Sprintf("gameNo%d", g))),
+				}[(g-1)%2],
+				Developers:                 []string{developer.TypedUsername()},
 				VerifiedDeveloperUsernames: []string{},
 				ReleaseDate:                null.TimeFromPtr(nil),
 				Publisher:                  null.StringFromPtr(nil),
@@ -1140,5 +1145,114 @@ func TestDiscoveryPhase(t *testing.T) {
 			result, _ := state.GetCachedField(StateType).Get("Result")
 			fmt.Printf("scout result %#+v\n", result)
 		}
+	}
+}
+
+func TestMeasurePhase(t *testing.T) {
+	var err error
+	if globalConfig.Monday == nil {
+		t.Fatalf("Cannot run TestMeasurePhase when there is no Monday config specified")
+	}
+
+	monday.CreateClient(globalConfig.Monday)
+	if globalConfig.Monday.TestMapping != nil {
+		if testing.Verbose() {
+			t.Logf("Creating Monday API client using MondayConfig.TestMapping instead of MondayConfig.Mapping")
+		}
+
+		monday.CreateClient(&MondayConfig{
+			Token:       globalConfig.Monday.Token,
+			Mapping:     globalConfig.Monday.TestMapping,
+			TestMapping: globalConfig.Monday.Mapping,
+		})
+	}
+
+	clearDB(t)
+
+	const (
+		sampleGameWebsitesPath = "samples/sampleGameWebsites.txt"
+		steamApps              = 20
+	)
+
+	_ = createFakeDevelopersWithSnaps(t, 0, 100, 100, true)
+
+	// Add some games to the test Monday board
+	var tailDevs []*models.Developer
+	if err = db.DB.Where("id IN ?", slices.Comprehension[int, string](numbers.Range(74, 99, 1), func(idx int, value int, arr []int) string {
+		return strconv.Itoa(value)
+	})).Find(&tailDevs).Error; err != nil {
+		t.Errorf("Could not fetch tail end of created fake developers: %v", err)
+	}
+
+	gameWebsites := make([]string, 0)
+	var gameWebsitesFile *os.File
+	if gameWebsitesFile, err = os.Open(sampleGameWebsitesPath); err != nil {
+		t.Fatalf("Cannot open %s: %s", sampleGameWebsitesPath, err.Error())
+	}
+	defer closeFile(t, gameWebsitesFile, sampleGameWebsitesPath)
+
+	scanner := bufio.NewScanner(gameWebsitesFile)
+	for scanner.Scan() {
+		gameWebsites = append(gameWebsites, scanner.Text())
+	}
+
+	// Make 20 fake SteamApps
+	var previousWeightedScore null.Float64
+	for i := 0; i < steamApps; i++ {
+		appid := browser.SteamAppPage.ExtractArgs(gameWebsites[i])[0].(int64)
+		steamApp := models.SteamApp{
+			ID:                uint64(appid),
+			Name:              fmt.Sprintf("SteamApp %d", appid),
+			ReleaseDate:       time.Now().UTC().Add(time.Hour * 24 * time.Duration(i+1)),
+			HasStorepage:      true,
+			Publisher:         null.StringFromPtr(nil),
+			TotalReviews:      0,
+			PositiveReviews:   0,
+			NegativeReviews:   0,
+			ReviewScore:       0,
+			TotalUpvotes:      int32(100 * (i + 1)),
+			TotalDownvotes:    int32(50 * (i + 1)),
+			TotalComments:     int32(100 * (i + 1)),
+			TagScore:          10000.0 * (float64(i) + 1.0),
+			AssetModifiedTime: time.Now().UTC().Add(time.Hour * 12 * time.Duration(steamApps-i) * -1),
+		}
+
+		if err = db.DB.Create(&steamApp).Error; err != nil {
+			t.Errorf("Error occurred whilst creating fake SteamApp %q no. %d: %v", steamApp.Name, i+1, err)
+		}
+
+		if i == 0 {
+			previousWeightedScore = steamApp.WeightedScore
+		} else if steamApp.WeightedScore.Float64 < previousWeightedScore.Float64 {
+			t.Errorf(
+				"Weighted score for %s SteamApp (%f) is not greater than the previous SteamApp's weighted score: %f",
+				numbers.Ordinal(i+1), steamApp.WeightedScore.Float64, previousWeightedScore.Float64,
+			)
+		}
+
+		if testing.Verbose() {
+			t.Logf("Created SteamApp %d/%d: %v", i+1, steamApps, steamApp)
+		}
+	}
+
+	state := StateInMemory()
+	state.GetCachedField(StateType).SetOrAdd("Phase", Measure)
+	state.GetCachedField(StateType).SetOrAdd("DiscoveryTweets", 200)
+	state.GetCachedField(StateType).SetOrAdd("BatchSize", 100)
+
+	if err = MeasurePhase(state); err != nil {
+		t.Errorf("Error occurred whilst running MeasurePhase: %v", err)
+	}
+
+	if testing.Verbose() {
+		fmt.Printf("user tweet times: %v (%d)\n", state.GetIterableCachedField(UserTweetTimesType), state.GetIterableCachedField(UserTweetTimesType).Len())
+		fmt.Printf("user post times: %v (%d)\n", state.GetIterableCachedField(RedditUserPostTimesType), state.GetIterableCachedField(RedditUserPostTimesType).Len())
+		fmt.Printf("developer snapshots: %v (%d)\n", state.GetIterableCachedField(DeveloperSnapshotsType), state.GetIterableCachedField(DeveloperSnapshotsType).Len())
+		fmt.Printf("reddit developer snapshots: %v (%d)\n", state.GetIterableCachedField(RedditDeveloperSnapshotsType), state.GetIterableCachedField(RedditDeveloperSnapshotsType).Len())
+		fmt.Printf("game IDs: %v (%d)\n", state.GetIterableCachedField(GameIDsType), state.GetIterableCachedField(GameIDsType).Len())
+		fmt.Printf("deleted developers: %v (%d)\n", state.GetIterableCachedField(DeletedDevelopersType), state.GetIterableCachedField(DeletedDevelopersType).Len())
+		fmt.Printf("state: %#+v\n", state.GetCachedField(StateType))
+		result, _ := state.GetCachedField(StateType).Get("Result")
+		fmt.Printf("scout result %#+v\n", result)
 	}
 }

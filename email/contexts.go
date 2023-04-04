@@ -163,6 +163,24 @@ func (m *MeasureContext) Funcs() template.FuncMap {
 				Position   int
 			}{SteamApp: app, HrefPrefix: hrefPrefix, Position: position}
 		},
+		"postIDPairs": func(postIDs []string) []struct {
+			Subreddit string
+			PostID    string
+		} {
+			pairs := make([]struct {
+				Subreddit string
+				PostID    string
+			}, len(postIDs)/2)
+			for i := 0; i < len(postIDs); i += 2 {
+				subreddit := postIDs[0]
+				postID := postIDs[1]
+				pairs[0] = struct {
+					Subreddit string
+					PostID    string
+				}{Subreddit: subreddit, PostID: postID}
+			}
+			return pairs
+		},
 	}
 }
 

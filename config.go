@@ -551,6 +551,8 @@ type MondayConfig struct {
 	// Mapping is a map of game model names (i.e. "models.SteamApp"/"models.Game") to MondayMappingConfig that represents
 	// the transformation from items in the board of BoardID to either a models.SteamApp or a models.Game instance.
 	Mapping map[string]*MondayMappingConfig `json:"mapping"`
+	// TestMapping is the same schema as Mapping except it is used within tests.
+	TestMapping map[string]*MondayMappingConfig `json:"test_mapping"`
 }
 
 func (mc *MondayConfig) MondayToken() string { return mc.Token }

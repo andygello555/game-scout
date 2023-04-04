@@ -11,7 +11,7 @@
                 <div style="align-content: center; -webkit-align-content: center">
                     <div style="display: flex; display: -webkit-box; -webkit-box-align: center">
                         <a class="link-button" style="margin-right: 10px" href="{{ .Game.Website.String }}" target="_blank">
-                            <h3 id="{{ .HrefPrefix }}dev_{{ .TrendingDev.Developer.Username }}_game_{{ .Game.ID }}">
+                            <h3 id="{{ .HrefPrefix }}dev_{{ .TrendingDev.Developer.ID }}_game_{{ .Game.ID }}">
                                 {{ if .Game.Name.IsValid }}{{ .Game.Name.String }}{{ else }}{{ .Game.Website.String }} (could not find name){{ end }}
                             </h3>
                         </a>
@@ -186,6 +186,16 @@
 </table>
 {{ end }}
 
+{{/* Template for username display selection */}}
+{{ define "username" }}
+{{ if eq .Type "T" }}@{{ .Username }}{{ else if eq .Type "R" }}u/{{ .Username }}{{ else }}{{ .Username }}{{ end }}
+{{ end }}
+
+{{/* Template for post name for a given Developer */}}
+{{ define "postName" }}
+{{ if eq .Type "T" }}Tweets{{ else }}Posts{{ end }}
+{{ end }}
+
 {{/* Template for Developers */}}
 {{ define "developerWithGames" }}
 <table style="border-collapse: collapse; table-layout: fixed; width: 100%; margin: 25px 0; font-family: sans-serif; min-width: 400px; box-shadow: 0 0 20px rgba(0,0,0,0.37); border-radius: 12px" align="center" width="100%" border="0" cellspacing="0" cellpadding="0">
@@ -194,7 +204,9 @@
         <th style="padding: 12px 15px; border-radius: 10px">
             <div class="left-right">
                 <div style="display: -webkit-flex; display: flex; width: 50%">
-                    <h3 id="{{ .HrefPrefix }}dev_{{ .Developer.Username }}">@{{ .Developer.Username }}</h3>
+                    <h3 id="{{ .HrefPrefix }}dev_{{ .Developer.ID }}">
+                        {{ template "username" .Developer }}
+                    </h3>
                 </div>
                 <div style="align-content: center; -webkit-align-content: center">
                     <a href="#top" style="zoom: 0.05; display: -webkit-box">&nbsp;<div class="up-arrow"></div></a>
@@ -209,8 +221,8 @@
             {{ $firstSnapshot := index .Snapshots 0 }}
             {{ $lastSnapshot := index .Snapshots (lastIndex .Snapshots) }}
             <p style="font-size: 14px">
-                I have created {{ len .Snapshots }} snapshots for
-                @{{ .Developer.Username }} over a period of
+                I have created {{ len .Snapshots }} snapshots for {{ .Developer.Type.String }} user 
+                {{ template "username" .Developer }} over a period of
                 {{ days (timeSub $lastSnapshot.CreatedAt $firstSnapshot.CreatedAt) }}
                 days.
             </p>
@@ -228,15 +240,20 @@
                         <div class="row">
                             <div class="column">
                                 <div class="card left-right">
-                                    <div style="flex-basis: fit-content">Tweets captured</div>
+                                    <div style="flex-basis: fit-content">{{ template "postName" .Developer }} captured</div>
                                     <div style="flex-basis: fit-content">
                                         {{ if gt (len $firstSnapshot.TweetIDs) 0 }}
-                                        {{ range $tweetNo, $tweet := $firstSnapshot.TweetIDs }}
-                                        <a href="https://twitter.com/anyuser/status/{{ $tweet }}">Tweet {{ inc $tweetNo }}{{ if lt $tweetNo (dec (len $firstSnapshot.TweetIDs)) }},{{ end }}</a>
-                                        {{ end }}
-                                        <strong>{{ len $firstSnapshot.TweetIDs }} total</strong>
+                                            {{ range $tweetNo, $tweet := $firstSnapshot.TweetIDs }}
+                                                <a href="https://twitter.com/anyuser/status/{{ $tweet }}">Tweet {{ inc $tweetNo }}{{ if lt $tweetNo (dec (len $firstSnapshot.TweetIDs)) }},{{ end }}</a>
+                                            {{ end }}
+                                            <strong>{{ len $firstSnapshot.TweetIDs }} total</strong>
+                                        {{ else if gt (len $firstSnapshot.RedditPostIDs) 0 }}
+                                            {{ range $postNo, $post := postIDPairs $firstSnapshot.RedditPostIDs }}
+                                                <a href="https://www.reddit.com/r/{{ $post.Subreddit }}/comments/{{ $post.PostID }}">Post {{ inc $postNo }}{{ if lt $postNo (dec (div (len $firstSnapshot.RedditPostIDs) 2)) }},{{ end }}</a>
+                                            {{ end }}
+                                            <strong>{{ div (len $firstSnapshot.RedditPostIDs) 2 }} total</strong>
                                         {{ else }}
-                                        <strong>{{ $firstSnapshot.Tweets }} total</strong>
+                                            <strong>{{ $firstSnapshot.Tweets }} total</strong>
                                         {{ end }}
                                     </div>
                                 </div>
@@ -305,15 +322,20 @@
                         <div class="row">
                             <div class="column">
                                 <div class="card left-right">
-                                    <div style="flex-basis: fit-content">Tweets captured</div>
+                                    <div style="flex-basis: fit-content">{{ template "postName" .Developer }} captured</div>
                                     <div style="flex-basis: fit-content">
                                         {{ if gt (len $lastSnapshot.TweetIDs) 0 }}
-                                        {{ range $tweetNo, $tweet := $lastSnapshot.TweetIDs }}
-                                        <a href="https://twitter.com/anyuser/status/{{ $tweet }}">Tweet {{ inc $tweetNo }}{{ if lt $tweetNo (dec (len $lastSnapshot.TweetIDs)) }},{{ end }}</a>
-                                        {{ end }}
-                                        <strong>{{ len $lastSnapshot.TweetIDs }} total</strong>
+                                            {{ range $tweetNo, $tweet := $lastSnapshot.TweetIDs }}
+                                                <a href="https://twitter.com/anyuser/status/{{ $tweet }}">Tweet {{ inc $tweetNo }}{{ if lt $tweetNo (dec (len $lastSnapshot.TweetIDs)) }},{{ end }}</a>
+                                            {{ end }}
+                                            <strong>{{ len $lastSnapshot.TweetIDs }} total</strong>
+                                        {{ else if gt (len $lastSnapshot.RedditPostIDs) 0 }}
+                                            {{ range $postNo, $post := postIDPairs $lastSnapshot.RedditPostIDs }}
+                                                <a href="https://www.reddit.com/r/{{ $post.Subreddit }}/comments/{{ $post.PostID }}">Post {{ inc $postNo }}{{ if lt $postNo (dec (div (len $lastSnapshot.RedditPostIDs) 2)) }},{{ end }}</a>
+                                            {{ end }}
+                                            <strong>{{ div (len $lastSnapshot.RedditPostIDs) 2 }} total</strong>
                                         {{ else }}
-                                        <strong>{{ $lastSnapshot.Tweets }} total</strong>
+                                            <strong>{{ $lastSnapshot.Tweets }} total</strong>
                                         {{ end }}
                                     </div>
                                 </div>
@@ -370,7 +392,7 @@
             <div style="display: inline-block; align-items: center; width: 500px">
                 {{ if ne .Trend nil }}
                 <p>
-                    The current trend gradient for @{{ .Developer.Username }}'s snapshot
+                    The current trend gradient for {{ template "username" .Developer }}'s snapshot
                     weighted scores is {{ float (index .Trend.GetCoeffs 1) }}
                     (shown in the graph below){{ if and .HasPosition .HasOutOf }}, which places it {{ .GetPosition }}
                     <sup>{{ ord .GetPosition }}</sup> out of all
@@ -577,6 +599,7 @@
     </tbody>
 </table>
 {{ end }}
+
 <!doctype html>
 <html>
 <head>
@@ -872,7 +895,7 @@
                                                         {{ range .TrendingDevs }}
                                                         <li>
                                                             {{ $developer := .Developer }}
-                                                            <a href="#dev_{{ $developer.Username }}">
+                                                            <a href="#dev_{{ $developer.ID }}">
                                                                 <span class="highlight-container"><span class="highlight"><strong>@{{ $developer.Username }}</strong></span></span>
                                                             </a>
                                                             {{ if gt (len .Games) 0 }}
@@ -882,7 +905,7 @@
                                                                     {{ $games = slice $games 0 5 }}
                                                                 {{ end }}
                                                                 {{ range $games }}
-                                                                <li><a href="#dev_{{ $developer.Username }}_game_{{ .ID }}">
+                                                                <li><a href="#dev_{{ $developer.ID }}_game_{{ .ID }}">
                                                                     <span class="highlight-container"><span class="highlight">{{ if .Name.IsValid }}<strong>"{{ .Name.String }}"</strong>{{ else }}{{ .Website.String }}{{ end }}: {{ .Storefront.String }} game for @{{ $developer.Username }}</span></span>
                                                                 </a></li>
                                                                 {{ end }}
@@ -924,13 +947,13 @@
                                                                 {{ range .WatchedDevelopersWithGames }}
                                                                 <li>
                                                                     {{ $developer := .Developer }}
-                                                                    <a href="#watched_dev_{{ $developer.Username }}">
+                                                                    <a href="#watched_dev_{{ $developer.ID }}">
                                                                         <span class="highlight-container"><span class="highlight"><strong>@{{ $developer.Username }}</strong></span></span>
                                                                     </a>
                                                                     {{ if gt (len .Games) 0 }}
                                                                     <ol>
                                                                         {{ range .Games }}
-                                                                        <li><a href="#watched_dev_{{ $developer.Username }}_game_{{ .ID }}">
+                                                                        <li><a href="#watched_dev_{{ $developer.ID }}_game_{{ .ID }}">
                                                                             <span class="highlight-container"><span class="highlight">{{ if .Name.IsValid }}<strong>"{{ .Name.String }}"</strong>{{ else }}{{ .Website.String }}{{ end }}: {{ .Storefront.String }} game for @{{ $developer.Username }}</span></span>
                                                                         </a></li>
                                                                         {{ end }}
