@@ -481,7 +481,7 @@ var GetGamesFromMonday = api.NewBinding[monday.ItemResponse, []*Game](
 	}, true,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
 	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
-)
+).SetName("GetGamesFromMonday")
 
 // AddGameToMonday adds a Game to the mapped board and group by constructing column values using the
 // monday.MappingConfig.ColumnValues method for the monday.MappingConfig for Game. Arguments provided to Execute:
@@ -523,7 +523,7 @@ var AddGameToMonday = api.NewBinding[monday.ItemId, string](
 	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "create_item" },
 	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
-)
+).SetName("AddGameToMonday")
 
 // UpdateGameInMonday is an api.Binding which updates the monday.Item of the given ID within the monday.Board of the
 // given ID for Game using the monday.MappingConfig.ColumnValues method to generate values for all the monday.Column IDs
@@ -569,7 +569,7 @@ var UpdateGameInMonday = api.NewBinding[monday.ItemId, string](
 	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
 	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
-)
+).SetName("UpdateGameInMonday")
 
 func (g *Game) GetVerifiedDeveloperUsernames() []string { return g.VerifiedDeveloperUsernames }
 

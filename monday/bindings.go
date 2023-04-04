@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/andygello555/game-scout/api"
 	"github.com/andygello555/gotils/v2/slices"
-	"github.com/machinebox/graphql"
 	"reflect"
 )
 
@@ -27,14 +26,14 @@ func ResponseUnwrapped[ResT any, RetT any](binding api.Binding[ResT, RetT], resp
 // GetUsers is a Binding to retrieve all User from the linked Monday.com organisation for the API token.
 var GetUsers = api.NewBinding[[]User, []User](
 	func(binding api.Binding[[]User, []User], args ...any) api.Request {
-		return api.GraphQLRequest{Request: graphql.NewRequest(`{ users { id name email } }`)}
+		return NewRequest(`{ users { id name email } }`)
 	},
 	ResponseWrapper[[]User, []User],
 	ResponseUnwrapped[[]User, []User],
 	nil, nil, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "users" },
 	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
-)
+).SetName("GetUsers")
 
 // GetBoards is a Binding to retrieve multiple Board from the given workspaces. Arguments provided to
 // Binding.Execute:
@@ -50,14 +49,14 @@ var GetBoards = api.NewBinding[[]Board, []Board](
 			page         int
 			workspaceIds []int
 		)
-		req := graphql.NewRequest(`query ($page: Int!, $workspaceIds: [Int]) { boards (page: $page, workspace_ids: $workspaceIds) { id name } }`)
+		req := NewRequest(`query ($page: Int!, $workspaceIds: [Int]) { boards (page: $page, workspace_ids: $workspaceIds) { id name } }`)
 		page = args[0].(int)
 		workspaceIds = slices.Comprehension[any, int](args[1:], func(idx int, value any, arr []any) int {
 			return value.(int)
 		})
 		req.Var("page", page)
 		req.Var("workspaceIds", workspaceIds)
-		return api.GraphQLRequest{Request: req}
+		return req
 	},
 	ResponseWrapper[[]Board, []Board],
 	ResponseUnwrapped[[]Board, []Board],
@@ -66,7 +65,7 @@ var GetBoards = api.NewBinding[[]Board, []Board](
 	}, true,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
 	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
-)
+).SetName("GetBoards")
 
 type groupResponse []struct {
 	Groups []Group `json:"groups"`
@@ -83,11 +82,11 @@ func boardIdsParam() []api.BindingParam {
 // Binding.Execute returns a list of Group instances from the given boards.
 var GetGroups = api.NewBinding[groupResponse, []Group](
 	func(b api.Binding[groupResponse, []Group], args ...any) api.Request {
-		req := graphql.NewRequest(`query ($boardIds: [Int]) { boards (ids: $boardIds) { groups { id title } } }`)
+		req := NewRequest(`query ($boardIds: [Int]) { boards (ids: $boardIds) { groups { id title } } }`)
 		req.Var("boardIds", slices.Comprehension(args, func(idx int, value any, arr []any) int {
 			return value.(int)
 		}))
-		return api.GraphQLRequest{Request: req}
+		return req
 	},
 	ResponseWrapper[groupResponse, []Group],
 	ResponseUnwrapped[groupResponse, []Group],
@@ -103,7 +102,7 @@ var GetGroups = api.NewBinding[groupResponse, []Group](
 	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
 	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
-)
+).SetName("GetGroups")
 
 type columnResponse []struct {
 	Id      string   `json:"id"`
@@ -111,11 +110,11 @@ type columnResponse []struct {
 }
 
 func getColumnsRequest[ResT any, RetT any](b api.Binding[ResT, RetT], args ...any) api.Request {
-	req := graphql.NewRequest(`query ($boardIds: [Int]) { boards (ids: $boardIds) { id columns {id title type settings_str} } }`)
+	req := NewRequest(`query ($boardIds: [Int]) { boards (ids: $boardIds) { id columns {id title type settings_str} } }`)
 	req.Var("boardIds", slices.Comprehension(args, func(idx int, value any, arr []any) int {
 		return value.(int)
 	}))
-	return api.GraphQLRequest{Request: req}
+	return req
 }
 
 // GetColumns is a Binding to retrieve multiple Column from the given boards. Arguments provided to Binding.Execute:
@@ -139,7 +138,7 @@ var GetColumns = api.NewBinding[columnResponse, []Column](
 	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
 	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
-)
+).SetName("GetColumns")
 
 // GetColumnMap is a Binding to retrieve the multiple ColumnMap from the given boards. Arguments provided to
 // Binding.Execute:
@@ -166,7 +165,7 @@ var GetColumnMap = api.NewBinding[columnResponse, map[string]ColumnMap](
 	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
 	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
-)
+).SetName("GetColumnMap")
 
 // Example of creating columnValues for AddItem
 // map entry key is column id; run GetColumns to get column id's
@@ -193,7 +192,7 @@ var GetColumnMap = api.NewBinding[columnResponse, map[string]ColumnMap](
 // Binding.Execute returns the ID of the newly added Item.
 var AddItem = api.NewBinding[ItemId, string](
 	func(b api.Binding[ItemId, string], args ...any) api.Request {
-		req := graphql.NewRequest(`mutation ($boardId: Int!, $groupId: String!, $itemName: String!, $colValues: JSON!) { create_item (board_id: $boardId, group_id: $groupId, item_name: $itemName, column_values: $colValues ) { id } }`)
+		req := NewRequest(`mutation ($boardId: Int!, $groupId: String!, $itemName: String!, $colValues: JSON!) { create_item (board_id: $boardId, group_id: $groupId, item_name: $itemName, column_values: $colValues ) { id } }`)
 		boardId := args[0].(int)
 		groupId := args[1].(string)
 		itemName := args[2].(string)
@@ -203,7 +202,7 @@ var AddItem = api.NewBinding[ItemId, string](
 		req.Var("groupId", groupId)
 		req.Var("itemName", itemName)
 		req.Var("colValues", string(jsonValues))
-		return api.GraphQLRequest{Request: req}
+		return req
 	},
 	ResponseWrapper[ItemId, string],
 	ResponseUnwrapped[ItemId, string],
@@ -215,7 +214,7 @@ var AddItem = api.NewBinding[ItemId, string](
 	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "create_item" },
 	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
-)
+).SetName("AddItem")
 
 // AddItemUpdate is a Binding that adds an update with the given message to the Item of the given ID. Arguments provided
 // to Binding.Execute:
@@ -229,10 +228,10 @@ var AddItemUpdate = api.NewBinding[ItemId, string](
 	func(b api.Binding[ItemId, string], args ...any) api.Request {
 		itemId := args[0].(int)
 		msg := args[1].(string)
-		req := graphql.NewRequest(`mutation ($itemId: Int!, $body: String!) { create_update (item_id: $itemId, body: $body ) { id } }`)
+		req := NewRequest(`mutation ($itemId: Int!, $body: String!) { create_update (item_id: $itemId, body: $body ) { id } }`)
 		req.Var("itemId", itemId)
 		req.Var("body", msg)
-		return api.GraphQLRequest{Request: req}
+		return req
 	},
 	ResponseWrapper[ItemId, string],
 	ResponseUnwrapped[ItemId, string],
@@ -244,7 +243,7 @@ var AddItemUpdate = api.NewBinding[ItemId, string](
 	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "create_update" },
 	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
-)
+).SetName("AddItemUpdate")
 
 type ItemResponse []struct {
 	Id     string `json:"id"`
@@ -275,7 +274,7 @@ var GetItems = api.NewBinding[ItemResponse, []Item](
 			boardIds []int
 			groupIds []string
 		)
-		req := graphql.NewRequest(`
+		req := NewRequest(`
 			query ($page: Int!, $boardIds: [Int], $groupIds: [String]) {
 				boards (ids: $boardIds) {
 					id
@@ -301,7 +300,7 @@ var GetItems = api.NewBinding[ItemResponse, []Item](
 		req.Var("page", page)
 		req.Var("boardIds", boardIds)
 		req.Var("groupIds", groupIds)
-		return api.GraphQLRequest{Request: req}
+		return req
 	},
 	ResponseWrapper[ItemResponse, []Item],
 	ResponseUnwrapped[ItemResponse, []Item],
@@ -327,7 +326,7 @@ var GetItems = api.NewBinding[ItemResponse, []Item](
 	}, true,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
 	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
-)
+).SetName("GetItems")
 
 // ChangeMultipleColumnValues is a Binding that changes multiple ColumnValue for the given Item and Board combination.
 // Arguments provided to Binding.Execute:
@@ -342,7 +341,7 @@ var GetItems = api.NewBinding[ItemResponse, []Item](
 // Binding.Execute returns the ID of the Item that has been mutated.
 var ChangeMultipleColumnValues = api.NewBinding[ItemId, string](
 	func(b api.Binding[ItemId, string], args ...any) api.Request {
-		req := graphql.NewRequest(`mutation ($itemId: Int, $boardId: Int!, $colValues: JSON!) { change_multiple_column_values (item_id: $itemId, board_id: $boardId, column_values: $colValues) { id } }`)
+		req := NewRequest(`mutation ($itemId: Int, $boardId: Int!, $colValues: JSON!) { change_multiple_column_values (item_id: $itemId, board_id: $boardId, column_values: $colValues) { id } }`)
 		itemId := args[0].(int)
 		boardId := args[1].(int)
 		columnValues := args[2].(map[string]interface{})
@@ -350,7 +349,7 @@ var ChangeMultipleColumnValues = api.NewBinding[ItemId, string](
 		req.Var("itemId", itemId)
 		req.Var("boardId", boardId)
 		req.Var("colValues", string(jsonValues))
-		return api.GraphQLRequest{Request: req}
+		return req
 	},
 	ResponseWrapper[ItemId, string],
 	ResponseUnwrapped[ItemId, string],
@@ -362,4 +361,4 @@ var ChangeMultipleColumnValues = api.NewBinding[ItemId, string](
 	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "change_multiple_column_values" },
 	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
-)
+).SetName("ChangeMultipleColumnValues")

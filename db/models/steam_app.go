@@ -500,7 +500,7 @@ var GetSteamAppsFromMonday = api.NewBinding[monday.ItemResponse, []*SteamApp](
 	}, true,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
 	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
-)
+).SetName("GetSteamAppsFromMonday")
 
 // AddSteamAppToMonday adds a SteamApp to the mapped board and group by constructing column values using the
 // monday.MappingConfig.ColumnValues method for the monday.MappingConfig for SteamApp. Arguments provided to Execute:
@@ -540,7 +540,7 @@ var AddSteamAppToMonday = api.NewBinding[monday.ItemId, string](
 	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "create_item" },
 	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
-)
+).SetName("AddSteamAppToMonday")
 
 // UpdateSteamAppInMonday is a api.Binding which updates the monday.Item of the given ID within the monday.Board of
 // the given ID for SteamApp using the monday.MappingConfig.ColumnValues method to generate values for all the
@@ -586,7 +586,7 @@ var UpdateSteamAppInMonday = api.NewBinding[monday.ItemId, string](
 	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "change_multiple_column_values" },
 	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
-)
+).SetName("UpdateSteamAppInMonday")
 
 // VerifiedDeveloper returns the first verified Developer for this SteamApp. If there is not one, we will return a nil pointer.
 func (app *SteamApp) VerifiedDeveloper(db *gorm.DB) *Developer {
