@@ -268,7 +268,7 @@ func (g *Game) Advocates(db *gorm.DB) []*Developer {
 	var developers []*Developer
 	db.Where(strings.Join(slices.Comprehension(g.Developers, func(idx int, value string, arr []string) string {
 		devType, username := DevTypeFromUsername(value)
-		return fmt.Sprintf("(developers.type = %s AND developers.username = %s)", string(devType), username)
+		return fmt.Sprintf("(developers.type = '%s' AND developers.username = '%s')", string(devType), username)
 	}), " OR ")).Find(&developers)
 	return developers
 }
@@ -492,6 +492,10 @@ var GetGamesFromMonday = api.NewBinding[monday.ItemResponse, []*Game](
 // monday.MappingConfig is then used to generate the column values that are posted to the Monday API to construct a new
 // item on the mapped board and group combination.
 //
+// • additionalColumnValues (map[string]any): Any additional column values to create the monday.Item for the Game with.
+// Column IDs that already exist in the column values generated for the Game will be overwritten by
+// additionalColumnValues.
+//
 // Execute returns the item ID of the newly created item. This can then be used to set the Game.Watched field
 // appropriately if necessary.
 var AddGameToMonday = api.NewBinding[monday.ItemId, string](
@@ -503,6 +507,12 @@ var AddGameToMonday = api.NewBinding[monday.ItemId, string](
 		}
 		mapping := args[1].(monday.Config).MondayMappingForModel(Game{})
 		columnValues, err := mapping.ColumnValues(game)
+
+		// Handle any additional column values
+		for columnID, columnValue := range args[2].(map[string]any) {
+			columnValues[columnID] = columnValue
+		}
+
 		if err != nil {
 			panic(err)
 		}
@@ -519,6 +529,7 @@ var AddGameToMonday = api.NewBinding[monday.ItemId, string](
 		return api.Params(
 			"game", &Game{}, true,
 			"config", reflect.TypeOf((*monday.Config)(nil)), true,
+			"additionalColumnValues", map[string]any{},
 		)
 	}, false,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "create_item" },

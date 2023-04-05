@@ -6,9 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
+	"github.com/andygello555/game-scout/api"
 	"github.com/andygello555/game-scout/browser"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
+	"github.com/andygello555/game-scout/email"
 	"github.com/andygello555/game-scout/monday"
 	"github.com/andygello555/game-scout/reddit"
 	myTwitter "github.com/andygello555/game-scout/twitter"
@@ -54,7 +56,23 @@ func TestMain(m *testing.M) {
 	if err := db.Open(globalConfig.DB); err != nil {
 		panic(err)
 	}
+
+	// Swap Monday.Mapping with Monday.TestMapping if it exists
+	if globalConfig.Monday.TestMapping != nil {
+		globalConfig.Monday.Mapping, globalConfig.Monday.TestMapping = globalConfig.Monday.TestMapping, globalConfig.Monday.Mapping
+	}
+
+	// Swap each Email.TemplateConfigs.To and Email.TemplateConfigs.DebugTo, and set each Email.TemplateConfigs.SendDay to
+	// the current weekday to ensure that all emails are sent.
+	for templatePath := range globalConfig.Email.TemplateConfigs {
+		globalConfig.Email.TemplateConfigs[templatePath].To, globalConfig.Email.TemplateConfigs[templatePath].DebugTo = []string{"whatever@mailinator.com"}, []string{"whatever@mailinator.com"}
+		globalConfig.Email.TemplateConfigs[templatePath].SendDay = time.Now().UTC().Weekday()
+	}
+
+	// Run the tests
 	m.Run()
+
+	// Close the DB
 	db.Close()
 }
 
@@ -515,6 +533,13 @@ const (
 	maxDeveloperSnapshots = 10
 )
 
+func appIDFromIdx(developerIdx, gameIdx int) int64 {
+	uniqueID := int64(developerIdx)
+	uniqueID = uniqueID << 32
+	uniqueID += int64(gameIdx)
+	return uniqueID
+}
+
 // createFakeDevelopersWithSnaps creates endDevelopers - startDevelopers number of models.Developer(s) each with 1-5
 // games and 1-10 models.DeveloperSnapshot(s). Each models.Developer is created with a sequential ID between
 // startDevelopers+1 and endDevelopers. Created models.Developer's with a higher relative ID, will be more "desirable"
@@ -565,19 +590,16 @@ func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelop
 			expectedIDs.Add(d1)
 		}
 
-		games := int(numbers.ScaleRange(float64(d1), float64(startDevelopers), float64(endDevelopers), 5.0, 1.0))
+		games := int(numbers.ScaleRange(float64(d1), float64(startDevelopers+1), float64(endDevelopers), 5.0, 1.0))
 		if testing.Verbose() {
 			fmt.Printf("Creating %d games for developer %q\n", games, developer.String())
 		}
 		for g := 1; g <= games; g++ {
 			game := models.Game{
-				Name:       null.StringFrom(fmt.Sprintf("Game for Developer %d", d1)),
+				Name:       null.StringFrom(fmt.Sprintf("%s Game for Developer %d", numbers.Ordinal(g), d1)),
 				Storefront: []models.Storefront{models.SteamStorefront, models.ItchIOStorefront}[(g-1)%2],
 				Website: []null.String{
-					null.StringFrom(fmt.Sprintf(
-						"https://store.steampowered.com/app/%sgame%d",
-						developer.Username, g,
-					)),
+					null.StringFrom(browser.SteamAppPage.Fill(appIDFromIdx(d1, g))),
 					null.StringFrom(browser.ItchIOGamePage.Fill(developer.Username, fmt.Sprintf("gameNo%d", g))),
 				}[(g-1)%2],
 				Developers:                 []string{developer.TypedUsername()},
@@ -603,7 +625,7 @@ func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelop
 			}
 		}
 
-		snaps := rand.Intn(maxDeveloperSnapshots-minDeveloperSnapshots+1) + minDeveloperSnapshots
+		snaps := int(numbers.ScaleRange(float64(d1), float64(startDevelopers+1), float64(endDevelopers), minDeveloperSnapshots, maxDeveloperSnapshots))
 		maxTweetTimeRange := float64(time.Hour) * 24.0 * (float64(d1) / (float64(endDevelopers) / 7))
 		maxAverageDurationBetweenTweets := float64(time.Minute) * 30.0 * (float64(d1) / (float64(endDevelopers) / 7))
 		maxTweetPublicMetrics := twitter.TweetMetricsObj{
@@ -631,6 +653,7 @@ func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelop
 			wayThrough := float64(snap) / float64(snaps)
 			developerSnap := models.DeveloperSnapshot{}
 			developerSnap.DeveloperID = developer.ID
+			developerSnap.CreatedAt = time.Now().UTC().Add(time.Hour * 24 * time.Duration(snap-snaps))
 			developerSnap.Tweets = 10
 			developerSnap.Games = 1
 			tweetTimeRange := time.Duration(maxTweetTimeRange * wayThrough)
@@ -691,8 +714,8 @@ func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelop
 
 			if testing.Verbose() {
 				fmt.Printf(
-					"\tCreated snapshot no. %d/%d for developer %q. Weighted score = %f\n",
-					snap, snaps, developer.String(), developerSnap.WeightedScore,
+					"\tCreated snapshot no. %d/%d (%s) for developer %q. Weighted score = %f\n",
+					snap, snaps, developerSnap.CreatedAt.Format("2006-01-02"), developer.String(), developerSnap.WeightedScore,
 				)
 			}
 		}
@@ -1154,55 +1177,139 @@ func TestMeasurePhase(t *testing.T) {
 		t.Fatalf("Cannot run TestMeasurePhase when there is no Monday config specified")
 	}
 
-	monday.CreateClient(globalConfig.Monday)
-	if globalConfig.Monday.TestMapping != nil {
-		if testing.Verbose() {
-			t.Logf("Creating Monday API client using MondayConfig.TestMapping instead of MondayConfig.Mapping")
-		}
+	if err = globalConfig.Compile(); err != nil {
+		t.Fatalf("Cannot compile config: %v", err)
+	}
 
-		monday.CreateClient(&MondayConfig{
-			Token:       globalConfig.Monday.Token,
-			Mapping:     globalConfig.Monday.TestMapping,
-			TestMapping: globalConfig.Monday.Mapping,
-		})
+	monday.CreateClient(globalConfig.Monday)
+	if err = email.ClientCreate(globalConfig.Email); err != nil {
+		t.Fatalf("Cannot create email client: %v", err)
+	}
+
+	if testing.Verbose() {
+		t.Logf("Email config:\n%v", globalConfig.Email)
+	}
+
+	for templatePath, config := range globalConfig.Email.TemplateConfigs {
+		to := email.Client.Config().EmailTemplateConfigFor(templatePath).TemplateTo()
+		debugTo := email.Client.Config().EmailTemplateConfigFor(templatePath).TemplateDebugTo()
+		sendDay := email.Client.Config().EmailTemplateConfigFor(templatePath).TemplateSendDay()
+		if testing.Verbose() {
+			t.Logf("Config for %q: %v", templatePath.Path(), config)
+		}
+		if !reflect.DeepEqual(to, []string{"whatever@mailinator.com"}) {
+			t.Fatalf("To addresses for %q is not empty it is: %v", templatePath.Path(), to)
+		}
+		if !reflect.DeepEqual(debugTo, []string{"whatever@mailinator.com"}) {
+			t.Fatalf("DebugTo addresses for %q is not empty it is: %v", templatePath.Path(), debugTo)
+		}
+		if sendDay != time.Now().UTC().Weekday() {
+			t.Fatalf(
+				"SendDay for %q is not %s, it is: %s",
+				templatePath.Path(), time.Now().UTC().Weekday().String(), sendDay.String(),
+			)
+		}
+	}
+
+	if testing.Verbose() {
+		t.Logf("Monday API mapping for models.Game: %v", monday.DefaultClient.(*monday.Client).Config.MondayMappingForModel(models.Game{}))
+		t.Logf("Monday API mapping for models.SteamApp: %v", monday.DefaultClient.(*monday.Client).Config.MondayMappingForModel(models.SteamApp{}))
 	}
 
 	clearDB(t)
 
-	const (
-		sampleGameWebsitesPath = "samples/sampleGameWebsites.txt"
-		steamApps              = 20
+	mapping := globalConfig.Monday.MondayMappingForModel(models.Game{})
+	expectedItemNames := mapset.NewSet(
+		"1st Game for Developer 198",
+		"1st Game for Developer 199",
+		"1st Game for Developer 200",
+		"1st Game for Developer 67",
+		"2nd Game for Developer 67",
+		"3rd Game for Developer 67",
+		"1st Game for Developer 89",
+		"2nd Game for Developer 89",
+		"3rd Game for Developer 89",
+		"1st Game for Developer 88",
+		"2nd Game for Developer 88",
+		"3rd Game for Developer 88",
+		"1st Game for Developer 66",
+		"2nd Game for Developer 66",
+		"3rd Game for Developer 66",
+		"1st Game for Developer 87",
+		"2nd Game for Developer 87",
+		"3rd Game for Developer 87",
+		"1st Game for Developer 111",
+		"2nd Game for Developer 111",
+		"1st Game for Developer 65",
+		"2nd Game for Developer 65",
+		"3rd Game for Developer 65",
+		"1st Game for Developer 110",
+		"2nd Game for Developer 110",
+		"1st Game for Developer 86",
+		"2nd Game for Developer 86",
+		"3rd Game for Developer 86",
+		"1st Game for Developer 109",
+		"2nd Game for Developer 109",
+		"SteamApp 20",
+		"SteamApp 19",
+		"SteamApp 18",
+		"SteamApp 17",
+		"SteamApp 16",
+		"SteamApp 15",
+		"SteamApp 14",
+		"SteamApp 13",
+		"SteamApp 12",
+		"SteamApp 11",
 	)
+
+	// Clear the test Monday board(s)
+	var items []monday.Item
+	boardIDs := mapping.MappingBoardIDs()
+	if items, err = api.MustTypePaginate(monday.DefaultClient, time.Millisecond*500, monday.GetItems, boardIDs).All(); err != nil {
+		t.Errorf("Could not find all items using paginator: %v", err)
+	}
+
+	for i, item := range items {
+		var itemID int64
+		if itemID, err = strconv.ParseInt(item.Id, 10, 64); err != nil {
+			t.Errorf("Could not parse ID for Item no. %d (%s) into an int64: %v", i, item.Id, err)
+		}
+
+		if _, err = monday.DeleteItem.Execute(monday.DefaultClient, int(itemID)); err != nil {
+			t.Errorf("Could not delete item %d from the test Monday board (%s): %v", itemID, item.BoardId, err)
+		}
+
+		if testing.Verbose() {
+			t.Logf("Deleted item (%d/%d) %q from the test Monday board (%s)", i+1, len(items), item.Name, item.BoardId)
+		}
+	}
 
 	_ = createFakeDevelopersWithSnaps(t, 0, 100, 100, true)
 
 	// Add some games to the test Monday board
-	var tailDevs []*models.Developer
-	if err = db.DB.Where("id IN ?", slices.Comprehension[int, string](numbers.Range(74, 99, 1), func(idx int, value int, arr []int) string {
-		return strconv.Itoa(value)
-	})).Find(&tailDevs).Error; err != nil {
-		t.Errorf("Could not fetch tail end of created fake developers: %v", err)
+	gamesToAddWebsites := []null.String{
+		null.StringFrom(browser.SteamAppPage.Fill(appIDFromIdx(198, 1))),
+		null.StringFrom(browser.SteamAppPage.Fill(appIDFromIdx(199, 1))),
+		null.StringFrom(browser.SteamAppPage.Fill(appIDFromIdx(200, 1))),
 	}
 
-	gameWebsites := make([]string, 0)
-	var gameWebsitesFile *os.File
-	if gameWebsitesFile, err = os.Open(sampleGameWebsitesPath); err != nil {
-		t.Fatalf("Cannot open %s: %s", sampleGameWebsitesPath, err.Error())
+	var gamesToAdd []*models.Game
+	if err = db.DB.Where("website IN ?", gamesToAddWebsites).Find(&gamesToAdd).Error; err != nil {
+		t.Errorf("Error occurred whilst finding games to add for devs 195, 196, 197, 198, 199, 200: %v", err)
 	}
-	defer closeFile(t, gameWebsitesFile, sampleGameWebsitesPath)
 
-	scanner := bufio.NewScanner(gameWebsitesFile)
-	for scanner.Scan() {
-		gameWebsites = append(gameWebsites, scanner.Text())
+	for _, gameToAdd := range gamesToAdd {
+		if _, err = models.AddGameToMonday.Execute(monday.DefaultClient, gameToAdd, globalConfig.Monday); err != nil {
+			t.Errorf("Could not add game %v to test Monday board: %v", gameToAdd, err)
+		}
 	}
 
 	// Make 20 fake SteamApps
 	var previousWeightedScore null.Float64
-	for i := 0; i < steamApps; i++ {
-		appid := browser.SteamAppPage.ExtractArgs(gameWebsites[i])[0].(int64)
+	for i := 0; i < 20; i++ {
 		steamApp := models.SteamApp{
-			ID:                uint64(appid),
-			Name:              fmt.Sprintf("SteamApp %d", appid),
+			ID:                uint64(i + 1),
+			Name:              fmt.Sprintf("SteamApp %d", i+1),
 			ReleaseDate:       time.Now().UTC().Add(time.Hour * 24 * time.Duration(i+1)),
 			HasStorepage:      true,
 			Publisher:         null.StringFromPtr(nil),
@@ -1214,7 +1321,7 @@ func TestMeasurePhase(t *testing.T) {
 			TotalDownvotes:    int32(50 * (i + 1)),
 			TotalComments:     int32(100 * (i + 1)),
 			TagScore:          10000.0 * (float64(i) + 1.0),
-			AssetModifiedTime: time.Now().UTC().Add(time.Hour * 12 * time.Duration(steamApps-i) * -1),
+			AssetModifiedTime: time.Now().UTC().Add(time.Hour * 12 * time.Duration(20-i) * -1),
 		}
 
 		if err = db.DB.Create(&steamApp).Error; err != nil {
@@ -1231,14 +1338,31 @@ func TestMeasurePhase(t *testing.T) {
 		}
 
 		if testing.Verbose() {
-			t.Logf("Created SteamApp %d/%d: %v", i+1, steamApps, steamApp)
+			t.Logf("Created SteamApp %d/20: %v", i+1, steamApp)
 		}
 	}
 
+	start := time.Now().UTC()
 	state := StateInMemory()
+	state.GetCachedField(StateType).SetOrAdd("Start", start)
+	state.GetCachedField(StateType).SetOrAdd("PhaseStart", start)
 	state.GetCachedField(StateType).SetOrAdd("Phase", Measure)
 	state.GetCachedField(StateType).SetOrAdd("DiscoveryTweets", 200)
 	state.GetCachedField(StateType).SetOrAdd("BatchSize", 100)
+
+	// Add some deleted developers
+	var deletedDevelopers []*models.Developer
+	if err = db.DB.Where("id IN ?", []string{"100", "101", "102"}).Find(&deletedDevelopers).Error; err != nil {
+		t.Errorf("Error occurred whilst finding developer's 100, 101, 102 (developer's that we will mark for deletion): %v", err)
+	}
+
+	for _, deletedDeveloper := range deletedDevelopers {
+		var deletedTrendDev *models.TrendingDev
+		if deletedTrendDev, err = deletedDeveloper.TrendingDev(db.DB); err != nil {
+			t.Errorf("Error occurred whilst finding trend for deleted developer %v: %v", deletedDeveloper, err)
+		}
+		state.GetIterableCachedField(DeletedDevelopersType).SetOrAdd(deletedTrendDev)
+	}
 
 	if err = MeasurePhase(state); err != nil {
 		t.Errorf("Error occurred whilst running MeasurePhase: %v", err)
@@ -1254,5 +1378,22 @@ func TestMeasurePhase(t *testing.T) {
 		fmt.Printf("state: %#+v\n", state.GetCachedField(StateType))
 		result, _ := state.GetCachedField(StateType).Get("Result")
 		fmt.Printf("scout result %#+v\n", result)
+	}
+
+	// Check if we have the correct items on the Monday board
+	if items, err = api.MustTypePaginate(monday.DefaultClient, time.Millisecond*500, monday.GetItems, mapping.MappingBoardIDs()).All(); err != nil {
+		t.Errorf("Error occurred whilst fetching all items from Monday after Measure: %v", err)
+	}
+
+	actualItemNames := mapset.NewSet[string]()
+	for _, item := range items {
+		actualItemNames.Add(item.Name)
+	}
+
+	if !actualItemNames.Equal(expectedItemNames) {
+		t.Errorf(
+			"Actual item names don't match expected item names:\nexpected - actual = %v\nactual - expected = %v",
+			expectedItemNames.Difference(actualItemNames), actualItemNames.Difference(expectedItemNames),
+		)
 	}
 }

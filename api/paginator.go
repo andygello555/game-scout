@@ -466,6 +466,15 @@ func NewTypedPaginator[ResT any, RetT any](client Client, waitTime time.Duration
 	return
 }
 
+// MustTypePaginate calls NewTypedPaginator with the given arguments and panics if an error occurs.
+func MustTypePaginate[ResT any, RetT any](client Client, waitTime time.Duration, binding Binding[ResT, RetT], args ...any) (paginator Paginator[ResT, RetT]) {
+	var err error
+	if paginator, err = NewTypedPaginator(client, waitTime, binding, args...); err != nil {
+		panic(err)
+	}
+	return
+}
+
 type paginator struct {
 	client                 Client
 	rateLimitedClient      RateLimitedClient
@@ -664,5 +673,14 @@ func NewPaginator(client Client, waitTime time.Duration, binding BindingWrapper,
 		}
 	}
 	pag = p
+	return
+}
+
+// MustPaginate calls NewPaginator for the given arguments and panics if an error occurs.
+func MustPaginate(client Client, waitTime time.Duration, binding BindingWrapper, args ...any) (paginator Paginator[any, any]) {
+	var err error
+	if paginator, err = NewPaginator(client, waitTime, binding, args...); err != nil {
+		panic(err)
+	}
 	return
 }

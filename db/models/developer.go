@@ -36,6 +36,10 @@ func DevTypeFromUsername(username string) (DeveloperType, string) {
 	return UnknownDeveloperType, username
 }
 
+func (dt DeveloperType) EnumValue() string {
+	return string(dt)
+}
+
 // Index returns the index of the DeveloperType.
 func (dt DeveloperType) Index() int {
 	switch dt {

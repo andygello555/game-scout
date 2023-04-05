@@ -1147,6 +1147,10 @@ func main() {
 
 				var execute func() (any, error)
 				switch strings.ToLower(c.String("binding")) {
+				case "me":
+					execute = func() (any, error) {
+						return monday.Me.Execute(monday.DefaultClient)
+					}
 				case "getusers":
 					execute = func() (any, error) {
 						return monday.GetUsers.Execute(monday.DefaultClient)
@@ -1250,6 +1254,10 @@ func main() {
 								return all, err
 							}
 						}
+					}
+				case "deleteitem":
+					execute = func() (any, error) {
+						return monday.DeleteItem.Execute(monday.DefaultClient, slices.Comprehension(c.StringSlice("arg"), argsToInts)...)
 					}
 				case "addgame":
 					args := c.StringSlice("arg")

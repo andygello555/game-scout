@@ -23,6 +23,18 @@ func ResponseUnwrapped[ResT any, RetT any](binding api.Binding[ResT, RetT], resp
 	return responseWrapper.Elem().Field(0).Interface().(ResT), nil
 }
 
+// Me is an api.Binding that will retrieve the User bound to the Monday API token used to fetch it.
+var Me = api.NewBinding[User, User](
+	func(binding api.Binding[User, User], args ...any) (request api.Request) {
+		return NewRequest(`{ me { id name email } }`)
+	},
+	ResponseWrapper[User, User],
+	ResponseUnwrapped[User, User],
+	nil, nil, false,
+	func(client api.Client) (string, any) { return "jsonResponseKey", "me" },
+	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
+).SetName("Me")
+
 // GetUsers is a Binding to retrieve all User from the linked Monday.com organisation for the API token.
 var GetUsers = api.NewBinding[[]User, []User](
 	func(binding api.Binding[[]User, []User], args ...any) api.Request {
@@ -322,7 +334,7 @@ var GetItems = api.NewBinding[ItemResponse, []Item](
 		return items
 	},
 	func(binding api.Binding[ItemResponse, []Item]) []api.BindingParam {
-		return api.Params("page", 1, "boardIds", []int{}, "groupIds", []int{})
+		return api.Params("page", 1, "boardIds", []int{}, "groupIds", []string{})
 	}, true,
 	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
 	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
@@ -362,3 +374,24 @@ var ChangeMultipleColumnValues = api.NewBinding[ItemId, string](
 	func(client api.Client) (string, any) { return "jsonResponseKey", "change_multiple_column_values" },
 	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
 ).SetName("ChangeMultipleColumnValues")
+
+// DeleteItem is an api.Binding that deletes the Item of the given item ID. Arguments provided to Binding.Execute:
+//
+// itemId (int): The ID of the Item that we want to delete.
+//
+// Binding.Execute returns the ID for the Item that was deleted.
+var DeleteItem = api.NewBinding[ItemId, string](
+	func(binding api.Binding[ItemId, string], args ...any) (request api.Request) {
+		req := NewRequest(`mutation ($itemId: Int) { delete_item (item_id: $itemId) { id } }`)
+		itemId := args[0].(int)
+		req.Var("itemId", itemId)
+		return req
+	},
+	ResponseWrapper[ItemId, string],
+	ResponseUnwrapped[ItemId, string],
+	func(binding api.Binding[ItemId, string], response ItemId, args ...any) string { return response.Id },
+	func(binding api.Binding[ItemId, string]) []api.BindingParam { return api.Params("itemId", 0, true) },
+	false,
+	func(client api.Client) (string, any) { return "jsonResponseKey", "delete_item" },
+	func(client api.Client) (string, any) { return "config", client.(*Client).Config },
+)
