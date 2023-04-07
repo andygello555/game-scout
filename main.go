@@ -8,15 +8,18 @@ import (
 	"github.com/RichardKnop/machinery/v1/backends/result"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/RichardKnop/machinery/v1/tasks"
+	"github.com/andygello555/game-scout/api"
 	"github.com/andygello555/game-scout/browser"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/game-scout/email"
 	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/andygello555/game-scout/monday"
+	"github.com/andygello555/game-scout/reddit"
 	"github.com/andygello555/game-scout/steamcmd"
 	task "github.com/andygello555/game-scout/tasks"
 	myTwitter "github.com/andygello555/game-scout/twitter"
+	"github.com/andygello555/gotils/v2/numbers"
 	"github.com/andygello555/gotils/v2/slices"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
@@ -49,7 +52,7 @@ func init() {
 }
 
 func main() {
-	rand.Seed(time.Now().Unix())
+	rand.Seed(time.Now().UTC().Unix())
 
 	// Compile any compilable configs in the globalConfig
 	start := time.Now().UTC()
@@ -81,6 +84,12 @@ func main() {
 	log.INFO.Printf("Setting up Monday client at %s", start.String())
 	monday.CreateClient(globalConfig.Monday)
 	log.INFO.Printf("Done setting up Monday client in %s", time.Now().UTC().Sub(start).String())
+
+	// Set up the default Reddit client
+	start = time.Now().UTC()
+	log.INFO.Printf("Setting up Reddit client at %s", start.String())
+	reddit.CreateClient(globalConfig.Reddit)
+	log.INFO.Printf("Done setting up Reddit client in %s", time.Now().UTC().Sub(start).String())
 
 	// Set up the default email client
 	start = time.Now().UTC()
@@ -330,7 +339,7 @@ func main() {
 					return cli.NewExitError(err.Error(), 1)
 				}
 
-				rand.Seed(time.Now().Unix())
+				rand.Seed(time.Now().UTC().Unix())
 				var i int
 				developerIDs := make([]string, 10)
 				developerSnapshotIDs := make([]uuid.UUID, 10)
@@ -763,15 +772,15 @@ func main() {
 				switch templatePath {
 				case email.Measure:
 					context = &email.MeasureContext{
-						Start: time.Now(),
-						End:   time.Now(),
+						Start: time.Now().UTC(),
+						End:   time.Now().UTC(),
 					}
 				case email.Started:
 					context = &StartedContext{state}
 				case email.Error:
 					stackTraces := new(strings.Builder)
 					context = &ErrorContext{
-						Time:        time.Now(),
+						Time:        time.Now().UTC(),
 						Error:       myErrors.TemporaryError(false, "this is a made-up error"),
 						State:       state,
 						StackTraces: stackTraces,
@@ -783,8 +792,8 @@ func main() {
 					context = &email.FinishedContext{
 						BatchSize:       100,
 						DiscoveryTweets: 30250,
-						Started:         time.Now().Add(-1 * time.Hour * 3),
-						Finished:        time.Now(),
+						Started:         time.Now().UTC().Add(-1 * time.Hour * 3),
+						Finished:        time.Now().UTC(),
 						Result: &models.ScoutResult{
 							DiscoveryStats: &models.DiscoveryUpdateSnapshotStats{
 								Developers:       rand.Int63(),
@@ -931,8 +940,8 @@ func main() {
 			Usage: "subcommand for viewing resources related to a developer in the DB",
 			Action: func(c *cli.Context) (err error) {
 				measureContext := email.MeasureContext{
-					Start:                  time.Now(),
-					End:                    time.Now(),
+					Start:                  time.Now().UTC(),
+					End:                    time.Now().UTC(),
 					TrendingDevs:           make([]*models.TrendingDev, len(c.StringSlice("id"))),
 					DevelopersBeingDeleted: make([]*models.TrendingDev, 0),
 					WatchedDevelopers:      make([]*models.TrendingDev, 0),
@@ -955,7 +964,7 @@ func main() {
 					}
 
 					if c.Bool("printBefore") {
-						fmt.Printf("\t%v\n", developer)
+						fmt.Printf("\t%#+v\n", developer)
 					}
 
 					if c.Bool("games") {
@@ -1053,7 +1062,7 @@ func main() {
 					}
 
 					if c.Bool("printAfter") {
-						fmt.Printf("\t%v\n", developer)
+						fmt.Printf("\t%#+v\n", developer)
 					}
 				}
 
@@ -1110,7 +1119,11 @@ func main() {
 				},
 				cli.BoolFlag{
 					Name:  "all",
-					Usage: "fetch all the resources from the binding using a Paginator",
+					Usage: "fetch all the resources from the binding using a typed Paginator",
+				},
+				cli.BoolFlag{
+					Name:  "allAll",
+					Usage: "fetch all the resources from the binding using a generic Paginator",
 				},
 				cli.BoolFlag{
 					Name:  "log",
@@ -1119,7 +1132,7 @@ func main() {
 			},
 			Action: func(c *cli.Context) (err error) {
 				if c.Bool("log") {
-					monday.DefaultClient.Log = func(s string) {
+					monday.DefaultClient.(*monday.Client).Log = func(s string) {
 						log.INFO.Println(s)
 					}
 				}
@@ -1134,6 +1147,10 @@ func main() {
 
 				var execute func() (any, error)
 				switch strings.ToLower(c.String("binding")) {
+				case "me":
+					execute = func() (any, error) {
+						return monday.Me.Execute(monday.DefaultClient)
+					}
 				case "getusers":
 					execute = func() (any, error) {
 						return monday.GetUsers.Execute(monday.DefaultClient)
@@ -1143,15 +1160,31 @@ func main() {
 					execute = func() (any, error) {
 						return monday.GetBoards.Execute(monday.DefaultClient, args...)
 					}
-					if c.Bool("all") {
+					if c.Bool("all") || c.Bool("allAll") {
 						if len(args) > 0 {
 							args = args[1:]
 						}
 						execute = func() (any, error) {
-							if paginator, err := monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, monday.GetBoards, args...); err != nil {
+							if c.Bool("all") {
+								if paginator, err := api.NewTypedPaginator(monday.DefaultClient, time.Millisecond*100, monday.GetBoards, args...); err != nil {
+									return nil, err
+								} else {
+									all, err := paginator.All()
+									if err == nil {
+										fmt.Println("paginator items:", len(all))
+									}
+									return all, err
+								}
+							}
+
+							if paginator, err := api.NewPaginator(monday.DefaultClient, time.Millisecond*100, api.WrapBinding(monday.GetBoards), args...); err != nil {
 								return nil, err
 							} else {
-								return paginator.All()
+								all, err := paginator.All()
+								if err == nil {
+									fmt.Println("paginator items:", reflect.ValueOf(all).Len())
+								}
+								return all, err
 							}
 						}
 					}
@@ -1195,17 +1228,36 @@ func main() {
 					execute = func() (any, error) {
 						return monday.GetItems.Execute(monday.DefaultClient, args...)
 					}
-					if c.Bool("all") {
+					if c.Bool("all") || c.Bool("allAll") {
 						execute = func() (any, error) {
 							if len(args) > 0 {
 								args = args[1:]
 							}
-							if paginator, err := monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, monday.GetItems, args...); err != nil {
+							if c.Bool("all") {
+								if paginator, err := api.NewTypedPaginator(monday.DefaultClient, time.Millisecond*100, monday.GetItems, args...); err != nil {
+									return nil, err
+								} else {
+									all, err := paginator.All()
+									if err == nil {
+										fmt.Println("paginator items:", len(all))
+									}
+									return all, err
+								}
+							}
+							if paginator, err := api.NewPaginator(monday.DefaultClient, time.Millisecond*100, api.WrapBinding(monday.GetItems), args...); err != nil {
 								return nil, err
 							} else {
-								return paginator.All()
+								all, err := paginator.All()
+								if err == nil {
+									fmt.Println("paginator items:", reflect.ValueOf(all).Len())
+								}
+								return all, err
 							}
 						}
+					}
+				case "deleteitem":
+					execute = func() (any, error) {
+						return monday.DeleteItem.Execute(monday.DefaultClient, slices.Comprehension(c.StringSlice("arg"), argsToInts)...)
 					}
 				case "addgame":
 					args := c.StringSlice("arg")
@@ -1251,12 +1303,27 @@ func main() {
 						execute = func() (any, error) {
 							return models.GetGamesFromMonday.Execute(monday.DefaultClient, page, globalConfig.Monday, db.DB)
 						}
-						if c.Bool("all") {
+						if c.Bool("all") || c.Bool("allAll") {
 							execute = func() (any, error) {
-								if paginator, err := monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, models.GetGamesFromMonday, globalConfig.Monday, db.DB); err != nil {
+								if c.Bool("all") {
+									if paginator, err := api.NewTypedPaginator(monday.DefaultClient, time.Millisecond*100, models.GetGamesFromMonday, globalConfig.Monday, db.DB); err != nil {
+										return nil, err
+									} else {
+										all, err := paginator.All()
+										if err == nil {
+											fmt.Println("paginator items:", len(all))
+										}
+										return all, err
+									}
+								}
+								if paginator, err := api.NewPaginator(monday.DefaultClient, time.Millisecond*100, api.WrapBinding(models.GetGamesFromMonday), globalConfig.Monday, db.DB); err != nil {
 									return nil, err
 								} else {
-									return paginator.All()
+									all, err := paginator.All()
+									if err == nil {
+										fmt.Println("paginator items:", reflect.ValueOf(all).Len())
+									}
+									return all, err
 								}
 							}
 						}
@@ -1264,12 +1331,27 @@ func main() {
 						execute = func() (any, error) {
 							return models.GetSteamAppsFromMonday.Execute(monday.DefaultClient, page, globalConfig.Monday, db.DB)
 						}
-						if c.Bool("all") {
+						if c.Bool("all") || c.Bool("allAll") {
 							execute = func() (any, error) {
-								if paginator, err := monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, models.GetSteamAppsFromMonday, globalConfig.Monday, db.DB); err != nil {
+								if c.Bool("all") {
+									if paginator, err := api.NewTypedPaginator(monday.DefaultClient, time.Millisecond*100, models.GetSteamAppsFromMonday, globalConfig.Monday, db.DB); err != nil {
+										return nil, err
+									} else {
+										all, err := paginator.All()
+										if err == nil {
+											fmt.Println("paginator items:", len(all))
+										}
+										return all, err
+									}
+								}
+								if paginator, err := api.NewPaginator(monday.DefaultClient, time.Millisecond*100, api.WrapBinding(models.GetSteamAppsFromMonday), globalConfig.Monday, db.DB); err != nil {
 									return nil, err
 								} else {
-									return paginator.All()
+									all, err := paginator.All()
+									if err == nil {
+										fmt.Println("paginator items:", reflect.ValueOf(all).Len())
+									}
+									return all, err
 								}
 							}
 						}
@@ -1330,6 +1412,82 @@ func main() {
 			},
 		},
 		{
+			Name:  "reddit",
+			Usage: "run a Reddit Client Binding",
+			Flags: []cli.Flag{
+				cli.StringSliceFlag{
+					Name:  "binding",
+					Usage: "the name of the bindings to execute",
+					Value: &cli.StringSlice{},
+				},
+				cli.StringSliceFlag{
+					Name:  "arg",
+					Usage: "an arg to execute the binding with",
+					Value: &cli.StringSlice{},
+				},
+				cli.IntFlag{
+					Name:     "pages",
+					Required: false,
+					Usage:    "fetch the given number of pages from the binding using a Paginator",
+				},
+			},
+			Action: func(c *cli.Context) (err error) {
+				for _, binding := range c.StringSlice("binding") {
+					bindingName := strings.ToLower(binding)
+
+					var (
+						response any
+						args     []any
+					)
+					bindingWrapper, _ := reddit.API.Binding(bindingName)
+					if args, err = bindingWrapper.ArgsFromStrings(c.StringSlice("arg")...); err != nil {
+						return cli.NewExitError(err.Error(), 1)
+					}
+
+					if numbers.Abs(c.Int("pages")) > 0 {
+						var paginator api.Paginator[any, any]
+						if paginator, err = bindingWrapper.Paginator(reddit.API.Client, time.Millisecond*500, args...); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+
+						if c.Int("pages") > 0 {
+							response, err = paginator.Pages(c.Int("pages"))
+						} else {
+							response, err = paginator.All()
+						}
+
+						if err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+
+						paginatorItems := "N/A"
+						if lenable, ok := response.(api.Lenable); ok {
+							paginatorItems = strconv.Itoa(lenable.Len())
+						} else {
+							val := reflect.ValueOf(response)
+							switch val.Kind() {
+							case reflect.Array, reflect.Chan, reflect.Map, reflect.Slice, reflect.String:
+								paginatorItems = strconv.Itoa(val.Len())
+							case reflect.Ptr:
+								if val.Type().Elem().Kind() == reflect.Array {
+									paginatorItems = strconv.Itoa(val.Len())
+								}
+							default:
+								break
+							}
+						}
+						fmt.Println("paginator items:", paginatorItems)
+					} else {
+						if response, err = bindingWrapper.Execute(reddit.API.Client, args...); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+					}
+					fmt.Printf("%v(%v): %+v\n", bindingWrapper, args, response)
+				}
+				return
+			},
+		},
+		{
 			Name:  "steamapp",
 			Usage: "subcommand for viewing resources related to a SteamApp in the DB",
 			Flags: []cli.Flag{
@@ -1366,8 +1524,8 @@ func main() {
 			},
 			Action: func(c *cli.Context) (err error) {
 				measureContext := email.MeasureContext{
-					Start:            time.Now(),
-					End:              time.Now(),
+					Start:            time.Now().UTC(),
+					End:              time.Now().UTC(),
 					TopSteamApps:     make([]*models.SteamApp, len(c.IntSlice("id"))),
 					WatchedSteamApps: make([]*models.SteamApp, len(c.IntSlice("id"))),
 					Config:           globalConfig.Email,

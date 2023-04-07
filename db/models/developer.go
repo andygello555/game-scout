@@ -1,18 +1,118 @@
 package models
 
 import (
+	"database/sql/driver"
 	"encoding/gob"
 	"fmt"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"strings"
 	"time"
 )
 
 func init() {
 	gob.Register(Developer{})
 	gob.Register(TrendingDev{})
+}
+
+type DeveloperType string
+
+const (
+	UnknownDeveloperType DeveloperType = "U"
+	TwitterDeveloperType DeveloperType = "T"
+	RedditDeveloperType  DeveloperType = "R"
+)
+
+// DevTypeFromUsername returns the DeveloperType of the given Developer.Username, as well as the given
+// Developer.Username without the prefixed DeveloperType character.
+func DevTypeFromUsername(username string) (DeveloperType, string) {
+	for _, devType := range UnknownDeveloperType.Values() {
+		if strings.HasPrefix(username, devType) {
+			return DeveloperType(devType), strings.TrimPrefix(username, devType)
+		}
+	}
+	return UnknownDeveloperType, username
+}
+
+func (dt DeveloperType) EnumValue() string {
+	return string(dt)
+}
+
+// Index returns the index of the DeveloperType.
+func (dt DeveloperType) Index() int {
+	switch dt {
+	case TwitterDeveloperType:
+		return 1
+	case RedditDeveloperType:
+		return 2
+	default:
+		return 0
+	}
+}
+
+// String returns the formal name of the DeveloperType.
+func (dt DeveloperType) String() string {
+	switch dt {
+	case UnknownDeveloperType:
+		return "Unknown"
+	case TwitterDeveloperType:
+		return "Twitter"
+	case RedditDeveloperType:
+		return "Reddit"
+	default:
+		return "<nil>"
+	}
+}
+
+func (dt *DeveloperType) Scan(value interface{}) error {
+	switch value.(type) {
+	case []byte:
+		*dt = DeveloperType(value.([]byte))
+	case string:
+		*dt = DeveloperType(value.(string))
+	default:
+		panic(fmt.Errorf("could not convert DB value to DeveloperType"))
+	}
+	return nil
+}
+
+func (dt DeveloperType) Value() (driver.Value, error) {
+	return string(dt), nil
+}
+
+func (dt DeveloperType) Type() string {
+	return "developer_type"
+}
+
+func (dt DeveloperType) Values() []string {
+	return []string{
+		string(UnknownDeveloperType),
+		string(TwitterDeveloperType),
+		string(RedditDeveloperType),
+	}
+}
+
+func (dt DeveloperType) Types() []DeveloperType {
+	return []DeveloperType{
+		TwitterDeveloperType,
+		RedditDeveloperType,
+	}
+}
+
+type RedditUserMetrics struct {
+	PostKarma    int
+	CommentKarma int
+}
+
+// DeveloperMinimal is used within the state cache to save details for a developer that has been updated, disabled, or
+// enabled.
+type DeveloperMinimal struct {
+	// ID is the ID of the Twitter user that this developer corresponds to.
+	ID string
+	// Type denotes whether we found this Developer on Twitter or Reddit.
+	Type DeveloperType
 }
 
 // Developer represents a potential indie developer's Twitter account. This also contains some current metrics for their
@@ -26,10 +126,14 @@ type Developer struct {
 	Username string
 	// Description is the bio of the Twitter user that this developer corresponds to.
 	Description string
+	// Type denotes whether we found this Developer on Twitter or Reddit.
+	Type DeveloperType `gorm:"type:developer_type"`
 	// ProfileCreated is when the Developer's Twitter profile was created. Note how we avoid using CreatedAt.
 	ProfileCreated time.Time
 	// PublicMetrics is the most up-to-date public metrics for this Developer's Twitter profile.
 	PublicMetrics *twitter.UserMetricsObj `gorm:"embedded;embeddedPrefix:current_"`
+	// RedditPublicMetrics contains the user's karma if they are a RedditDeveloperType Developer.
+	RedditPublicMetrics *RedditUserMetrics `gorm:"embedded;embeddedPrefix:current_reddit_"`
 	// UpdatedAt is when this developer was updated. So we know up until when the PublicMetrics are fresh to.
 	UpdatedAt time.Time
 	// TimesHighlighted is the number of times this Developer has been highlighted by the Measure phase.
@@ -40,7 +144,7 @@ type Developer struct {
 
 // String returns a string representation of the Developer's Username, ID, and Disabled fields.
 func (d *Developer) String() string {
-	return fmt.Sprintf("\"%s\" (%s, %s)", d.Username, d.ID, map[bool]string{
+	return fmt.Sprintf("\"%s\" (%s, %s, %s)", d.Username, d.ID, d.Type.String(), map[bool]string{
 		true:  "disabled",
 		false: "enabled",
 	}[d.Disabled])
@@ -50,6 +154,9 @@ func (d *Developer) String() string {
 func (d *Developer) Link() string {
 	return fmt.Sprintf("https://twitter.com/%s", d.Username)
 }
+
+// TypedUsername returns the Developer's Username prefixed with the string representation of Type.
+func (d *Developer) TypedUsername() string { return fmt.Sprintf("%s%s", string(d.Type), d.Username) }
 
 func (d *Developer) GetObservedName() string { return "Snapshot Weighted Score" }
 
@@ -89,7 +196,7 @@ func (d *Developer) LatestDeveloperSnapshot(db *gorm.DB) (developerSnap *Develop
 
 // Games returns the games for this developer ordered by weighted score descending.
 func (d *Developer) Games(db *gorm.DB) (games []*Game, err error) {
-	if err = db.Model(&Game{}).Where("? = ANY(developers)", d.Username).Order("weighted_score desc").Find(&games).Error; err != nil {
+	if err = db.Model(&Game{}).Where("? = ANY(developers)", d.TypedUsername()).Order("weighted_score desc").Find(&games).Error; err != nil {
 		return games, errors.Wrapf(err, "could not find Games for %v", d)
 	}
 	return

@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/anaskhan96/soup"
+	"github.com/andygello555/game-scout/api"
 	"github.com/andygello555/game-scout/browser"
 	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/andygello555/game-scout/monday"
 	"github.com/andygello555/game-scout/steamcmd"
 	"github.com/andygello555/gotils/v2/numbers"
 	mapset "github.com/deckarep/golang-set/v2"
-	"github.com/machinebox/graphql"
 	"github.com/pkg/errors"
 	"github.com/volatiletech/null/v9"
 	"gorm.io/gorm"
@@ -395,11 +395,11 @@ func (app *SteamApp) Website() string {
 	return browser.SteamAppPage.Fill(app.ID)
 }
 
-// GetSteamAppsFromMonday is a monday.Binding that retrieves all the SteamApp from the mapped board and group. Arguments
+// GetSteamAppsFromMonday is a api.Binding that retrieves all the SteamApp from the mapped board and group. Arguments
 // provided to execute:
 //
-// • page (int): The page of results to retrieve. This means that GetSteamAppsFromMonday can be passed to a
-// monday.Paginator.
+// • page (int): The page of results to retrieve. This means that GetSteamAppsFromMonday can be passed to an
+// api.Paginator.
 //
 // • config (monday.Config): The monday.Config to use to find the monday.MappingConfig for the SteamApp model.
 //
@@ -409,15 +409,17 @@ func (app *SteamApp) Website() string {
 // Execute returns a list of SteamApp instances within their mapped board and group combination for the given page of
 // results. It does this by retrieving the SteamApp.ID from the appropriate column from each item and then searching the
 // gorm.DB instance which is provided in the 3rd argument.
-var GetSteamAppsFromMonday = monday.NewBinding[monday.ItemResponse, []*SteamApp](
-	func(args ...any) *graphql.Request {
+var GetSteamAppsFromMonday = api.NewBinding[monday.ItemResponse, []*SteamApp](
+	func(b api.Binding[monday.ItemResponse, []*SteamApp], args ...any) api.Request {
 		page := args[0].(int)
 		mapping := args[1].(monday.Config).MondayMappingForModel(SteamApp{})
 		boardIds := mapping.MappingBoardIDs()
 		groupIds := mapping.MappingGroupIDs()
 		return monday.GetItems.Request(page, boardIds, groupIds)
 	},
-	func(response monday.ItemResponse, args ...any) []*SteamApp {
+	monday.ResponseWrapper[monday.ItemResponse, []*SteamApp],
+	monday.ResponseUnwrapped[monday.ItemResponse, []*SteamApp],
+	func(b api.Binding[monday.ItemResponse, []*SteamApp], response monday.ItemResponse, args ...any) []*SteamApp {
 		items := monday.GetItems.Response(response)
 		mapping := args[1].(monday.Config).MondayMappingForModel(SteamApp{})
 		db := args[2].(*gorm.DB)
@@ -489,9 +491,16 @@ var GetSteamAppsFromMonday = monday.NewBinding[monday.ItemResponse, []*SteamApp]
 			app.Votes = int32(voteValues[0] - voteValues[1])
 		}
 		return apps
-	},
-	"boards", true,
-)
+	}, func(binding api.Binding[monday.ItemResponse, []*SteamApp]) []api.BindingParam {
+		return api.Params(
+			"page", 0, true,
+			"config", reflect.TypeOf((*monday.Config)(nil)), true,
+			"db", &gorm.DB{}, true,
+		)
+	}, true,
+	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
+	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
+).SetName("GetSteamAppsFromMonday")
 
 // AddSteamAppToMonday adds a SteamApp to the mapped board and group by constructing column values using the
 // monday.MappingConfig.ColumnValues method for the monday.MappingConfig for SteamApp. Arguments provided to Execute:
@@ -504,8 +513,8 @@ var GetSteamAppsFromMonday = monday.NewBinding[monday.ItemResponse, []*SteamApp]
 //
 // Execute returns the item ID of the newly created item. This can then be used to set the SteamApp.Watched field
 // appropriately if necessary.
-var AddSteamAppToMonday = monday.NewBinding[monday.ItemId, string](
-	func(args ...any) *graphql.Request {
+var AddSteamAppToMonday = api.NewBinding[monday.ItemId, string](
+	func(b api.Binding[monday.ItemId, string], args ...any) api.Request {
 		app := args[0].(*SteamApp)
 		itemName := app.Name
 		mapping := args[1].(monday.Config).MondayMappingForModel(SteamApp{})
@@ -520,10 +529,20 @@ var AddSteamAppToMonday = monday.NewBinding[monday.ItemId, string](
 			columnValues,
 		)
 	},
-	monday.AddItem.Response, "create_item", false,
-)
+	monday.ResponseWrapper[monday.ItemId, string],
+	monday.ResponseUnwrapped[monday.ItemId, string],
+	monday.AddItem.GetResponseMethod(),
+	func(binding api.Binding[monday.ItemId, string]) []api.BindingParam {
+		return api.Params(
+			"game", &SteamApp{}, true,
+			"config", reflect.TypeOf((*monday.Config)(nil)), true,
+		)
+	}, false,
+	func(client api.Client) (string, any) { return "jsonResponseKey", "create_item" },
+	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
+).SetName("AddSteamAppToMonday")
 
-// UpdateSteamAppInMonday is a monday.Binding which updates the monday.Item of the given ID within the monday.Board of
+// UpdateSteamAppInMonday is a api.Binding which updates the monday.Item of the given ID within the monday.Board of
 // the given ID for SteamApp using the monday.MappingConfig.ColumnValues method to generate values for all the
 // monday.Column IDs provided by the monday.MappingConfig.MappingColumnsToUpdate method. Arguments provided to Execute:
 //
@@ -538,8 +557,8 @@ var AddSteamAppToMonday = monday.NewBinding[monday.ItemId, string](
 // values of the monday.Item of the given ID in the mapped monday.Board.
 //
 // Execute returns the ID of the monday.Item that has been mutated.
-var UpdateSteamAppInMonday = monday.NewBinding[monday.ItemId, string](
-	func(args ...any) *graphql.Request {
+var UpdateSteamAppInMonday = api.NewBinding[monday.ItemId, string](
+	func(b api.Binding[monday.ItemId, string], args ...any) api.Request {
 		app := args[0].(*SteamApp)
 		itemId := args[1].(int)
 		boardId := args[2].(int)
@@ -554,8 +573,20 @@ var UpdateSteamAppInMonday = monday.NewBinding[monday.ItemId, string](
 			columnValues,
 		)
 	},
-	monday.ChangeMultipleColumnValues.Response, "change_multiple_column_values", false,
-)
+	monday.ResponseWrapper[monday.ItemId, string],
+	monday.ResponseUnwrapped[monday.ItemId, string],
+	monday.ChangeMultipleColumnValues.GetResponseMethod(),
+	func(binding api.Binding[monday.ItemId, string]) []api.BindingParam {
+		return api.Params(
+			"game", &SteamApp{}, true,
+			"itemId", 0, true,
+			"boardId", 0, true,
+			"config", reflect.TypeOf((*monday.Config)(nil)), true,
+		)
+	}, false,
+	func(client api.Client) (string, any) { return "jsonResponseKey", "change_multiple_column_values" },
+	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
+).SetName("UpdateSteamAppInMonday")
 
 // VerifiedDeveloper returns the first verified Developer for this SteamApp. If there is not one, we will return a nil pointer.
 func (app *SteamApp) VerifiedDeveloper(db *gorm.DB) *Developer {

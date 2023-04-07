@@ -6,15 +6,16 @@ import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/anaskhan96/soup"
+	"github.com/andygello555/game-scout/api"
 	"github.com/andygello555/game-scout/browser"
 	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/andygello555/game-scout/monday"
 	"github.com/andygello555/game-scout/steamcmd"
 	"github.com/andygello555/gotils/v2/numbers"
+	"github.com/andygello555/gotils/v2/slices"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
-	"github.com/machinebox/graphql"
 	"github.com/pkg/errors"
 	"github.com/volatiletech/null/v9"
 	"gorm.io/gorm"
@@ -56,10 +57,12 @@ type Game struct {
 	// set to: "https://cdn.cloudflare.steamstatic.com/steam/apps/{{ $appid }}/header.jpg", and for ItchIOStorefront
 	// Games this is set to the URL of the header image on the Game's Itch.IO page.
 	ImageURL null.String `gorm:"default:null"`
-	// Developers are the Twitter usernames that could be developers for this Game.
-	Developers pq.StringArray `gorm:"type:varchar(15)[];default:'{}'"`
-	// VerifiedDeveloperUsernames are the Twitter usernames that can be found somewhere on the Game's Website.
-	VerifiedDeveloperUsernames pq.StringArray `gorm:"type:varchar(15)[];default:'{}'"`
+	// Developers are the Twitter/Reddit usernames that could be developers for this Game. Each username is prefixed with
+	// their Developer.Type's character (i.e. "T" or "R").
+	Developers pq.StringArray `gorm:"type:varchar(21)[];default:'{}'"`
+	// VerifiedDeveloperUsernames are the Twitter/Reddit usernames that can be found somewhere on the Game's Website.
+	// Each username is prefixed with their Developer.Type's character (i.e. "T" or "R").
+	VerifiedDeveloperUsernames pq.StringArray `gorm:"type:varchar(21)[];default:'{}'"`
 	// Updates is the number of times this app has been updated. 0 means that the Game has just been created. Please
 	// don't set this yourself when creating a Game.
 	Updates uint64
@@ -261,6 +264,15 @@ func (g *Game) String() string {
 	return fmt.Sprintf("%s Game \"%s\"", g.Storefront.String(), g.Website.String)
 }
 
+func (g *Game) Advocates(db *gorm.DB) []*Developer {
+	var developers []*Developer
+	db.Where(strings.Join(slices.Comprehension(g.Developers, func(idx int, value string, arr []string) string {
+		devType, username := DevTypeFromUsername(value)
+		return fmt.Sprintf("(developers.type = '%s' AND developers.username = '%s')", string(devType), username)
+	}), " OR ")).Find(&developers)
+	return developers
+}
+
 // CheckCalculateWeightedScore checks if we can calculate the WeightedScore for this Game. This is dependent on the
 // Website field being set and the Storefront not being UnknownStorefront.
 func (g *Game) CheckCalculateWeightedScore() bool {
@@ -365,10 +377,10 @@ func (g *Game) Update(db *gorm.DB, config ScrapeConfig) error {
 	return db.Omit(g.OnCreateOmit()...).Save(g).Error
 }
 
-// GetGamesFromMonday is a monday.Binding to retrieve multiple Game from the mapped board and group. Arguments provided
+// GetGamesFromMonday is a api.Binding to retrieve multiple Game from the mapped board and group. Arguments provided
 // to Execute:
 //
-// • page (int): The page of results to retrieve. This means that GetGamesFromMonday can be passed to a monday.Paginator.
+// • page (int): The page of results to retrieve. This means that GetGamesFromMonday can be passed to an api.Paginator.
 //
 // • config (monday.Config): The monday.Config to use to find the monday.MappingConfig for the Game model.
 //
@@ -378,15 +390,17 @@ func (g *Game) Update(db *gorm.DB, config ScrapeConfig) error {
 // Execute returns a list of Game instances within their mapped board and group combination for the given page of
 // results. It does this by retrieving the Game.ID from the appropriate column from each item and then searching the
 // gorm.DB instance which is provided in the 3rd argument.
-var GetGamesFromMonday = monday.NewBinding[monday.ItemResponse, []*Game](
-	func(args ...any) *graphql.Request {
+var GetGamesFromMonday = api.NewBinding[monday.ItemResponse, []*Game](
+	func(b api.Binding[monday.ItemResponse, []*Game], args ...any) api.Request {
 		page := args[0].(int)
 		mapping := args[1].(monday.Config).MondayMappingForModel(Game{})
 		boardIds := mapping.MappingBoardIDs()
 		groupIds := mapping.MappingGroupIDs()
 		return monday.GetItems.Request(page, boardIds, groupIds)
 	},
-	func(response monday.ItemResponse, args ...any) []*Game {
+	monday.ResponseWrapper[monday.ItemResponse, []*Game],
+	monday.ResponseUnwrapped[monday.ItemResponse, []*Game],
+	func(b api.Binding[monday.ItemResponse, []*Game], response monday.ItemResponse, args ...any) []*Game {
 		items := monday.GetItems.Response(response)
 		mapping := args[1].(monday.Config).MondayMappingForModel(Game{})
 		db := args[2].(*gorm.DB)
@@ -458,9 +472,16 @@ var GetGamesFromMonday = monday.NewBinding[monday.ItemResponse, []*Game](
 			game.Votes = int32(voteValues[0] - voteValues[1])
 		}
 		return games
-	},
-	"boards", true,
-)
+	}, func(binding api.Binding[monday.ItemResponse, []*Game]) []api.BindingParam {
+		return api.Params(
+			"page", 0, true,
+			"config", reflect.TypeOf((*monday.Config)(nil)), true,
+			"db", &gorm.DB{}, true,
+		)
+	}, true,
+	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
+	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
+).SetName("GetGamesFromMonday")
 
 // AddGameToMonday adds a Game to the mapped board and group by constructing column values using the
 // monday.MappingConfig.ColumnValues method for the monday.MappingConfig for Game. Arguments provided to Execute:
@@ -471,10 +492,14 @@ var GetGamesFromMonday = monday.NewBinding[monday.ItemResponse, []*Game](
 // monday.MappingConfig is then used to generate the column values that are posted to the Monday API to construct a new
 // item on the mapped board and group combination.
 //
+// • additionalColumnValues (map[string]any): Any additional column values to create the monday.Item for the Game with.
+// Column IDs that already exist in the column values generated for the Game will be overwritten by
+// additionalColumnValues.
+//
 // Execute returns the item ID of the newly created item. This can then be used to set the Game.Watched field
 // appropriately if necessary.
-var AddGameToMonday = monday.NewBinding[monday.ItemId, string](
-	func(args ...any) *graphql.Request {
+var AddGameToMonday = api.NewBinding[monday.ItemId, string](
+	func(b api.Binding[monday.ItemId, string], args ...any) api.Request {
 		game := args[0].(*Game)
 		itemName := game.Website.String
 		if game.Name.IsValid() {
@@ -482,6 +507,12 @@ var AddGameToMonday = monday.NewBinding[monday.ItemId, string](
 		}
 		mapping := args[1].(monday.Config).MondayMappingForModel(Game{})
 		columnValues, err := mapping.ColumnValues(game)
+
+		// Handle any additional column values
+		for columnID, columnValue := range args[2].(map[string]any) {
+			columnValues[columnID] = columnValue
+		}
+
 		if err != nil {
 			panic(err)
 		}
@@ -492,10 +523,20 @@ var AddGameToMonday = monday.NewBinding[monday.ItemId, string](
 			columnValues,
 		)
 	},
-	monday.AddItem.Response, "create_item", false,
-)
+	monday.ResponseWrapper[monday.ItemId, string],
+	monday.ResponseUnwrapped[monday.ItemId, string],
+	monday.AddItem.GetResponseMethod(), func(binding api.Binding[monday.ItemId, string]) []api.BindingParam {
+		return api.Params(
+			"game", &Game{}, true,
+			"config", reflect.TypeOf((*monday.Config)(nil)), true,
+			"additionalColumnValues", map[string]any{},
+		)
+	}, false,
+	func(client api.Client) (string, any) { return "jsonResponseKey", "create_item" },
+	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
+).SetName("AddGameToMonday")
 
-// UpdateGameInMonday is a monday.Binding which updates the monday.Item of the given ID within the monday.Board of the
+// UpdateGameInMonday is an api.Binding which updates the monday.Item of the given ID within the monday.Board of the
 // given ID for Game using the monday.MappingConfig.ColumnValues method to generate values for all the monday.Column IDs
 // provided by the monday.MappingConfig.MappingColumnsToUpdate method. Arguments provided to Execute:
 //
@@ -510,8 +551,8 @@ var AddGameToMonday = monday.NewBinding[monday.ItemId, string](
 // values of the monday.Item of the given ID in the mapped monday.Board.
 //
 // Execute returns the ID of the monday.Item that has been mutated.
-var UpdateGameInMonday = monday.NewBinding[monday.ItemId, string](
-	func(args ...any) *graphql.Request {
+var UpdateGameInMonday = api.NewBinding[monday.ItemId, string](
+	func(b api.Binding[monday.ItemId, string], args ...any) api.Request {
 		game := args[0].(*Game)
 		itemId := args[1].(int)
 		boardId := args[2].(int)
@@ -526,8 +567,20 @@ var UpdateGameInMonday = monday.NewBinding[monday.ItemId, string](
 			columnValues,
 		)
 	},
-	monday.ChangeMultipleColumnValues.Response, "change_multiple_column_values", false,
-)
+	monday.ResponseWrapper[monday.ItemId, string],
+	monday.ResponseUnwrapped[monday.ItemId, string],
+	monday.ChangeMultipleColumnValues.GetResponseMethod(),
+	func(binding api.Binding[monday.ItemId, string]) []api.BindingParam {
+		return api.Params(
+			"game", &Game{}, true,
+			"itemId", 0, true,
+			"boardId", 0, true,
+			"config", reflect.TypeOf((*monday.Config)(nil)), true,
+		)
+	}, false,
+	func(client api.Client) (string, any) { return "jsonResponseKey", "boards" },
+	func(client api.Client) (string, any) { return "config", client.(*monday.Client).Config },
+).SetName("UpdateGameInMonday")
 
 func (g *Game) GetVerifiedDeveloperUsernames() []string { return g.VerifiedDeveloperUsernames }
 
@@ -537,7 +590,8 @@ func (g *Game) VerifiedDeveloper(db *gorm.DB) *Developer {
 		return nil
 	}
 	developer := Developer{}
-	if err := db.Limit(1).Find(&developer, "username IN ?", g.VerifiedDeveloperUsernames).Error; err != nil {
+	devType, firstVerified := DevTypeFromUsername(g.VerifiedDeveloperUsernames[0])
+	if err := db.Limit(1).Find(&developer, "username = ? AND type = ?", firstVerified, devType).Error; err != nil {
 		return nil
 	}
 	return &developer
@@ -636,7 +690,7 @@ func (g *GameSteamStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, minD
 			return fmt.Errorf("cannot find \"type\" key in common details for %d", appID)
 		}
 		sofType := strings.ToLower(appType.(string))
-		log.INFO.Printf("App %v has type: %s", appID, g.Game.IsGame)
+		log.INFO.Printf("App %v IsGame = %t", appID, g.Game.IsGame)
 
 		// We exit out of the scrape if the Game is not a Game. This is so we can not waste anymore time with app.
 		if sofType != "game" {
@@ -970,7 +1024,9 @@ func (g *GameSteamStorefront) ScrapeExtra(config ScrapeConfig, maxTries int, min
 				}
 
 				usernames.Remove("steam")
-				g.Game.VerifiedDeveloperUsernames = usernames.ToSlice()
+				g.Game.VerifiedDeveloperUsernames = slices.Comprehension(usernames.ToSlice(), func(idx int, value string, arr []string) string {
+					return fmt.Sprintf("T%s", value)
+				})
 				log.INFO.Printf("Twitter usernames found for %d: %v", appID, usernames)
 			}
 
@@ -1083,7 +1139,7 @@ func (g *GameItchIOStorefront) ScrapeInfo(config ScrapeConfig, maxTries int, min
 
 		// Find the verified developer usernames for this game. This can be found in meta[property='twitter:creator']
 		if creator := doc.Find("meta", "property", "twitter:creator"); creator.Error == nil {
-			g.Game.VerifiedDeveloperUsernames = []string{strings.Trim(creator.Attrs()["content"], "@")}
+			g.Game.VerifiedDeveloperUsernames = []string{fmt.Sprintf("T%s", strings.Trim(creator.Attrs()["content"], "@"))}
 			log.INFO.Printf(
 				"Found verified developer(s): %v, for Itch.IO title %s (dev: %s)",
 				g.Game.VerifiedDeveloperUsernames, gameSlug, developer,

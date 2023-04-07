@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/gotils/v2/numbers"
+	"github.com/andygello555/gotils/v2/slices"
 	"github.com/deckarep/golang-set/v2"
 	"github.com/volatiletech/null/v9"
 	"html/template"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 	"unicode"
 )
@@ -46,6 +48,17 @@ func (m *MeasureContext) AdditionalParts() ([]Part, error) { return []Part{}, ni
 func (m *MeasureContext) Template() *Template              { return NewParsedTemplate(HTML, m).Template(m) }
 func (m *MeasureContext) Funcs() template.FuncMap {
 	return map[string]any{
+		"developerTypes": func() string {
+			return strings.Join(slices.Comprehension(models.UnknownDeveloperType.Types(), func(idx int, value models.DeveloperType, arr []models.DeveloperType) string {
+				return value.String()
+			}), "/")
+		},
+		"cat": func(s ...string) string {
+			return strings.Join(s, "")
+		},
+		"join": func(s []string, sep string) string {
+			return strings.Join(s, sep)
+		},
 		"intRange": func(start, end, step int) []int {
 			return numbers.Range(start, end, step)
 		},
@@ -162,6 +175,24 @@ func (m *MeasureContext) Funcs() template.FuncMap {
 				HrefPrefix string
 				Position   int
 			}{SteamApp: app, HrefPrefix: hrefPrefix, Position: position}
+		},
+		"postIDPairs": func(postIDs []string) []struct {
+			Subreddit string
+			PostID    string
+		} {
+			pairs := make([]struct {
+				Subreddit string
+				PostID    string
+			}, len(postIDs)/2)
+			for i := 0; i < len(postIDs); i += 2 {
+				subreddit := postIDs[0]
+				postID := postIDs[1]
+				pairs[0] = struct {
+					Subreddit string
+					PostID    string
+				}{Subreddit: subreddit, PostID: postID}
+			}
+			return pairs
 		},
 	}
 }

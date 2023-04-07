@@ -6,8 +6,13 @@ import (
 	"flag"
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
+	"github.com/andygello555/game-scout/api"
+	"github.com/andygello555/game-scout/browser"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
+	"github.com/andygello555/game-scout/email"
+	"github.com/andygello555/game-scout/monday"
+	"github.com/andygello555/game-scout/reddit"
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	"github.com/andygello555/gotils/v2/numbers"
 	"github.com/andygello555/gotils/v2/slices"
@@ -24,9 +29,16 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+func closeFile(t *testing.T, file *os.File, filename string) {
+	if err := file.Close(); err != nil {
+		t.Fatalf("Could not close %s: %s", filename, err.Error())
+	}
+}
 
 func TestMain(m *testing.M) {
 	var keep = flag.Bool("keep", false, "keep test DB after tests")
@@ -44,7 +56,23 @@ func TestMain(m *testing.M) {
 	if err := db.Open(globalConfig.DB); err != nil {
 		panic(err)
 	}
+
+	// Swap Monday.Mapping with Monday.TestMapping if it exists
+	if globalConfig.Monday.TestMapping != nil {
+		globalConfig.Monday.Mapping, globalConfig.Monday.TestMapping = globalConfig.Monday.TestMapping, globalConfig.Monday.Mapping
+	}
+
+	// Swap each Email.TemplateConfigs.To and Email.TemplateConfigs.DebugTo, and set each Email.TemplateConfigs.SendDay to
+	// the current weekday to ensure that all emails are sent.
+	for templatePath := range globalConfig.Email.TemplateConfigs {
+		globalConfig.Email.TemplateConfigs[templatePath].To, globalConfig.Email.TemplateConfigs[templatePath].DebugTo = []string{"whatever@mailinator.com"}, []string{"whatever@mailinator.com"}
+		globalConfig.Email.TemplateConfigs[templatePath].SendDay = time.Now().UTC().Weekday()
+	}
+
+	// Run the tests
 	m.Run()
+
+	// Close the DB
 	db.Close()
 }
 
@@ -88,7 +116,7 @@ func TestDiscoveryBatch(t *testing.T) {
 
 		var subGameIDs mapset.Set[uuid.UUID]
 		//if subGameIDs, err = DiscoveryBatch(1, sampleTweets, gameScrapeQueue, state); err != nil {
-		if subGameIDs, err = DiscoveryBatch(1, sampleTweets, gameScrapers, state); err != nil {
+		if subGameIDs, err = DiscoveryBatch(1, Tweets(sampleTweets), gameScrapers, state); err != nil {
 			t.Errorf("Could not run DiscoveryBatch: %s", err.Error())
 		}
 		state.GetIterableCachedField(GameIDsType).Merge(&GameIDs{subGameIDs})
@@ -137,19 +165,13 @@ func TestUpdatePhase(t *testing.T) {
 		discoveryTweets        = 30250
 	)
 
-	closeFile := func(file *os.File, filename string) {
-		if err = file.Close(); err != nil {
-			t.Fatalf("Could not close %s: %s", filename, err.Error())
-		}
-	}
-
 	// First we load all the game websites into an array
 	gameWebsites := make([]null.String, 0)
 	var gameWebsitesFile *os.File
 	if gameWebsitesFile, err = os.Open(sampleGameWebsitesPath); err != nil {
 		t.Fatalf("Cannot open %s: %s", sampleGameWebsitesPath, err.Error())
 	}
-	defer closeFile(gameWebsitesFile, sampleGameWebsitesPath)
+	defer closeFile(t, gameWebsitesFile, sampleGameWebsitesPath)
 
 	scanner = bufio.NewScanner(gameWebsitesFile)
 	for scanner.Scan() {
@@ -161,7 +183,7 @@ func TestUpdatePhase(t *testing.T) {
 	if developerIDsFile, err = os.Open(sampleDeveloperIDsPath); err != nil {
 		t.Fatalf("Cannot open %s: %s", sampleDeveloperIDsPath, err.Error())
 	}
-	defer closeFile(developerIDsFile, sampleDeveloperIDsPath)
+	defer closeFile(t, developerIDsFile, sampleDeveloperIDsPath)
 
 	// Create developers from the sampleDeveloperIDs file and also create a game and a snapshot for each.
 	developerNo := 0
@@ -170,13 +192,21 @@ func TestUpdatePhase(t *testing.T) {
 	scanner = bufio.NewScanner(developerIDsFile)
 	expectedDeveloperIDs := mapset.NewSet[string]()
 	for scanner.Scan() && developerNo != *developers {
-		developer := models.Developer{ID: scanner.Text(), Username: strconv.Itoa(developerNo)}
+		line := scanner.Text()
+		id, username := line, strconv.Itoa(developerNo)
+		devType := models.TwitterDeveloperType
+		if split := strings.Split(line, ","); len(split) > 1 {
+			id, username = split[0], split[1]
+			devType = models.RedditDeveloperType
+		}
+
+		developer := models.Developer{ID: id, Username: username, Type: devType}
 		expectedDeveloperIDs.Add(developer.ID)
 		if err = db.DB.Create(&developer).Error; err != nil {
-			t.Errorf("Cannot create Developer %s: %s", developer.ID, err.Error())
+			t.Errorf("Cannot create Developer %v: %s", developer, err.Error())
 		}
 		if testing.Verbose() {
-			t.Logf("Created Developer no. %d: %s\n", developerNo+1, developer.ID)
+			t.Logf("Created Developer no. %d: %v\n", developerNo+1, developer)
 		}
 
 		var storefront models.Storefront
@@ -190,14 +220,14 @@ func TestUpdatePhase(t *testing.T) {
 		}
 
 		if err = db.DB.Create(&models.Game{
-			Name:       null.StringFrom(fmt.Sprintf("Game for Developer: %d", developerNo)),
+			Name:       null.StringFrom(fmt.Sprintf("Game for Developer %v", developer)),
 			Storefront: storefront,
 			Website:    gameWebsites[developerNo],
-			Developers: []string{developer.Username},
+			Developers: []string{developer.TypedUsername()},
 		}).Error; err != nil {
 			t.Errorf(
-				"Cannot create game %s for Developer %s: %s",
-				gameWebsites[developerNo].String, developer.ID, err.Error(),
+				"Cannot create game %s for Developer %v: %s",
+				gameWebsites[developerNo].String, developer, err.Error(),
 			)
 		}
 		developerNo++
@@ -208,10 +238,13 @@ func TestUpdatePhase(t *testing.T) {
 			Tweets:        1,
 			LastTweetTime: sixDaysAgo,
 		}).Error; err != nil {
-			t.Errorf("Cannot create DeveloperSnapshot for Developer %s: %s", developer.ID, err.Error())
+			t.Errorf("Cannot create DeveloperSnapshot for Developer %v: %s", developer, err.Error())
 		}
 		developerSnapshotNo++
 	}
+
+	// Create the global Reddit API client
+	reddit.CreateClient(globalConfig.Reddit)
 
 	// Create the global Twitter client
 	if err = myTwitter.ClientCreate(globalConfig.Twitter); err != nil {
@@ -245,6 +278,18 @@ func TestUpdatePhase(t *testing.T) {
 		t.Errorf("Error occurred in update phase: %s", err.Error())
 	}
 
+	if testing.Verbose() {
+		fmt.Printf("user tweet times: %v (%d)\n", state.GetIterableCachedField(UserTweetTimesType), state.GetIterableCachedField(UserTweetTimesType).Len())
+		fmt.Printf("user post times: %v (%d)\n", state.GetIterableCachedField(RedditUserPostTimesType), state.GetIterableCachedField(RedditUserPostTimesType).Len())
+		fmt.Printf("developer snapshots: %v (%d)\n", state.GetIterableCachedField(DeveloperSnapshotsType), state.GetIterableCachedField(DeveloperSnapshotsType).Len())
+		fmt.Printf("reddit developer snapshots: %v (%d)\n", state.GetIterableCachedField(RedditDeveloperSnapshotsType), state.GetIterableCachedField(RedditDeveloperSnapshotsType).Len())
+		fmt.Printf("game IDs: %v (%d)\n", state.GetIterableCachedField(GameIDsType), state.GetIterableCachedField(GameIDsType).Len())
+		fmt.Printf("deleted developers: %v (%d)\n", state.GetIterableCachedField(DeletedDevelopersType), state.GetIterableCachedField(DeletedDevelopersType).Len())
+		fmt.Printf("state: %#+v\n", state.GetCachedField(StateType))
+		result, _ := state.GetCachedField(StateType).Get("Result")
+		fmt.Printf("scout result %#+v\n", result)
+	}
+
 	if err = state.Save(); err != nil {
 		t.Errorf("Error occurred when saving ScoutState: %s", err.Error())
 	}
@@ -257,7 +302,7 @@ func TestUpdatePhase(t *testing.T) {
 	}
 
 	actualDeveloperIDs := mapset.NewSet[string]()
-	iter := state.GetIterableCachedField(DeveloperSnapshotsType).Iter()
+	iter := MergeCachedFieldIterators(state.GetIterableCachedField(DeveloperSnapshotsType).Iter(), state.GetIterableCachedField(RedditDeveloperSnapshotsType).Iter())
 	for iter.Continue() {
 		key := iter.Key()
 		val, _ := iter.Get()
@@ -265,7 +310,7 @@ func TestUpdatePhase(t *testing.T) {
 		actualDeveloperIDs.Add(key.(string))
 		iter.Next()
 	}
-	fmt.Println("There are", state.GetIterableCachedField(DeveloperSnapshotsType).Len(), "DeveloperSnapshots")
+	fmt.Println("There are", iter.Len(), "DeveloperSnapshots")
 
 	if !actualDeveloperIDs.Equal(expectedDeveloperIDs) {
 		t.Errorf(
@@ -277,15 +322,10 @@ func TestUpdatePhase(t *testing.T) {
 
 func TestSnapshotPhase(t *testing.T) {
 	clearDB(t)
-	developer := models.Developer{
-		ID:               "snapshotdevtest",
-		Name:             "Snapshot Dev",
-		Username:         "Snapshot",
-		TimesHighlighted: 5,
-	}
-	if err := db.DB.Create(&developer).Error; err != nil {
-		t.Errorf("Error was not expected to occur when creating %q test dev: %s", developer.ID, err.Error())
-	}
+	const (
+		developersNo = 50
+		snapshotsNo  = 5
+	)
 
 	state := StateInMemory()
 	tweetPublicMetrics := &twitter.TweetMetricsObj{
@@ -297,68 +337,190 @@ func TestSnapshotPhase(t *testing.T) {
 		Retweets:          10,
 		Quotes:            10,
 	}
+	redditPostMetrics := &models.RedditPostMetrics{
+		Ups:                  10,
+		Downs:                10,
+		Score:                10,
+		UpvoteRatio:          10,
+		NumberOfComments:     10,
+		SubredditSubscribers: 10,
+	}
 	userPublicMetrics := &twitter.UserMetricsObj{
 		Followers: 10,
 		Following: 10,
 		Tweets:    10,
 		Listed:    10,
 	}
-	for i := 0; i < 5; i++ {
-		state.GetIterableCachedField(UserTweetTimesType).SetOrAdd(developer.ID, time.Now().Add(time.Duration(i+1)*time.Hour*24*-1))
-		state.GetIterableCachedField(DeveloperSnapshotsType).SetOrAdd(developer.ID, &models.DeveloperSnapshot{
-			CreatedAt:            time.Now(),
-			DeveloperID:          developer.ID,
-			Tweets:               1,
-			TweetIDs:             []string{strconv.Itoa(i)},
-			TweetsPublicMetrics:  tweetPublicMetrics,
-			UserPublicMetrics:    userPublicMetrics,
-			ContextAnnotationSet: myTwitter.NewContextAnnotationSet(),
-		})
+	redditUserMetrics := &models.RedditUserMetrics{
+		PostKarma:    10,
+		CommentKarma: 10,
+	}
+
+	for developerNo := 0; developerNo < developersNo; developerNo++ {
+		var (
+			devType                     models.DeveloperType
+			userTimesType, devSnapsType CachedFieldType
+		)
+		switch developerNo % 2 {
+		case 0:
+			devType, userTimesType, devSnapsType = models.TwitterDeveloperType, UserTweetTimesType, DeveloperSnapshotsType
+		default:
+			devType, userTimesType, devSnapsType = models.RedditDeveloperType, RedditUserPostTimesType, RedditDeveloperSnapshotsType
+		}
+
+		developer := models.Developer{
+			ID:               fmt.Sprintf("snapshotdev%d", developerNo),
+			Name:             "Snapshot Dev",
+			Username:         "Snapshot",
+			Type:             devType,
+			TimesHighlighted: 5,
+		}
+		if err := db.DB.Create(&developer).Error; err != nil {
+			t.Errorf(
+				"Error was not expected to occur when creating %v %s test dev: %s",
+				developer, devType.String(), err.Error(),
+			)
+		}
+
+		if testing.Verbose() {
+			t.Logf("%d: Created %s Developer %v", developerNo+1, devType.String(), developer)
+		}
+
+		for snapshotNo := 0; snapshotNo < snapshotsNo; snapshotNo++ {
+			state.GetIterableCachedField(userTimesType).SetOrAdd(developer.ID, time.Now().UTC().Add(time.Duration(snapshotNo+1)*time.Hour*24*-1))
+			state.GetIterableCachedField(devSnapsType).SetOrAdd(developer.ID, &models.DeveloperSnapshot{
+				CreatedAt:            time.Now().UTC(),
+				DeveloperID:          developer.ID,
+				Tweets:               1,
+				TweetIDs:             []string{strconv.Itoa(snapshotNo)},
+				RedditPostIDs:        []string{globalConfig.Reddit.RedditSubreddits()[0], strconv.Itoa(snapshotNo)},
+				TweetsPublicMetrics:  tweetPublicMetrics,
+				PostPublicMetrics:    redditPostMetrics,
+				UserPublicMetrics:    userPublicMetrics,
+				RedditPublicMetrics:  redditUserMetrics,
+				ContextAnnotationSet: myTwitter.NewContextAnnotationSet(),
+			})
+
+			if testing.Verbose() {
+				t.Logf("\t%d: Added snapshot for Developer %v", snapshotsNo+1, developer)
+			}
+		}
 	}
 
 	if err := SnapshotPhase(state); err != nil {
 		t.Errorf("Error was not expected to occur in SnapshotPhase: %s", err.Error())
 	}
 
-	if snapshots, err := developer.DeveloperSnapshots(db.DB); err != nil {
-		t.Errorf("Error was not expected to occur when retrieving snapshots for %q: %s", developer.ID, err.Error())
-	} else {
-		if len(snapshots) != 1 {
-			t.Errorf("There are %d snapshots for %q instead of 1", len(snapshots), developer.ID)
+	for developerNo := 0; developerNo < developersNo; developerNo++ {
+		var developer models.Developer
+		developerID := fmt.Sprintf("snapshotdev%d", developerNo)
+		if err := db.DB.Find(&developer, "id = ?", developerID).Error; err != nil {
+			t.Errorf("Error occurred whilst fetching developer of ID %q: %v", developerID, err)
+		}
+
+		if snapshots, err := developer.DeveloperSnapshots(db.DB); err != nil {
+			t.Errorf("Error was not expected to occur when retrieving snapshots for %v: %s", developer, err.Error())
 		} else {
-			first := snapshots[0]
-			for _, checkedMetric := range []struct {
-				name     string
-				actual   string
-				expected string
-			}{
-				{"Tweets", strconv.Itoa(int(first.Tweets)), "5"},
-				{
-					name: "TweetIDs",
-					actual: strconv.FormatBool(
-						mapset.NewSet(
-							slices.Comprehension[int, string](
-								numbers.Range[int](0, 4, 1),
-								func(idx int, value int, arr []int) string {
-									return strconv.Itoa(value)
-								},
-							)...,
-						).Equal(mapset.NewSet([]string(first.TweetIDs)...)),
-					),
-					expected: "true",
-				},
-				{"TweetsPublicMetrics", fmt.Sprintf("%v", *first.TweetsPublicMetrics), "{50 50 50 50 50 50 50}"},
-				{"UserPublicMetrics", fmt.Sprintf("%v", *first.UserPublicMetrics), "{10 10 10 10}"},
-				{"ContextAnnotationSet", first.ContextAnnotationSet.String(), "Set{}"},
-				{"TimesHighlighted", strconv.Itoa(int(first.TimesHighlighted)), "5"},
-			} {
-				if checkedMetric.actual != checkedMetric.expected {
-					t.Errorf(
-						"Only snapshot for %q has %s = %s (%v) not %s like we were expecting",
-						developer.ID, checkedMetric.name, checkedMetric.actual,
-						reflect.ValueOf(first).Elem().FieldByName(checkedMetric.name).Interface(),
-						checkedMetric.expected,
-					)
+			if len(snapshots) != 1 {
+				t.Errorf("There are %d snapshots for %v instead of 1", len(snapshots), developer)
+			} else {
+				first := snapshots[0]
+				for _, checkedMetric := range []struct {
+					name     string
+					actual   string
+					expected string
+				}{
+					{"Tweets", strconv.Itoa(int(first.Tweets)), "5"},
+					{
+						name: "TweetIDs",
+						actual: strconv.FormatBool(
+							mapset.NewSet(
+								slices.Comprehension(
+									numbers.Range(0, snapshotsNo-1, 1),
+									func(idx int, value int, arr []int) string {
+										return strconv.Itoa(value)
+									},
+								)...,
+							).Equal(mapset.NewSet([]string(first.TweetIDs)...)),
+						),
+						expected: map[bool]string{
+							false: "false",
+							true:  "true",
+						}[developer.Type == models.TwitterDeveloperType],
+					},
+					{
+						name: "RedditPostIDs",
+						actual: strconv.FormatBool(
+							slices.SameElements(
+								slices.Comprehension(
+									first.RedditPostIDs,
+									func(idx int, value string, arr []string) any {
+										return value
+									},
+								),
+								[]any{"GameDevelopment", 0, "GameDevelopment", 1, "GameDevelopment", 2, "GameDevelopment", 3, "GameDevelopment", 4},
+							),
+						),
+						expected: map[bool]string{
+							false: "false",
+							true:  "true",
+						}[developer.Type == models.RedditDeveloperType],
+					},
+					{
+						"TweetsPublicMetrics",
+						fmt.Sprintf("%v", *first.TweetsPublicMetrics),
+						map[bool]string{
+							false: "{0 0 0 0 0 0 0}",
+							true:  "{50 50 50 50 50 50 50}",
+						}[developer.Type == models.TwitterDeveloperType],
+					},
+					{
+						"PostPublicMetrics",
+						fmt.Sprintf("%v", *first.PostPublicMetrics),
+						map[bool]string{
+							false: "{0 0 0 0 0 0}",
+							true:  "{50 50 50 50 50 50}",
+						}[developer.Type == models.RedditDeveloperType],
+					},
+					{
+						"UserPublicMetrics",
+						fmt.Sprintf("%v", *first.UserPublicMetrics),
+						map[bool]string{
+							false: "{0 0 0 0}",
+							true:  "{10 10 10 10}",
+						}[developer.Type == models.TwitterDeveloperType],
+					},
+					{
+						"RedditPublicMetrics",
+						fmt.Sprintf("%v", *first.RedditPublicMetrics),
+						map[bool]string{
+							false: "{0 0}",
+							true:  "{10 10}",
+						}[developer.Type == models.RedditDeveloperType],
+					},
+					{
+						"ContextAnnotationSet",
+						func() string {
+							if first.ContextAnnotationSet == nil {
+								return "nil"
+							}
+							return first.ContextAnnotationSet.String()
+						}(),
+						map[bool]string{
+							false: "nil",
+							true:  "Set{}",
+						}[developer.Type == models.TwitterDeveloperType],
+					},
+					{"TimesHighlighted", strconv.Itoa(int(first.TimesHighlighted)), "5"},
+				} {
+					if checkedMetric.actual != checkedMetric.expected {
+						t.Errorf(
+							"Only snapshot for %v has %s = %s (%v) not %s like we were expecting",
+							developer, checkedMetric.name, checkedMetric.actual,
+							reflect.ValueOf(first).Elem().FieldByName(checkedMetric.name).Interface(),
+							checkedMetric.expected,
+						)
+					}
 				}
 			}
 		}
@@ -371,47 +533,76 @@ const (
 	maxDeveloperSnapshots = 10
 )
 
-func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelopers int, expectedOffset int) (expectedIDs mapset.Set[int]) {
+func appIDFromIdx(developerIdx, gameIdx int) int64 {
+	uniqueID := int64(developerIdx)
+	uniqueID = uniqueID << 32
+	uniqueID += int64(gameIdx)
+	return uniqueID
+}
+
+// createFakeDevelopersWithSnaps creates endDevelopers - startDevelopers number of models.Developer(s) each with 1-5
+// games and 1-10 models.DeveloperSnapshot(s). Each models.Developer is created with a sequential ID between
+// startDevelopers+1 and endDevelopers. Created models.Developer's with a higher relative ID, will be more "desirable"
+// (i.e have more snapshots with better weighted scores). If the current iteration is before the given expected offset
+// then the current models.Developer's ID will be added to the expectedIDs set. If allTypes is true, then the actual
+// created number of models.Developer(s) will be multiplied by the number of available models.DeveloperType(s). In this
+// case, the models.DeveloperType of each created models.Developer will be decided using the following formula:
+//
+//	models.UnknownDeveloperType.Types()[d % len(models.UnknownDeveloperType.Types())]
+//
+// Where "d" is the current index of the iteration (zero-based).
+func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelopers int, expectedOffset int, allTypes bool) (expectedIDs mapset.Set[int]) {
 	var err error
 	expectedIDs = mapset.NewThreadUnsafeSet[int]()
-	// To test the "disable" phase, we need to create some fake developers, snapshots, and games for said developers.
-	// These are created in a way that more "desirable" developers will be given a higher ID.
+	types := 1
+	if allTypes {
+		types = len(models.UnknownDeveloperType.Types())
+	}
+	startDevelopers, endDevelopers, expectedOffset = startDevelopers*types, endDevelopers*types, expectedOffset*types
+
 	previousWeightedScore := 0.0
-	bar := progressbar.Default(int64(endDevelopers - startDevelopers + 1))
-	for d := startDevelopers; d <= endDevelopers; d++ {
+	bar := progressbar.Default(int64(endDevelopers - startDevelopers))
+	for d := startDevelopers; d < endDevelopers; d++ {
+		d1 := d + 1
+		devType := models.UnknownDeveloperType.Types()[d%types]
 		developer := models.Developer{
-			ID:          strconv.Itoa(d),
-			Name:        fmt.Sprintf("Developer: %d", d),
-			Username:    fmt.Sprintf("developer%d", d),
-			Description: fmt.Sprintf("I am developer %d", d),
+			ID:          strconv.Itoa(d1),
+			Name:        fmt.Sprintf("Developer: %d", d1),
+			Username:    fmt.Sprintf("developer%d", d1),
+			Description: fmt.Sprintf("I am developer %d", d1),
+			Type:        devType,
 			PublicMetrics: &twitter.UserMetricsObj{
-				Followers: d * 100,
-				Following: d * 10,
+				Followers: d1 * 100,
+				Following: d1 * 10,
 				Tweets:    100,
-				Listed:    d * 2,
+				Listed:    d1 * 2,
+			},
+			RedditPublicMetrics: &models.RedditUserMetrics{
+				PostKarma:    d1 * 100,
+				CommentKarma: d1 * 200,
 			},
 		}
 		if err = db.DB.Create(&developer).Error; err != nil {
-			t.Errorf("Cannot create developer: \"%s\"", developer.Username)
+			t.Errorf("Cannot create %s developer: %q", developer.Type, developer.String())
 		}
 
-		if d <= expectedOffset {
-			expectedIDs.Add(d)
+		if d < expectedOffset {
+			expectedIDs.Add(d1)
 		}
 
-		games := int(numbers.ScaleRange(float64(d), float64(startDevelopers), float64(endDevelopers), 5.0, 1.0))
+		games := int(numbers.ScaleRange(float64(d1), float64(startDevelopers+1), float64(endDevelopers), 5.0, 1.0))
 		if testing.Verbose() {
-			fmt.Printf("Creating %d games for developer %s\n", games, developer.Username)
+			fmt.Printf("Creating %d games for developer %q\n", games, developer.String())
 		}
 		for g := 1; g <= games; g++ {
 			game := models.Game{
-				Name:       null.StringFrom(fmt.Sprintf("Game for Developer %d", d)),
-				Storefront: models.SteamStorefront,
-				Website: null.StringFrom(fmt.Sprintf(
-					"https://store.steampowered.com/app/%sgame%d",
-					developer.Username, g,
-				)),
-				Developers:                 []string{developer.Username},
+				Name:       null.StringFrom(fmt.Sprintf("%s Game for Developer %d", numbers.Ordinal(g), d1)),
+				Storefront: []models.Storefront{models.SteamStorefront, models.ItchIOStorefront}[(g-1)%2],
+				Website: []null.String{
+					null.StringFrom(browser.SteamAppPage.Fill(appIDFromIdx(d1, g))),
+					null.StringFrom(browser.ItchIOGamePage.Fill(developer.Username, fmt.Sprintf("gameNo%d", g))),
+				}[(g-1)%2],
+				Developers:                 []string{developer.TypedUsername()},
 				VerifiedDeveloperUsernames: []string{},
 				ReleaseDate:                null.TimeFromPtr(nil),
 				Publisher:                  null.StringFromPtr(nil),
@@ -424,48 +615,59 @@ func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelop
 				TagScore:                   null.Float64From(0.0),
 			}
 			if err = db.DB.Create(&game).Error; err != nil {
-				t.Errorf("Could not create game no. %d for the developer: %s", g, developer.Username)
+				t.Errorf("Could not create game no. %d for the developer: %q", g, developer.String())
 			}
 			if testing.Verbose() {
 				fmt.Printf(
-					"\tCreated game %s no. %d/%d for developer %s. Weighted score = %f\n",
-					game.Website.String, g, games, developer.Username, game.WeightedScore.Float64,
+					"\tCreated game %s no. %d/%d for developer %q. Weighted score = %f\n",
+					game.Website.String, g, games, developer.String(), game.WeightedScore.Float64,
 				)
 			}
 		}
 
-		snaps := rand.Intn(maxDeveloperSnapshots-minDeveloperSnapshots+1) + minDeveloperSnapshots
-		maxTweetTimeRange := float64(time.Hour) * 24.0 * (float64(d) / (float64(endDevelopers) / 7))
-		maxAverageDurationBetweenTweets := float64(time.Minute) * 30.0 * (float64(d) / (float64(endDevelopers) / 7))
+		snaps := int(numbers.ScaleRange(float64(d1), float64(startDevelopers+1), float64(endDevelopers), minDeveloperSnapshots, maxDeveloperSnapshots))
+		maxTweetTimeRange := float64(time.Hour) * 24.0 * (float64(d1) / (float64(endDevelopers) / 7))
+		maxAverageDurationBetweenTweets := float64(time.Minute) * 30.0 * (float64(d1) / (float64(endDevelopers) / 7))
 		maxTweetPublicMetrics := twitter.TweetMetricsObj{
-			Impressions:       d * 2,
-			URLLinkClicks:     d * 5,
-			UserProfileClicks: d,
-			Likes:             d * 10,
-			Replies:           d * 3,
-			Retweets:          d * 2,
+			Impressions:       d1 * 2,
+			URLLinkClicks:     d1 * 5,
+			UserProfileClicks: d1,
+			Likes:             d1 * 10,
+			Replies:           d1 * 3,
+			Retweets:          d1 * 2,
 			Quotes:            0,
 		}
+		maxPostPublicMetrics := models.RedditPostMetrics{
+			Ups:                  d1 * 10,
+			Downs:                d1 * 5,
+			Score:                d1 * 2,
+			UpvoteRatio:          0,
+			NumberOfComments:     d1 * 5,
+			SubredditSubscribers: d1 * 2,
+		}
 		if testing.Verbose() {
-			fmt.Printf("Created Developer %v. Creating %d snapshots for it:\n", developer, snaps)
+			fmt.Printf("Created Developer %q. Creating %d snapshots for it:\n", developer.String(), snaps)
 			fmt.Printf("MaxTweetTimeRange = %f, MaxAverageDurationBetweenTweets = %f\n", maxTweetTimeRange, maxAverageDurationBetweenTweets)
 		}
 		for snap := 1; snap <= snaps; snap++ {
 			wayThrough := float64(snap) / float64(snaps)
 			developerSnap := models.DeveloperSnapshot{}
 			developerSnap.DeveloperID = developer.ID
+			developerSnap.CreatedAt = time.Now().UTC().Add(time.Hour * 24 * time.Duration(snap-snaps))
 			developerSnap.Tweets = 10
 			developerSnap.Games = 1
 			tweetTimeRange := time.Duration(maxTweetTimeRange * wayThrough)
 			developerSnap.TweetTimeRange = models.NullDurationFromPtr(&tweetTimeRange)
 			averageDurationBetweenTweets := time.Duration(maxAverageDurationBetweenTweets * wayThrough)
 			developerSnap.AverageDurationBetweenTweets = models.NullDurationFromPtr(&averageDurationBetweenTweets)
+
 			if testing.Verbose() {
 				fmt.Printf(
 					"\tTweetTimeRange.Minutes = %f, AverageDurationBetweenTweets.Minutes = %f\n",
 					tweetTimeRange.Minutes(), averageDurationBetweenTweets.Minutes(),
 				)
 			}
+
 			developerSnap.TweetsPublicMetrics = &twitter.TweetMetricsObj{
 				Impressions:       int(float64(maxTweetPublicMetrics.Impressions) * wayThrough),
 				URLLinkClicks:     int(float64(maxTweetPublicMetrics.URLLinkClicks) * wayThrough),
@@ -475,14 +677,27 @@ func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelop
 				Retweets:          int(float64(maxTweetPublicMetrics.Retweets) * wayThrough),
 				Quotes:            int(float64(maxTweetPublicMetrics.Quotes) * wayThrough),
 			}
+			developerSnap.PostPublicMetrics = &models.RedditPostMetrics{
+				Ups:                  int(float64(maxPostPublicMetrics.Ups) * wayThrough),
+				Downs:                int(float64(maxPostPublicMetrics.Downs) * wayThrough),
+				Score:                int(float64(maxPostPublicMetrics.Score) * wayThrough),
+				UpvoteRatio:          float32(float64(maxPostPublicMetrics.UpvoteRatio) * wayThrough),
+				NumberOfComments:     int(float64(maxPostPublicMetrics.NumberOfComments) * wayThrough),
+				SubredditSubscribers: int(float64(maxPostPublicMetrics.SubredditSubscribers) * wayThrough),
+			}
 			developerSnap.UserPublicMetrics = &twitter.UserMetricsObj{
 				Followers: int(float64(developer.PublicMetrics.Followers) * wayThrough),
 				Following: int(float64(developer.PublicMetrics.Following) * wayThrough),
 				Tweets:    developer.PublicMetrics.Tweets,
 				Listed:    int(float64(developer.PublicMetrics.Listed) * wayThrough),
 			}
+			developerSnap.RedditPublicMetrics = &models.RedditUserMetrics{
+				PostKarma:    int(float64(developer.RedditPublicMetrics.PostKarma) * wayThrough),
+				CommentKarma: int(float64(developer.RedditPublicMetrics.CommentKarma) * wayThrough),
+			}
+
 			if err = db.DB.Create(&developerSnap).Error; err != nil {
-				t.Errorf("Could not create developer snap no. %d for the developer: %s", snap, developer.Username)
+				t.Errorf("Could not create developer snap no. %d for the developer: %q", snap, developer.String())
 			}
 
 			if snap == snaps {
@@ -490,17 +705,17 @@ func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelop
 					previousWeightedScore = developerSnap.WeightedScore
 				} else {
 					t.Errorf(
-						"Newest snap for developer: \"%s\", has a weighted score that is less than the "+
+						"Newest snap for developer: %q, has a weighted score that is less than the "+
 							"previous developer's latest snap. %f >= %f",
-						developer.Username, previousWeightedScore, developerSnap.WeightedScore,
+						developer.String(), previousWeightedScore, developerSnap.WeightedScore,
 					)
 				}
 			}
 
 			if testing.Verbose() {
 				fmt.Printf(
-					"\tCreated snapshot no. %d/%d for developer %s. Weighted score = %f\n",
-					snap, snaps, developer.Username, developerSnap.WeightedScore,
+					"\tCreated snapshot no. %d/%d (%s) for developer %q. Weighted score = %f\n",
+					snap, snaps, developerSnap.CreatedAt.Format("2006-01-02"), developer.String(), developerSnap.WeightedScore,
 				)
 			}
 		}
@@ -512,9 +727,9 @@ func createFakeDevelopersWithSnaps(t *testing.T, startDevelopers int, endDevelop
 func disablePhaseTest(t *testing.T) (state *ScoutState, expectedIDs mapset.Set[int]) {
 	fakeDevelopers := int(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase + float64(extraDevelopers)))
 	var err error
-	rand.Seed(time.Now().Unix())
+	rand.Seed(time.Now().UTC().Unix())
 
-	expectedIDs = createFakeDevelopersWithSnaps(t, 1, fakeDevelopers, extraDevelopers)
+	expectedIDs = createFakeDevelopersWithSnaps(t, 0, fakeDevelopers, extraDevelopers, true)
 
 	state = StateInMemory()
 	if err = DisablePhase(state); err != nil {
@@ -528,47 +743,51 @@ func TestDisablePhase(t *testing.T) {
 	clearDB(t)
 
 	state, expectedIDs := disablePhaseTest(t)
+	seenIDs := mapset.NewThreadUnsafeSet[int]()
 
 	// Check if there are exactly maxNonDisabledDevelopers
-	var enabledDevelopers int64
-	if err = db.DB.Model(&models.Developer{}).Where("NOT disabled").Count(&enabledDevelopers).Error; err != nil {
-		t.Errorf("Could not get count of enabled developers: %s", err.Error())
-	}
+	devTypes := models.UnknownDeveloperType.Types()
+	for _, devType := range devTypes {
+		var enabledDevelopers int64
+		if err = db.DB.Model(&models.Developer{}).Where("NOT disabled AND type = ?", devType).Count(&enabledDevelopers).Error; err != nil {
+			t.Errorf("Could not get count of enabled developers: %s", err.Error())
+		}
 
-	if enabledDevelopers != int64(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase)) {
-		t.Errorf(
-			"The number of enabled developers is not %d, it is %d",
-			int(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase)), enabledDevelopers,
-		)
-	}
+		if enabledDevelopers != int64(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase)) {
+			t.Errorf(
+				"The number of enabled %s developers is not %d, it is %d",
+				devType, int(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase)),
+				enabledDevelopers,
+			)
+		}
 
-	// Then we check if the 100 disabled developers have the IDs 1-100
-	type developerID struct {
-		ID string
-	}
-	var developerIDs []developerID
-	if err = db.DB.Model(&models.Developer{}).Where("disabled").Find(&developerIDs).Error; err != nil {
-		t.Errorf("Could not get IDs of disabled developers: %s", err.Error())
-	}
+		// Then we check if the 100 disabled developers have the IDs 1-100
+		type developerID struct {
+			ID string
+		}
+		var developerIDs []developerID
+		if err = db.DB.Model(&models.Developer{}).Where("disabled AND type = ?", devType).Find(&developerIDs).Error; err != nil {
+			t.Errorf("Could not get IDs of disabled %s developers: %s", devType, err.Error())
+		}
 
-	seenIDs := mapset.NewThreadUnsafeSet[int]()
-	for _, id := range developerIDs {
-		intID, _ := strconv.Atoi(id.ID)
-		seenIDs.Add(intID)
-	}
+		for _, id := range developerIDs {
+			intID, _ := strconv.Atoi(id.ID)
+			seenIDs.Add(intID)
+		}
 
-	disabledDevelopers, _ := state.GetCachedField(StateType).Get("DisabledDevelopers")
-	if disabledDevelopersNo := len(disabledDevelopers.([]string)); disabledDevelopersNo != extraDevelopers {
-		t.Errorf(
-			"List of IDs for the disabled developers does not equal %d (it equals %d)",
-			extraDevelopers, disabledDevelopersNo,
-		)
+		disabledDevelopers, _ := state.GetCachedField(StateType).Get(string(devType) + "DisabledDevelopers")
+		if disabledDevelopersNo := len(disabledDevelopers.([]models.DeveloperMinimal)); disabledDevelopersNo != extraDevelopers {
+			t.Errorf(
+				"List of IDs for %s disabled developers does not equal %d (it equals %d)",
+				devType.String(), extraDevelopers, disabledDevelopersNo,
+			)
+		}
 	}
 
 	if !seenIDs.Equal(expectedIDs) {
 		t.Errorf(
-			"The disabled developers aren't the first %d developers that were created. They are: %s",
-			extraDevelopers, seenIDs.String(),
+			"The disabled developers aren't the first %d developers that were created. They are: %s, vs. %s",
+			extraDevelopers*len(devTypes), seenIDs.String(), expectedIDs.String(),
 		)
 	}
 }
@@ -585,10 +804,12 @@ func enablePhaseTest(t *testing.T) (state *ScoutState, enabledDeveloperCount int
 		log.INFO.Printf("Enabled developers after Disable phase: %d", enabledDeveloperCount)
 	}
 
-	// Create 500 more developers to disable
+	// Create 500 more developers for each DeveloperType to disable
+	noDevTypes := len(models.UnknownDeveloperType.Types())
 	fakeDevelopers := int(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase + float64(extraDevelopers)))
-	start, end := fakeDevelopers+1, fakeDevelopers+additionalDisabledDevelopers
-	createdDevelopers := createFakeDevelopersWithSnaps(t, start, end, end)
+	start, end := fakeDevelopers, fakeDevelopers+additionalDisabledDevelopers
+	fmt.Println("start", start, "end", end, "fakeDevelopers", fakeDevelopers, "noDevTypes", noDevTypes)
+	createdDevelopers := createFakeDevelopersWithSnaps(t, start, end, end, true)
 	if err = db.DB.Model(
 		&models.Developer{},
 	).Where(
@@ -623,16 +844,23 @@ func TestEnablePhase(t *testing.T) {
 	clearDB(t)
 
 	_, enabledDeveloperCount := enablePhaseTest(t)
+	for _, devType := range models.UnknownDeveloperType.Types() {
+		if err = db.DB.Model(&models.Developer{}).Where("not disabled AND type = ?", devType).Count(&enabledDeveloperCount).Error; err != nil {
+			t.Errorf(
+				"Error was not expected to occur whilst getting the final count of the %s Developers in the "+
+					"Developers table",
+				devType,
+			)
+		}
 
-	if err = db.DB.Model(&models.Developer{}).Where("not disabled").Count(&enabledDeveloperCount).Error; err != nil {
-		t.Errorf("Error was not expected to occur whilst getting the final count of the Developers table")
-	}
-
-	if enabledDeveloperCount != int64(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterEnablePhase)) {
-		t.Errorf(
-			"The number of enabled developers after the Enable phase does not equal the expected value: %d (expected) vs. %d (actual)",
-			int64(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterEnablePhase)), enabledDeveloperCount,
-		)
+		if enabledDeveloperCount != int64(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterEnablePhase)) {
+			t.Errorf(
+				"The number of enabled %s developers after the Enable phase does not equal the expected "+
+					"value: %d (expected) vs. %d (actual)",
+				devType, int64(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterEnablePhase)),
+				enabledDeveloperCount,
+			)
+		}
 	}
 }
 
@@ -686,7 +914,7 @@ func TestDeletePhase(t *testing.T) {
 			&models.Game{},
 		).Where(
 			"? = ANY(developers)",
-			deletedDev.Developer.Username,
+			deletedDev.Developer.TypedUsername(),
 		).Count(&gamesForDev).Error; err != nil {
 			t.Errorf(
 				"Unexpected error whilst finding the number of games for deleted dev. %s: %v",
@@ -754,8 +982,18 @@ func ExampleStateLoadOrCreate() {
 
 	if err = db.DB.Create(&models.Developer{
 		ID:       "1234",
+		Type:     models.TwitterDeveloperType,
 		Name:     "Enabled Developer",
 		Username: "enabled",
+	}).Error; err != nil {
+		fmt.Printf("Error occurred: %v\n", err)
+	}
+
+	if err = db.DB.Create(&models.Developer{
+		ID:       "r1234",
+		Type:     models.RedditDeveloperType,
+		Name:     "Enabled Developer",
+		Username: "renabled",
 	}).Error; err != nil {
 		fmt.Printf("Error occurred: %v\n", err)
 	}
@@ -763,11 +1001,13 @@ func ExampleStateLoadOrCreate() {
 	if err = resultAny.(*models.ScoutResult).DisableStats.After(db.DB); err != nil {
 		fmt.Printf("Error occurred: %v\n", err)
 	}
-	state.GetCachedField(StateType).SetOrAdd("Result", "Started", time.Now())
+	state.GetCachedField(StateType).SetOrAdd("Result", "Started", time.Now().UTC())
 	state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "Developers", models.SetOrAddInc.Func())
 	state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "Games", models.SetOrAddAdd.Func(int64(2)))
 	state.GetCachedField(UserTweetTimesType).SetOrAdd("1234", time.Now().UTC(), "12345", time.Now().UTC())
+	state.GetCachedField(RedditUserPostTimesType).SetOrAdd("r1234", time.Now().UTC(), "r12345", time.Now().UTC())
 	state.GetCachedField(DeveloperSnapshotsType).SetOrAdd("1234", &models.DeveloperSnapshot{DeveloperID: "1234"})
+	state.GetCachedField(RedditDeveloperSnapshotsType).SetOrAdd("r1234", &models.DeveloperSnapshot{DeveloperID: "r1234"})
 	state.GetCachedField(GameIDsType).SetOrAdd(uuid.New(), uuid.New(), uuid.New())
 	state.GetCachedField(DeletedDevelopersType).SetOrAdd(&models.TrendingDev{
 		Developer: &models.Developer{
@@ -803,7 +1043,9 @@ func ExampleStateLoadOrCreate() {
 	fmt.Println("state.Result.DiscoveryStats:", result.DiscoveryStats)
 	fmt.Printf("state.Result.DisableStats: %+v\n", result.DisableStats)
 	fmt.Println("userTweetTimes:", state.GetIterableCachedField(UserTweetTimesType).Len())
+	fmt.Println("redditUserPostTimes:", state.GetIterableCachedField(RedditUserPostTimesType).Len())
 	fmt.Println("developerSnapshots:", state.GetIterableCachedField(DeveloperSnapshotsType).Len())
+	fmt.Println("redditDeveloperSnapshots:", state.GetIterableCachedField(RedditDeveloperSnapshotsType).Len())
 	fmt.Println("gameIDs:", state.GetIterableCachedField(GameIDsType).Len())
 	fmt.Println("deletedDevelopers:", state.GetIterableCachedField(DeletedDevelopersType).Len())
 	deletedDeveloperOne, _ := state.GetIterableCachedField(DeletedDevelopersType).Get(0)
@@ -815,9 +1057,11 @@ func ExampleStateLoadOrCreate() {
 	state.Delete()
 	// Output:
 	// state.Result.DiscoveryStats: &{1 2 0 0 0}
-	// state.Result.DisableStats: &{EnabledDevelopersBefore:0 DisabledDevelopersBefore:0 EnabledDevelopersAfter:1 DisabledDevelopersAfter:0 DeletedDevelopers:0 TotalSampledDevelopers:0}
+	// state.Result.DisableStats: &{EnabledDevelopersBefore:0 DisabledDevelopersBefore:0 EnabledDevelopersAfter:2 DisabledDevelopersAfter:0 DeletedDevelopers:0 TotalSampledDevelopers:0 TotalFinishedSamples:0}
 	// userTweetTimes: 2
+	// redditUserPostTimes: 2
 	// developerSnapshots: 1
+	// redditDeveloperSnapshots: 1
 	// gameIDs: 3
 	// deletedDevelopers: 1
 	// deletedDevelopers[0].Developer.ID: 1234
@@ -829,5 +1073,327 @@ func ExampleStateLoadOrCreate() {
 func TestCreateInitialSteamApps(t *testing.T) {
 	if err := models.CreateInitialSteamApps(db.DB); err != nil {
 		t.Errorf("Error occurred whilst running CreateInitialSteamApps: %v", err)
+	}
+}
+
+const testSubreddit = "GameDevelopment"
+
+func TestSubredditFetch(t *testing.T) {
+	reddit.CreateClient(globalConfig.Reddit)
+	if postsCommentsAndUsers, err := SubredditFetch(testSubreddit); err != nil {
+		t.Errorf("Error occurred whilst fetching posts, comments, and users for top in %q: %v", testSubreddit, err)
+	} else {
+		if len(postsCommentsAndUsers) > globalConfig.Scrape.Constants.RedditPostsPerSubreddit {
+			t.Errorf(
+				"There are %d posts, comments, and users returned by SubredditFetch for %q which exceeds the %d max",
+				len(postsCommentsAndUsers), testSubreddit, globalConfig.Scrape.Constants.RedditPostsPerSubreddit,
+			)
+		}
+	}
+}
+
+func TestRedditDiscoveryPhase(t *testing.T) {
+	reddit.CreateClient(globalConfig.Reddit)
+	state := StateInMemory()
+	gameScrapers := models.NewStorefrontScrapers[string](
+		globalConfig.Scrape, db.DB, 5, 4,
+		globalConfig.Scrape.Constants.RedditPostsPerSubreddit*globalConfig.Scrape.Constants.MaxGamesPerTweet,
+		globalConfig.Scrape.Constants.MinScrapeStorefrontsForGameWorkerWaitTime.Duration,
+		globalConfig.Scrape.Constants.MaxScrapeStorefrontsForGameWorkerWaitTime.Duration,
+	)
+	gameScrapers.Start()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	if err := RedditDiscoveryPhase(&wg, state, gameScrapers, testSubreddit); err != nil {
+		t.Errorf("Error occurred whilst performing discovery phase for subreddit %q: %v", testSubreddit, err)
+	} else {
+		if testing.Verbose() {
+			fmt.Printf("user post times: %v (%d)\n", state.GetIterableCachedField(RedditUserPostTimesType), state.GetIterableCachedField(RedditUserPostTimesType).Len())
+			fmt.Printf("developer snapshots: %v (%d)\n", state.GetIterableCachedField(RedditDeveloperSnapshotsType), state.GetIterableCachedField(RedditDeveloperSnapshotsType).Len())
+			fmt.Printf("game IDs: %v (%d)\n", state.GetIterableCachedField(GameIDsType), state.GetIterableCachedField(GameIDsType).Len())
+			fmt.Printf("deleted developers: %v (%d)\n", state.GetIterableCachedField(DeletedDevelopersType), state.GetIterableCachedField(DeletedDevelopersType).Len())
+			fmt.Printf("state: %#+v\n", state.GetCachedField(StateType))
+		}
+
+		postTimes := state.GetIterableCachedField(RedditUserPostTimesType).Len()
+		devSnaps := state.GetIterableCachedField(RedditDeveloperSnapshotsType).Len()
+		if postTimes != devSnaps {
+			t.Errorf(
+				"The number of user times %d, does not match the number of developer snapshots %d",
+				postTimes, devSnaps,
+			)
+		}
+
+		if postTimes > globalConfig.Scrape.Constants.RedditPostsPerSubreddit {
+			t.Errorf(
+				"There are %d user post times, but we should have only scraped %d posts",
+				postTimes, globalConfig.Scrape.Constants.RedditPostsPerSubreddit,
+			)
+		}
+
+		if devSnaps > globalConfig.Scrape.Constants.RedditPostsPerSubreddit {
+			t.Errorf(
+				"There are %d dev snaps, but we should have only scraped %d posts",
+				devSnaps, globalConfig.Scrape.Constants.RedditPostsPerSubreddit,
+			)
+		}
+	}
+}
+
+func TestDiscoveryPhase(t *testing.T) {
+	reddit.CreateClient(globalConfig.Reddit)
+	if err := myTwitter.ClientCreate(globalConfig.Twitter); err != nil {
+		t.Errorf("Could not setup Twitter client: %v", err)
+	}
+	clearDB(t)
+
+	state := StateInMemory()
+	state.GetCachedField(StateType).SetOrAdd("Phase", Discovery)
+	state.GetCachedField(StateType).SetOrAdd("DiscoveryTweets", 200)
+	state.GetCachedField(StateType).SetOrAdd("BatchSize", 100)
+
+	if gameIDs, err := DiscoveryPhase(state); err != nil {
+		t.Errorf("Error occurred whilst running DiscoveryPhase: %v", err)
+	} else {
+		if testing.Verbose() {
+			fmt.Printf("user tweet times: %v (%d)\n", state.GetIterableCachedField(UserTweetTimesType), state.GetIterableCachedField(UserTweetTimesType).Len())
+			fmt.Printf("user post times: %v (%d)\n", state.GetIterableCachedField(RedditUserPostTimesType), state.GetIterableCachedField(RedditUserPostTimesType).Len())
+			fmt.Printf("developer snapshots: %v (%d)\n", state.GetIterableCachedField(DeveloperSnapshotsType), state.GetIterableCachedField(DeveloperSnapshotsType).Len())
+			fmt.Printf("reddit developer snapshots: %v (%d)\n", state.GetIterableCachedField(RedditDeveloperSnapshotsType), state.GetIterableCachedField(RedditDeveloperSnapshotsType).Len())
+			fmt.Printf("game IDs: %v (%d)\n", state.GetIterableCachedField(GameIDsType), state.GetIterableCachedField(GameIDsType).Len())
+			fmt.Printf("returned game IDs: %v (%d)\n", gameIDs, gameIDs.Cardinality())
+			fmt.Printf("deleted developers: %v (%d)\n", state.GetIterableCachedField(DeletedDevelopersType), state.GetIterableCachedField(DeletedDevelopersType).Len())
+			fmt.Printf("state: %#+v\n", state.GetCachedField(StateType))
+			result, _ := state.GetCachedField(StateType).Get("Result")
+			fmt.Printf("scout result %#+v\n", result)
+		}
+	}
+}
+
+func TestMeasurePhase(t *testing.T) {
+	var err error
+	if globalConfig.Monday == nil {
+		t.Fatalf("Cannot run TestMeasurePhase when there is no Monday config specified")
+	}
+
+	if err = globalConfig.Compile(); err != nil {
+		t.Fatalf("Cannot compile config: %v", err)
+	}
+
+	monday.CreateClient(globalConfig.Monday)
+	if err = email.ClientCreate(globalConfig.Email); err != nil {
+		t.Fatalf("Cannot create email client: %v", err)
+	}
+
+	if testing.Verbose() {
+		t.Logf("Email config:\n%v", globalConfig.Email)
+	}
+
+	for templatePath, config := range globalConfig.Email.TemplateConfigs {
+		to := email.Client.Config().EmailTemplateConfigFor(templatePath).TemplateTo()
+		debugTo := email.Client.Config().EmailTemplateConfigFor(templatePath).TemplateDebugTo()
+		sendDay := email.Client.Config().EmailTemplateConfigFor(templatePath).TemplateSendDay()
+		if testing.Verbose() {
+			t.Logf("Config for %q: %v", templatePath.Path(), config)
+		}
+		if !reflect.DeepEqual(to, []string{"whatever@mailinator.com"}) {
+			t.Fatalf("To addresses for %q is not empty it is: %v", templatePath.Path(), to)
+		}
+		if !reflect.DeepEqual(debugTo, []string{"whatever@mailinator.com"}) {
+			t.Fatalf("DebugTo addresses for %q is not empty it is: %v", templatePath.Path(), debugTo)
+		}
+		if sendDay != time.Now().UTC().Weekday() {
+			t.Fatalf(
+				"SendDay for %q is not %s, it is: %s",
+				templatePath.Path(), time.Now().UTC().Weekday().String(), sendDay.String(),
+			)
+		}
+	}
+
+	if testing.Verbose() {
+		t.Logf("Monday API mapping for models.Game: %v", monday.DefaultClient.(*monday.Client).Config.MondayMappingForModel(models.Game{}))
+		t.Logf("Monday API mapping for models.SteamApp: %v", monday.DefaultClient.(*monday.Client).Config.MondayMappingForModel(models.SteamApp{}))
+	}
+
+	clearDB(t)
+
+	mapping := globalConfig.Monday.MondayMappingForModel(models.Game{})
+	expectedItemNames := mapset.NewSet(
+		"1st Game for Developer 198",
+		"1st Game for Developer 199",
+		"1st Game for Developer 200",
+		"1st Game for Developer 67",
+		"2nd Game for Developer 67",
+		"3rd Game for Developer 67",
+		"1st Game for Developer 89",
+		"2nd Game for Developer 89",
+		"3rd Game for Developer 89",
+		"1st Game for Developer 88",
+		"2nd Game for Developer 88",
+		"3rd Game for Developer 88",
+		"1st Game for Developer 66",
+		"2nd Game for Developer 66",
+		"3rd Game for Developer 66",
+		"1st Game for Developer 87",
+		"2nd Game for Developer 87",
+		"3rd Game for Developer 87",
+		"1st Game for Developer 111",
+		"2nd Game for Developer 111",
+		"1st Game for Developer 65",
+		"2nd Game for Developer 65",
+		"3rd Game for Developer 65",
+		"1st Game for Developer 110",
+		"2nd Game for Developer 110",
+		"1st Game for Developer 86",
+		"2nd Game for Developer 86",
+		"3rd Game for Developer 86",
+		"1st Game for Developer 109",
+		"2nd Game for Developer 109",
+		"SteamApp 20",
+		"SteamApp 19",
+		"SteamApp 18",
+		"SteamApp 17",
+		"SteamApp 16",
+		"SteamApp 15",
+		"SteamApp 14",
+		"SteamApp 13",
+		"SteamApp 12",
+		"SteamApp 11",
+	)
+
+	// Clear the test Monday board(s)
+	var items []monday.Item
+	boardIDs := mapping.MappingBoardIDs()
+	if items, err = api.MustTypePaginate(monday.DefaultClient, time.Millisecond*500, monday.GetItems, boardIDs).All(); err != nil {
+		t.Errorf("Could not find all items using paginator: %v", err)
+	}
+
+	for i, item := range items {
+		var itemID int64
+		if itemID, err = strconv.ParseInt(item.Id, 10, 64); err != nil {
+			t.Errorf("Could not parse ID for Item no. %d (%s) into an int64: %v", i, item.Id, err)
+		}
+
+		if _, err = monday.DeleteItem.Execute(monday.DefaultClient, int(itemID)); err != nil {
+			t.Errorf("Could not delete item %d from the test Monday board (%s): %v", itemID, item.BoardId, err)
+		}
+
+		if testing.Verbose() {
+			t.Logf("Deleted item (%d/%d) %q from the test Monday board (%s)", i+1, len(items), item.Name, item.BoardId)
+		}
+	}
+
+	_ = createFakeDevelopersWithSnaps(t, 0, 100, 100, true)
+
+	// Add some games to the test Monday board
+	gamesToAddWebsites := []null.String{
+		null.StringFrom(browser.SteamAppPage.Fill(appIDFromIdx(198, 1))),
+		null.StringFrom(browser.SteamAppPage.Fill(appIDFromIdx(199, 1))),
+		null.StringFrom(browser.SteamAppPage.Fill(appIDFromIdx(200, 1))),
+	}
+
+	var gamesToAdd []*models.Game
+	if err = db.DB.Where("website IN ?", gamesToAddWebsites).Find(&gamesToAdd).Error; err != nil {
+		t.Errorf("Error occurred whilst finding games to add for devs 195, 196, 197, 198, 199, 200: %v", err)
+	}
+
+	for _, gameToAdd := range gamesToAdd {
+		if _, err = models.AddGameToMonday.Execute(monday.DefaultClient, gameToAdd, globalConfig.Monday); err != nil {
+			t.Errorf("Could not add game %v to test Monday board: %v", gameToAdd, err)
+		}
+	}
+
+	// Make 20 fake SteamApps
+	var previousWeightedScore null.Float64
+	for i := 0; i < 20; i++ {
+		steamApp := models.SteamApp{
+			ID:                uint64(i + 1),
+			Name:              fmt.Sprintf("SteamApp %d", i+1),
+			ReleaseDate:       time.Now().UTC().Add(time.Hour * 24 * time.Duration(i+1)),
+			HasStorepage:      true,
+			Publisher:         null.StringFromPtr(nil),
+			TotalReviews:      0,
+			PositiveReviews:   0,
+			NegativeReviews:   0,
+			ReviewScore:       0,
+			TotalUpvotes:      int32(100 * (i + 1)),
+			TotalDownvotes:    int32(50 * (i + 1)),
+			TotalComments:     int32(100 * (i + 1)),
+			TagScore:          10000.0 * (float64(i) + 1.0),
+			AssetModifiedTime: time.Now().UTC().Add(time.Hour * 12 * time.Duration(20-i) * -1),
+		}
+
+		if err = db.DB.Create(&steamApp).Error; err != nil {
+			t.Errorf("Error occurred whilst creating fake SteamApp %q no. %d: %v", steamApp.Name, i+1, err)
+		}
+
+		if i == 0 {
+			previousWeightedScore = steamApp.WeightedScore
+		} else if steamApp.WeightedScore.Float64 < previousWeightedScore.Float64 {
+			t.Errorf(
+				"Weighted score for %s SteamApp (%f) is not greater than the previous SteamApp's weighted score: %f",
+				numbers.Ordinal(i+1), steamApp.WeightedScore.Float64, previousWeightedScore.Float64,
+			)
+		}
+
+		if testing.Verbose() {
+			t.Logf("Created SteamApp %d/20: %v", i+1, steamApp)
+		}
+	}
+
+	start := time.Now().UTC()
+	state := StateInMemory()
+	state.GetCachedField(StateType).SetOrAdd("Start", start)
+	state.GetCachedField(StateType).SetOrAdd("PhaseStart", start)
+	state.GetCachedField(StateType).SetOrAdd("Phase", Measure)
+	state.GetCachedField(StateType).SetOrAdd("DiscoveryTweets", 200)
+	state.GetCachedField(StateType).SetOrAdd("BatchSize", 100)
+
+	// Add some deleted developers
+	var deletedDevelopers []*models.Developer
+	if err = db.DB.Where("id IN ?", []string{"100", "101", "102"}).Find(&deletedDevelopers).Error; err != nil {
+		t.Errorf("Error occurred whilst finding developer's 100, 101, 102 (developer's that we will mark for deletion): %v", err)
+	}
+
+	for _, deletedDeveloper := range deletedDevelopers {
+		var deletedTrendDev *models.TrendingDev
+		if deletedTrendDev, err = deletedDeveloper.TrendingDev(db.DB); err != nil {
+			t.Errorf("Error occurred whilst finding trend for deleted developer %v: %v", deletedDeveloper, err)
+		}
+		state.GetIterableCachedField(DeletedDevelopersType).SetOrAdd(deletedTrendDev)
+	}
+
+	if err = MeasurePhase(state); err != nil {
+		t.Errorf("Error occurred whilst running MeasurePhase: %v", err)
+	}
+
+	if testing.Verbose() {
+		fmt.Printf("user tweet times: %v (%d)\n", state.GetIterableCachedField(UserTweetTimesType), state.GetIterableCachedField(UserTweetTimesType).Len())
+		fmt.Printf("user post times: %v (%d)\n", state.GetIterableCachedField(RedditUserPostTimesType), state.GetIterableCachedField(RedditUserPostTimesType).Len())
+		fmt.Printf("developer snapshots: %v (%d)\n", state.GetIterableCachedField(DeveloperSnapshotsType), state.GetIterableCachedField(DeveloperSnapshotsType).Len())
+		fmt.Printf("reddit developer snapshots: %v (%d)\n", state.GetIterableCachedField(RedditDeveloperSnapshotsType), state.GetIterableCachedField(RedditDeveloperSnapshotsType).Len())
+		fmt.Printf("game IDs: %v (%d)\n", state.GetIterableCachedField(GameIDsType), state.GetIterableCachedField(GameIDsType).Len())
+		fmt.Printf("deleted developers: %v (%d)\n", state.GetIterableCachedField(DeletedDevelopersType), state.GetIterableCachedField(DeletedDevelopersType).Len())
+		fmt.Printf("state: %#+v\n", state.GetCachedField(StateType))
+		result, _ := state.GetCachedField(StateType).Get("Result")
+		fmt.Printf("scout result %#+v\n", result)
+	}
+
+	// Check if we have the correct items on the Monday board
+	if items, err = api.MustTypePaginate(monday.DefaultClient, time.Millisecond*500, monday.GetItems, mapping.MappingBoardIDs()).All(); err != nil {
+		t.Errorf("Error occurred whilst fetching all items from Monday after Measure: %v", err)
+	}
+
+	actualItemNames := mapset.NewSet[string]()
+	for _, item := range items {
+		actualItemNames.Add(item.Name)
+	}
+
+	if !actualItemNames.Equal(expectedItemNames) {
+		t.Errorf(
+			"Actual item names don't match expected item names:\nexpected - actual = %v\nactual - expected = %v",
+			expectedItemNames.Difference(actualItemNames), actualItemNames.Difference(expectedItemNames),
+		)
 	}
 }

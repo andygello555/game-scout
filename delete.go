@@ -83,7 +83,7 @@ func DeletePhase(state *ScoutState) (err error) {
 	whereZeroVerified := db.DB.Model(&models.Game{}).Select(
 		"COUNT(*)",
 	).Where(
-		"developers.username = ANY(games.verified_developer_usernames)",
+		"developers.type || developers.username = ANY(games.verified_developer_usernames)",
 	)
 
 	latestSnapshotQuery := db.DB.Model(
@@ -109,7 +109,7 @@ func DeletePhase(state *ScoutState) (err error) {
 	// WHERE ds2.created_at < NOW() - (<staleDeveloperDays> * INTERVAL '1 DAY') AND ds2.version < 2 AND (
 	//   SELECT COUNT(*)
 	//   FROM games
-	//   WHERE developers.username = ANY(games.verified_developer_usernames)
+	//   WHERE developers.type || developers.username = ANY(games.verified_developer_usernames)
 	// ) = 0
 	// ORDER BY ds2.weighted_score
 
@@ -168,7 +168,7 @@ func DeletePhase(state *ScoutState) (err error) {
 	// WHERE developers.disabled AND (
 	//   SELECT COUNT(*)
 	//   FROM games
-	//   WHERE developers.username = ANY(games.verified_developer_usernames)
+	//   WHERE developers.type || developers.username = ANY(games.verified_developer_usernames)
 	// ) = 0
 	// ORDER BY ds2.weighted_score
 
@@ -315,7 +315,7 @@ func DeletePhase(state *ScoutState) (err error) {
 				gameIDs,
 			).Update(
 				"developers",
-				gorm.Expr("array_remove(developers, ?)", deletedDev.Developer.Username),
+				gorm.Expr("array_remove(developers, ?)", deletedDev.Developer.TypedUsername()),
 			).Error; err != nil {
 				log.ERROR.Printf(
 					"\tCould not remove \"%s\" from the developers field of all Games related to Developer %v: %v",

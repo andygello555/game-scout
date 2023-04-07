@@ -96,6 +96,7 @@ func init() {
 	RegisterModel(&myModels.SteamApp{})
 	RegisterModel(&myModels.ScoutResult{})
 	RegisterEnum(myModels.UnknownStorefront)
+	RegisterEnum(myModels.UnknownDeveloperType)
 	RegisterExtension("uuid-ossp")
 }
 
@@ -250,7 +251,7 @@ func UpdateComputedFieldsForModels(modelNames []string, pks []any) (err error) {
 							}
 
 							rowsProcessed := 0
-							start := time.Now()
+							start := time.Now().UTC()
 							for rows.Next() {
 								// For each row we will scan the row into an empty instance of the ComputedFieldsModel.
 								instance := model.Model.(ComputedFieldsModel).Empty()
@@ -278,7 +279,7 @@ func UpdateComputedFieldsForModels(modelNames []string, pks []any) (err error) {
 
 							log.INFO.Printf(
 								"Processed %d rows from %d to %d in %s",
-								rowsProcessed, job*pageSize, job*pageSize+pageSize, time.Now().Sub(start).String(),
+								rowsProcessed, job*pageSize, job*pageSize+pageSize, time.Now().UTC().Sub(start).String(),
 							)
 							if workerErr = rows.Close(); workerErr != nil {
 								panic(workerErr)

@@ -2,15 +2,22 @@
 package monday
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/machinebox/graphql"
+	"github.com/andygello555/game-scout/api"
+	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/pkg/errors"
+	"io"
+	"net/http"
 	"strconv"
 	"time"
 )
 
-var DefaultClient *Client
+const endpoint = "https://api.monday.com/v2/"
+
+var DefaultClient api.Client
 
 type User struct {
 	Id    int    `json:"id"`
@@ -354,17 +361,159 @@ type Config interface {
 	MondayMappingForModel(model any) MappingConfig
 }
 
+// Request is a GraphQL request.
+type Request struct {
+	q    string
+	vars map[string]interface{}
+
+	// Header represent any request headers that will be set
+	// when the request is made.
+	header http.Header
+}
+
+// NewRequest makes a new Request with the specified string.
+func NewRequest(q string) *Request {
+	req := &Request{
+		q:      q,
+		header: make(map[string][]string),
+	}
+	return req
+}
+
+func (req *Request) Header() *http.Header {
+	return &req.header
+}
+
+// Var sets a variable.
+func (req *Request) Var(key string, value interface{}) {
+	if req.vars == nil {
+		req.vars = make(map[string]interface{})
+	}
+	req.vars[key] = value
+}
+
+type Error struct {
+	Code        string         `json:"error_code"`
+	StatusCode  int            `json:"status_code"`
+	Message     string         `json:"error_message"`
+	Data        map[string]any `json:"error_data"`
+	bindingName string
+}
+
+func (e *Error) Error() string {
+	return fmt.Sprintf(
+		"monday API binding %q returned error %q (%d): %s",
+		e.bindingName, e.Code, e.StatusCode, e.Message,
+	)
+}
+
+type response struct {
+	Data interface{}
+	*Error
+}
+
+type ClientOption func(*Client)
+
 type Client struct {
-	Config Config
-	*graphql.Client
+	Config           Config
+	httpClient       *http.Client
+	useMultipartForm bool
+	Log              func(s string)
+}
+
+func (c *Client) logf(format string, args ...interface{}) {
+	c.Log(fmt.Sprintf(format, args...))
+}
+
+func (c *Client) runWithJSON(ctx context.Context, req *Request, resp any) (err error) {
+	var requestBody bytes.Buffer
+	requestBodyObj := struct {
+		Query     string                 `json:"query"`
+		Variables map[string]interface{} `json:"variables"`
+	}{
+		Query:     req.q,
+		Variables: req.vars,
+	}
+
+	if err = json.NewEncoder(&requestBody).Encode(requestBodyObj); err != nil {
+		err = errors.Wrap(err, "encode body")
+		return
+	}
+
+	c.logf(">> variables: %v", req.vars)
+	c.logf(">> query: %s", req.q)
+	gr := &response{
+		Data: resp,
+	}
+
+	var r *http.Request
+	if r, err = http.NewRequest(http.MethodPost, endpoint, &requestBody); err != nil {
+		return
+	}
+
+	r.Header.Set("Content-Type", "application/json; charset=utf-8")
+	r.Header.Set("Accept", "application/json; charset=utf-8")
+	for key, values := range *req.Header() {
+		for _, value := range values {
+			r.Header.Add(key, value)
+		}
+	}
+	c.logf(">> headers: %v", r.Header)
+
+	var res *http.Response
+	r = r.WithContext(ctx)
+	if res, err = c.httpClient.Do(r); err != nil {
+		return
+	}
+
+	defer func(Body io.ReadCloser) {
+		err = myErrors.MergeErrors(err, Body.Close())
+	}(res.Body)
+
+	var buf bytes.Buffer
+	if _, err = io.Copy(&buf, res.Body); err != nil {
+		err = errors.Wrap(err, "reading body")
+		return
+	}
+	c.logf("<< %s", buf.String())
+
+	if err = json.NewDecoder(&buf).Decode(&gr); err != nil {
+		err = errors.Wrap(err, "decoding response")
+		return
+	}
+
+	if gr.Error != nil {
+		err = gr.Error
+		return
+	}
+	return
+}
+
+func (c *Client) Run(ctx context.Context, bindingName string, attrs map[string]any, req api.Request, res any) error {
+	config := attrs["config"].(Config)
+	req.Header().Set("Authorization", config.MondayToken())
+	req.Header().Set("Content-Type", "application/json")
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	return c.runWithJSON(ctx, req.(*Request), res)
 }
 
 // CreateClient creates and sets the DefaultClient.
-func CreateClient(config Config) {
-	DefaultClient = &Client{
-		config,
-		graphql.NewClient("https://api.monday.com/v2/"),
+func CreateClient(config Config, opts ...ClientOption) {
+	c := &Client{
+		Config: config,
+		Log:    func(string) {},
 	}
+	for _, optionFunc := range opts {
+		optionFunc(c)
+	}
+	if c.httpClient == nil {
+		c.httpClient = http.DefaultClient
+	}
+	DefaultClient = c
 }
 
 func BuildDate(date string) DateTime {

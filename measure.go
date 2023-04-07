@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
+	"github.com/andygello555/game-scout/api"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/game-scout/email"
@@ -79,8 +80,8 @@ func MeasurePhase(state *ScoutState) (err error) {
 	var (
 		mondayGames              []*models.Game
 		mondaySteamApps          []*models.SteamApp
-		gamePaginator            *monday.Paginator[monday.ItemResponse, []*models.Game]
-		steamAppPaginator        *monday.Paginator[monday.ItemResponse, []*models.SteamApp]
+		gamePaginator            api.Paginator[monday.ItemResponse, []*models.Game]
+		steamAppPaginator        api.Paginator[monday.ItemResponse, []*models.SteamApp]
 		mondayGameIDs            mapset.Set[uuid.UUID]
 		mondayWatchedGameIDs     mapset.Set[uuid.UUID]
 		mondaySteamAppIDs        mapset.Set[uint64]
@@ -88,7 +89,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 	)
 
 	if globalConfig.Monday != nil {
-		if gamePaginator, err = monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, models.GetGamesFromMonday, globalConfig.Monday, db.DB); err != nil {
+		if gamePaginator, err = api.NewTypedPaginator(monday.DefaultClient, time.Millisecond*100, models.GetGamesFromMonday, globalConfig.Monday, db.DB); err != nil {
 			log.ERROR.Printf("Could not create paginator for GetGamesFromMonday: %v", err)
 		} else {
 			if mondayGames, err = gamePaginator.All(); err != nil {
@@ -96,7 +97,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 			}
 		}
 
-		if steamAppPaginator, err = monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, models.GetSteamAppsFromMonday, globalConfig.Monday, db.DB); err != nil {
+		if steamAppPaginator, err = api.NewTypedPaginator(monday.DefaultClient, time.Millisecond*100, models.GetSteamAppsFromMonday, globalConfig.Monday, db.DB); err != nil {
 			log.ERROR.Printf("Could not create paginator for GetSteamAppsFromMonday: %v", err)
 		} else {
 			if mondaySteamApps, err = steamAppPaginator.All(); err != nil {
@@ -376,13 +377,14 @@ func MeasurePhase(state *ScoutState) (err error) {
 						log.ERROR.Printf("\tCould not save Game %q after setting Watched to nil: %v", watchedGame.String(), err)
 					}
 				}
-			} else {
+			} else if len(watchedGame.VerifiedDeveloperUsernames) > 0 {
 				log.INFO.Printf("\tGame %q is still being watched on Monday getting TrendingDev", watchedGame.String())
 				watchedTrendingDev := models.TrendingDev{
 					Games: []*models.Game{watchedGame},
 				}
 				developer := models.Developer{}
-				if err = db.DB.Limit(1).Find(&developer, "username IN ?", []string(watchedGame.VerifiedDeveloperUsernames)).Error; err != nil {
+				devType, firstVerified := models.DevTypeFromUsername(watchedGame.VerifiedDeveloperUsernames[0])
+				if err = db.DB.Limit(1).Find(&developer, "username = ? AND type = ?", firstVerified, devType).Error; err != nil {
 					log.WARNING.Printf("\tCould not find verified developer for Game %q: %v", watchedGame.String(), err)
 				} else {
 					log.INFO.Printf("\tFound verified Developer for Game %q: %v", watchedGame.String(), developer)
@@ -402,6 +404,8 @@ func MeasurePhase(state *ScoutState) (err error) {
 					}
 					measureContext.WatchedDevelopers = append(measureContext.WatchedDevelopers, &watchedTrendingDev)
 				}
+			} else {
+				log.WARNING.Printf("\tThere are no verified developers for Game %q", watchedGame.String())
 			}
 		}
 

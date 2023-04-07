@@ -1,3 +1,21 @@
+{{/* Template for username display selection */}}
+{{ define "username" }}
+{{ if eq .Type "T" }}@{{ .Username }}{{ else if eq .Type "R" }}u/{{ .Username }}{{ else }}{{ .Username }}{{ end }}
+{{ end }}
+
+{{/* Template for post name for a given Developer */}}
+{{ define "postName" }}
+{{ if eq .Type "T" }}Tweets{{ else }}Posts{{ end }}
+{{ end }}
+
+{{ define "postVerb" }}
+{{ if eq .Type "T" }}tweet{{ else }}post{{ end }}
+{{ end }}
+
+{{ define "developerLink" }}
+{{ if eq .Type "T" }}https://twitter.com/{{ .Username }}{{ else if eq .Type "R" }}https://www.reddit.com/user/{{ .Username }}{{ else }}{{ end }}
+{{ end }}
+
 {{/* Template for Games */}}
 {{ define "gameForDeveloper" }}
 <table style="border-collapse: collapse; table-layout: fixed; width: 100%; margin: 25px 0; font-family: sans-serif; min-width: 400px; box-shadow: 0 0 20px rgba(0,0,0,0.37); border-radius: 12px" align="center" width="100%" border="0" cellspacing="0" cellpadding="0">
@@ -11,7 +29,7 @@
                 <div style="align-content: center; -webkit-align-content: center">
                     <div style="display: flex; display: -webkit-box; -webkit-box-align: center">
                         <a class="link-button" style="margin-right: 10px" href="{{ .Game.Website.String }}" target="_blank">
-                            <h3 id="{{ .HrefPrefix }}dev_{{ .TrendingDev.Developer.Username }}_game_{{ .Game.ID }}">
+                            <h3 id="{{ .HrefPrefix }}dev_{{ .TrendingDev.Developer.ID }}_game_{{ .Game.ID }}">
                                 {{ if .Game.Name.IsValid }}{{ .Game.Name.String }}{{ else }}{{ .Game.Website.String }} (could not find name){{ end }}
                             </h3>
                         </a>
@@ -61,8 +79,8 @@
             <div class="row">
                 <div class="column">
                     <div class="card left-right">
-                        <div><strong>@{{ .TrendingDev.Developer.Username }}</strong> linked on storepage?</div>
-                        <div><strong>{{ cap (yesno (contains .Game.VerifiedDeveloperUsernames .TrendingDev.Developer.Username)) }}</strong></div>
+                        <div><strong>{{ template "username" .TrendingDev.Developer }}</strong> linked on storepage?</div>
+                        <div><strong>{{ contains .Game.VerifiedDeveloperUsernames (cat .TrendingDev.Developer.Type.EnumValue .TrendingDev.Developer.Username) | yesno | cap }}</strong></div>
                     </div>
                 </div>
             </div>
@@ -194,7 +212,9 @@
         <th style="padding: 12px 15px; border-radius: 10px">
             <div class="left-right">
                 <div style="display: -webkit-flex; display: flex; width: 50%">
-                    <h3 id="{{ .HrefPrefix }}dev_{{ .Developer.Username }}">@{{ .Developer.Username }}</h3>
+                    <h3 id="{{ .HrefPrefix }}dev_{{ .Developer.ID }}">
+                        {{ template "username" .Developer }}
+                    </h3>
                 </div>
                 <div style="align-content: center; -webkit-align-content: center">
                     <a href="#top" style="zoom: 0.05; display: -webkit-box">&nbsp;<div class="up-arrow"></div></a>
@@ -209,8 +229,8 @@
             {{ $firstSnapshot := index .Snapshots 0 }}
             {{ $lastSnapshot := index .Snapshots (lastIndex .Snapshots) }}
             <p style="font-size: 14px">
-                I have created {{ len .Snapshots }} snapshots for
-                @{{ .Developer.Username }} over a period of
+                I have created {{ len .Snapshots }} snapshots for {{ .Developer.Type.String }} user 
+                {{ template "username" .Developer }} over a period of
                 {{ days (timeSub $lastSnapshot.CreatedAt $firstSnapshot.CreatedAt) }}
                 days.
             </p>
@@ -228,15 +248,20 @@
                         <div class="row">
                             <div class="column">
                                 <div class="card left-right">
-                                    <div style="flex-basis: fit-content">Tweets captured</div>
+                                    <div style="flex-basis: fit-content">{{ template "postName" .Developer }} captured</div>
                                     <div style="flex-basis: fit-content">
                                         {{ if gt (len $firstSnapshot.TweetIDs) 0 }}
-                                        {{ range $tweetNo, $tweet := $firstSnapshot.TweetIDs }}
-                                        <a href="https://twitter.com/anyuser/status/{{ $tweet }}">Tweet {{ inc $tweetNo }}{{ if lt $tweetNo (dec (len $firstSnapshot.TweetIDs)) }},{{ end }}</a>
-                                        {{ end }}
-                                        <strong>{{ len $firstSnapshot.TweetIDs }} total</strong>
+                                            {{ range $tweetNo, $tweet := $firstSnapshot.TweetIDs }}
+                                                <a href="https://twitter.com/anyuser/status/{{ $tweet }}">Tweet {{ inc $tweetNo }}{{ if lt $tweetNo (dec (len $firstSnapshot.TweetIDs)) }},{{ end }}</a>
+                                            {{ end }}
+                                            <strong>{{ len $firstSnapshot.TweetIDs }} total</strong>
+                                        {{ else if gt (len $firstSnapshot.RedditPostIDs) 0 }}
+                                            {{ range $postNo, $post := postIDPairs $firstSnapshot.RedditPostIDs }}
+                                                <a href="https://www.reddit.com/r/{{ $post.Subreddit }}/comments/{{ $post.PostID }}">Post {{ inc $postNo }}{{ if lt $postNo (dec (div (len $firstSnapshot.RedditPostIDs) 2)) }},{{ end }}</a>
+                                            {{ end }}
+                                            <strong>{{ div (len $firstSnapshot.RedditPostIDs) 2 }} total</strong>
                                         {{ else }}
-                                        <strong>{{ $firstSnapshot.Tweets }} total</strong>
+                                            <strong>{{ $firstSnapshot.Tweets }} total</strong>
                                         {{ end }}
                                     </div>
                                 </div>
@@ -305,15 +330,20 @@
                         <div class="row">
                             <div class="column">
                                 <div class="card left-right">
-                                    <div style="flex-basis: fit-content">Tweets captured</div>
+                                    <div style="flex-basis: fit-content">{{ template "postName" .Developer }} captured</div>
                                     <div style="flex-basis: fit-content">
                                         {{ if gt (len $lastSnapshot.TweetIDs) 0 }}
-                                        {{ range $tweetNo, $tweet := $lastSnapshot.TweetIDs }}
-                                        <a href="https://twitter.com/anyuser/status/{{ $tweet }}">Tweet {{ inc $tweetNo }}{{ if lt $tweetNo (dec (len $lastSnapshot.TweetIDs)) }},{{ end }}</a>
-                                        {{ end }}
-                                        <strong>{{ len $lastSnapshot.TweetIDs }} total</strong>
+                                            {{ range $tweetNo, $tweet := $lastSnapshot.TweetIDs }}
+                                                <a href="https://twitter.com/anyuser/status/{{ $tweet }}">Tweet {{ inc $tweetNo }}{{ if lt $tweetNo (dec (len $lastSnapshot.TweetIDs)) }},{{ end }}</a>
+                                            {{ end }}
+                                            <strong>{{ len $lastSnapshot.TweetIDs }} total</strong>
+                                        {{ else if gt (len $lastSnapshot.RedditPostIDs) 0 }}
+                                            {{ range $postNo, $post := postIDPairs $lastSnapshot.RedditPostIDs }}
+                                                <a href="https://www.reddit.com/r/{{ $post.Subreddit }}/comments/{{ $post.PostID }}">Post {{ inc $postNo }}{{ if lt $postNo (dec (div (len $lastSnapshot.RedditPostIDs) 2)) }},{{ end }}</a>
+                                            {{ end }}
+                                            <strong>{{ div (len $lastSnapshot.RedditPostIDs) 2 }} total</strong>
                                         {{ else }}
-                                        <strong>{{ $lastSnapshot.Tweets }} total</strong>
+                                            <strong>{{ $lastSnapshot.Tweets }} total</strong>
                                         {{ end }}
                                     </div>
                                 </div>
@@ -370,7 +400,7 @@
             <div style="display: inline-block; align-items: center; width: 500px">
                 {{ if ne .Trend nil }}
                 <p>
-                    The current trend gradient for @{{ .Developer.Username }}'s snapshot
+                    The current trend gradient for {{ template "username" .Developer }}'s snapshot
                     weighted scores is {{ float (index .Trend.GetCoeffs 1) }}
                     (shown in the graph below){{ if and .HasPosition .HasOutOf }}, which places it {{ .GetPosition }}
                     <sup>{{ ord .GetPosition }}</sup> out of all
@@ -389,7 +419,7 @@
                 {{ if gt (len $games) .GameLimit }}
                     {{ $games = slice $games 0 .GameLimit }}
                 {{ end }}
-                <div style="text-align: center; align-content: center; word-wrap: break-word; width: 75%; background-color: #EBF78C; color: black; margin: auto; border-radius: 32px; padding: 10px">{{ if gt (len $games) 1 }}Top {{ len $games }} games{{ else }}Top game{{ end }} that <strong>@{{ .Developer.Username }}</strong> has tweeted about</div>
+                <div style="text-align: center; align-content: center; word-wrap: break-word; width: 75%; background-color: #EBF78C; color: black; margin: auto; border-radius: 32px; padding: 10px">{{ if gt (len $games) 1 }}Top {{ len $games }} games{{ else }}Top game{{ end }} that <strong>{{ template "username" .Developer }}</strong> has {{ template "postVerb" .Developer -}}ed about</div>
                 {{ $trendingDev := . }}
                 {{ range $games }}
                     {{ template "gameForDeveloper" gameContainer . $trendingDev.TrendingDev $trendingDev.HrefPrefix }}
@@ -443,8 +473,8 @@
             <div class="row">
                 <div class="column">
                     <div class="card left-right">
-                        <div>Linked Twitter account</div>
-                        <div><strong>@{{ .Developer.Username }}</strong></div>
+                        <div>Linked {{ .Developer.Type.String }} account</div>
+                        <div><strong>{{ template "username" .Developer }}</strong></div>
                     </div>
                 </div>
             </div>
@@ -577,6 +607,7 @@
     </tbody>
 </table>
 {{ end }}
+
 <!doctype html>
 <html>
 <head>
@@ -866,14 +897,14 @@
                                                 {{ if gt (len .TrendingDevs) 0 }}
                                                 <li>
                                                     <a href="#topTrendingDevelopers">
-                                                        <span class="highlight-container"><span class="highlight">Top trending developers on Twitter</span></span>
+                                                        <span class="highlight-container"><span class="highlight">Top trending developers on {{ developerTypes }}</span></span>
                                                     </a>
                                                     <ol>
                                                         {{ range .TrendingDevs }}
                                                         <li>
                                                             {{ $developer := .Developer }}
-                                                            <a href="#dev_{{ $developer.Username }}">
-                                                                <span class="highlight-container"><span class="highlight"><strong>@{{ $developer.Username }}</strong></span></span>
+                                                            <a href="#dev_{{ $developer.ID }}">
+                                                                <span class="highlight-container"><span class="highlight"><strong>{{ template "username" $developer }}</strong></span></span>
                                                             </a>
                                                             {{ if gt (len .Games) 0 }}
                                                             <ol>
@@ -882,8 +913,8 @@
                                                                     {{ $games = slice $games 0 5 }}
                                                                 {{ end }}
                                                                 {{ range $games }}
-                                                                <li><a href="#dev_{{ $developer.Username }}_game_{{ .ID }}">
-                                                                    <span class="highlight-container"><span class="highlight">{{ if .Name.IsValid }}<strong>"{{ .Name.String }}"</strong>{{ else }}{{ .Website.String }}{{ end }}: {{ .Storefront.String }} game for @{{ $developer.Username }}</span></span>
+                                                                <li><a href="#dev_{{ $developer.ID }}_game_{{ .ID }}">
+                                                                    <span class="highlight-container"><span class="highlight">{{ if .Name.IsValid }}<strong>"{{ .Name.String }}"</strong>{{ else }}{{ .Website.String }}{{ end }}: {{ .Storefront.String }} game for {{ template "username" $developer }}</span></span>
                                                                 </a></li>
                                                                 {{ end }}
                                                             </ol>
@@ -912,26 +943,26 @@
                                                 {{ if .HasWatched }}
                                                 <li>
                                                     <a href="#watchedGamesAndSteamApps">
-                                                        <span class="highlight-container"><span class="highlight">Watched Games from Twitter and Steam Apps</span></span>
+                                                        <span class="highlight-container"><span class="highlight">Watched Games from {{ developerTypes }} and Steam Apps</span></span>
                                                     </a>
                                                     <ul>
                                                         {{ if gt (len .WatchedDevelopersWithGames) 0 }}
                                                         <li>
                                                             <a href="#watchedDevelopersWithGames">
-                                                                <span class="highlight-container"><span class="highlight">Watched Games from Twitter with Verified Developers</span></span>
+                                                                <span class="highlight-container"><span class="highlight">Watched Games from {{ developerTypes }} with Verified Developers</span></span>
                                                             </a>
                                                             <ol>
                                                                 {{ range .WatchedDevelopersWithGames }}
                                                                 <li>
                                                                     {{ $developer := .Developer }}
-                                                                    <a href="#watched_dev_{{ $developer.Username }}">
-                                                                        <span class="highlight-container"><span class="highlight"><strong>@{{ $developer.Username }}</strong></span></span>
+                                                                    <a href="#watched_dev_{{ $developer.ID }}">
+                                                                        <span class="highlight-container"><span class="highlight"><strong>{{ template "username" $developer }}</strong></span></span>
                                                                     </a>
                                                                     {{ if gt (len .Games) 0 }}
                                                                     <ol>
                                                                         {{ range .Games }}
-                                                                        <li><a href="#watched_dev_{{ $developer.Username }}_game_{{ .ID }}">
-                                                                            <span class="highlight-container"><span class="highlight">{{ if .Name.IsValid }}<strong>"{{ .Name.String }}"</strong>{{ else }}{{ .Website.String }}{{ end }}: {{ .Storefront.String }} game for @{{ $developer.Username }}</span></span>
+                                                                        <li><a href="#watched_dev_{{ $developer.ID }}_game_{{ .ID }}">
+                                                                            <span class="highlight-container"><span class="highlight">{{ if .Name.IsValid }}<strong>"{{ .Name.String }}"</strong>{{ else }}{{ .Website.String }}{{ end }}: {{ .Storefront.String }} game for {{ template "username" $developer }}</span></span>
                                                                         </a></li>
                                                                         {{ end }}
                                                                     </ol>
@@ -945,7 +976,7 @@
                                                         {{ if gt (len .WatchedGames) 0 }}
                                                         <li>
                                                             <a href="#watchedGames">
-                                                                <span class="highlight-container"><span class="highlight">Watched Games from Twitter</span></span>
+                                                                <span class="highlight-container"><span class="highlight">Watched Games from {{ developerTypes }}</span></span>
                                                             </a>
                                                             <ol>
                                                                 {{ range .WatchedGames }}
@@ -1000,7 +1031,7 @@
                                                             {{ end }}
                                                         {{ else }}
                                                             <li><a href="#deleted_devs_1_to_1">
-                                                                <span class="highlight-container"><span class="highlight">Deleted developer <strong>@{{ (index $deletedDevelopers 0).Developer.Username }}</strong></span></span>
+                                                                <span class="highlight-container"><span class="highlight">Deleted developer <strong>{{ template "username" (index $deletedDevelopers 0).Developer }}</strong></span></span>
                                                             </a></li>
                                                         {{ end }}
                                                     </ol>
@@ -1013,7 +1044,7 @@
 
                                         {{ if gt (len .TrendingDevs) 0 }}
                                         <hr style="text-align: center; align-content: center; margin: 30px auto 20px; background-color: #EBF78C; color: #EBF78C; border-width: 0; border-radius: 5px; height: 5px; width: 90%"/>
-                                        <div style="text-align: center; align-content: center; word-wrap: break-word; width: 75%; background-color: #EBF78C; color: black; margin: auto; border-radius: 32px; padding: 10px"><h2 id="topTrendingDevelopers">Trending developers on Twitter</h2></div>
+                                        <div style="text-align: center; align-content: center; word-wrap: break-word; width: 75%; background-color: #EBF78C; color: black; margin: auto; border-radius: 32px; padding: 10px"><h2 id="topTrendingDevelopers">Trending developers on {{ developerTypes }}</h2></div>
                                         {{ end }}
 
                                         {{ range $place, $trendingDev := .TrendingDevs }}
@@ -1032,8 +1063,8 @@
                                         {{ if gt (len .WatchedDevelopersWithGames) 0 }}
                                         <hr style="text-align: center; align-content: center; margin: 30px auto 20px; background-color: #EBF78C; color: #EBF78C; border-width: 0; border-radius: 5px; height: 5px; width: 90%"/>
                                         <div style="text-align: center; align-content: center; word-wrap: break-word; width: 75%; background-color: #EBF78C; color: black; margin: auto; border-radius: 32px; padding: 10px">
-                                            <h3 id="watchedDevelopersWithGames" style="margin-bottom: 0">Watched Games from Twitter with Verified Developers</h3>
-                                            <small>Watched Games for which we have found the developer's Twitter handle</small>
+                                            <h3 id="watchedDevelopersWithGames" style="margin-bottom: 0">Watched Games from {{ developerTypes }} with Verified Developers</h3>
+                                            <small>Watched Games for which we have found the developer's {{ developerTypes }} handle</small>
                                         </div>
                                         {{ end }}
 
@@ -1044,8 +1075,8 @@
                                         {{ if gt (len .WatchedGames) 0 }}
                                         <hr style="text-align: center; align-content: center; margin: 30px auto 20px; background-color: #EBF78C; color: #EBF78C; border-width: 0; border-radius: 5px; height: 5px; width: 90%"/>
                                         <div style="text-align: center; align-content: center; word-wrap: break-word; width: 75%; background-color: #EBF78C; color: black; margin: auto; border-radius: 32px; padding: 10px">
-                                            <h2 id="watchedGames" style="margin-bottom: 0">Watched Games from Twitter</h2>
-                                            <small>Watched Games for which we have not yet found the developer's Twitter handle</small>
+                                            <h2 id="watchedGames" style="margin-bottom: 0">Watched Games from {{ developerTypes }}</h2>
+                                            <small>Watched Games for which we have not yet found the developer's {{ developerTypes }} handle</small>
                                         </div>
                                         {{ end }}
 
@@ -1090,7 +1121,7 @@
                                                                 {{ if gt $deletedDevelopersNo 1 }}
                                                                     <h3 id="deleted_devs_{{ $start }}_to_{{ $end }}">Deleted developers {{ $start }}..{{ $end }}</h3>
                                                                 {{ else }}
-                                                                    <h3 id="deleted_devs_1_to_1">Deleted developer @{{ (index $deletedDevelopers 0).Developer.Username }}</h3>
+                                                                    <h3 id="deleted_devs_1_to_1">Deleted developer {{ template "username" (index $deletedDevelopers 0).Developer }}</h3>
                                                                 {{ end }}
                                                             </div>
                                                             <div style="align-content: center; -webkit-align-content: center">
@@ -1109,8 +1140,8 @@
                                                                 <div class="card" style="background-color: black; text-align: center; padding: 5px 0 0 0; margin-bottom: 7px">
                                                                     <div style="margin-bottom: 5px; color: white">
                                                                         <strong>
-                                                                            <a class="link-button" style="padding: 7px; background: #E2F45B" href="https://twitter.com/{{ $deletedDeveloper.Developer.Username }}">
-                                                                                @{{ $deletedDeveloper.Developer.Username }}
+                                                                            <a class="link-button" style="padding: 7px; background: #E2F45B" href="{{ template "developerLink" $deletedDeveloper.Developer }}">
+                                                                                {{ template "username" $deletedDeveloper.Developer }}
                                                                             </a>
                                                                         </strong>
                                                                     </div>

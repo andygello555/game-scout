@@ -9,6 +9,7 @@ import (
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/game-scout/email"
 	"github.com/andygello555/game-scout/monday"
+	"github.com/andygello555/game-scout/reddit"
 	task "github.com/andygello555/game-scout/tasks"
 	myTwitter "github.com/andygello555/game-scout/twitter"
 	"github.com/antonmedv/expr"
@@ -148,10 +149,10 @@ func (c *TemplateConfig) TemplateMaxImageHeight() int { return c.MaxImageHeight 
 func (c *TemplateConfig) TemplateDebugTo() []string   { return c.DebugTo }
 func (c *TemplateConfig) TemplateTo() []string        { return c.To }
 func (c *TemplateConfig) TemplateSubject() string {
-	return time.Now().Format(c.SubjectFormat)
+	return time.Now().UTC().Format(c.SubjectFormat)
 }
 func (c *TemplateConfig) TemplateAttachmentName() string {
-	return time.Now().Format(c.AttachmentNameFormat)
+	return time.Now().UTC().Format(c.AttachmentNameFormat)
 }
 func (c *TemplateConfig) TemplateSendRetries() int { return c.SendRetries }
 func (c *TemplateConfig) TemplateSendBackoff() (time.Duration, error) {
@@ -345,6 +346,49 @@ func (c *TwitterConfig) TwitterQuery() string {
 	return fmt.Sprintf("(%s) %s", query, strings.Join(hashtags, " "))
 }
 
+type RedditRateLimits struct {
+	RequestsPerMonth  uint64   `json:"requests_per_month"`
+	RequestsPerWeek   uint64   `json:"requests_per_week"`
+	RequestsPerDay    uint64   `json:"requests_per_day"`
+	RequestsPerHour   uint64   `json:"requests_per_hour"`
+	RequestsPerMinute uint64   `json:"requests_per_minute"`
+	RequestsPerSecond uint64   `json:"requests_per_second"`
+	TimePerRequest    Duration `json:"time_per_request"`
+}
+
+func (rl *RedditRateLimits) LimitPerMonth() uint64          { return rl.RequestsPerMonth }
+func (rl *RedditRateLimits) LimitPerWeek() uint64           { return rl.RequestsPerWeek }
+func (rl *RedditRateLimits) LimitPerDay() uint64            { return rl.RequestsPerDay }
+func (rl *RedditRateLimits) LimitPerHour() uint64           { return rl.RequestsPerHour }
+func (rl *RedditRateLimits) LimitPerMinute() uint64         { return rl.RequestsPerMinute }
+func (rl *RedditRateLimits) LimitPerSecond() uint64         { return rl.RequestsPerSecond }
+func (rl *RedditRateLimits) LimitPerRequest() time.Duration { return rl.TimePerRequest.Duration }
+
+type RedditConfig struct {
+	// PersonalUseScript is the ID of the personal use script that was set up for game-scout scraping.
+	PersonalUseScript string `json:"personal_use_script"`
+	// Secret is the secret that must be sent to the Reddit API access-token endpoint to acquire an OAuth token.
+	Secret string `json:"secret"`
+	// UserAgent that is used in requests to the Reddit API to identify game-scout.
+	UserAgent string `json:"user_agent"`
+	// Username for the Reddit account related to the personal use script.
+	Username string `json:"username"`
+	// Password for the Reddit account related to the personal use script.
+	Password string `json:"password"`
+	// Subreddits is the list of subreddits to scrape in the form: "GameDevelopment" (sans "r/" prefix).
+	Subreddits []string `json:"subreddits"`
+	// RateLimits contains the rate per-unit of time.
+	RateLimits *RedditRateLimits `json:"rate_limits"`
+}
+
+func (rc *RedditConfig) RedditPersonalUseScript() string          { return rc.PersonalUseScript }
+func (rc *RedditConfig) RedditSecret() string                     { return rc.Secret }
+func (rc *RedditConfig) RedditUserAgent() string                  { return rc.UserAgent }
+func (rc *RedditConfig) RedditUsername() string                   { return rc.Username }
+func (rc *RedditConfig) RedditPassword() string                   { return rc.Password }
+func (rc *RedditConfig) RedditSubreddits() []string               { return rc.Subreddits }
+func (rc *RedditConfig) RedditRateLimits() reddit.RateLimitConfig { return rc.RateLimits }
+
 type MondayMappingConfig struct {
 	// ModelName is the name of the model that this MondayMappingConfig is for. This should either be "models.SteamApp"
 	// or "models.Game".
@@ -412,7 +456,7 @@ var mondayMappingExprFunctions = []expr.Option{
 		return fmt.Sprintf(params[0].(string), params[1:]...), nil
 	}, fmt.Sprintf),
 	expr.Function("now", func(params ...interface{}) (interface{}, error) {
-		return time.Now(), nil
+		return time.Now().UTC(), nil
 	}, time.Now),
 	expr.Function("build_date", func(params ...interface{}) (interface{}, error) {
 		date := params[0].(time.Time)
@@ -507,6 +551,8 @@ type MondayConfig struct {
 	// Mapping is a map of game model names (i.e. "models.SteamApp"/"models.Game") to MondayMappingConfig that represents
 	// the transformation from items in the board of BoardID to either a models.SteamApp or a models.Game instance.
 	Mapping map[string]*MondayMappingConfig `json:"mapping"`
+	// TestMapping is the same schema as Mapping except it is used within tests.
+	TestMapping map[string]*MondayMappingConfig `json:"test_mapping"`
 }
 
 func (mc *MondayConfig) MondayToken() string { return mc.Token }
@@ -589,12 +635,33 @@ type ScrapeConstants struct {
 	// ScoutTimeout is the maximum duration that the Scout procedure should be run for. If it runs longer than this it
 	// will be stopped using a panic.
 	ScoutTimeout Duration `json:"scout_timeout"`
-	// TransformTweetWorkers is the number of transformTweetWorker that will be spun up in the DiscoveryBatch.
+	// TransformTweetWorkers is the number of TransformWorker that will be spun up in the DiscoveryBatch.
 	TransformTweetWorkers int `json:"transform_tweet_workers"`
+	// RedditSubredditScrapeWorkers is the number of redditSubredditScraper workers to start in RedditDiscoveryPhase.
+	RedditSubredditScrapeWorkers int `json:"reddit_subreddit_scrape_workers"`
+	// RedditDiscoveryBatchWorkers is the number of redditDiscoveryBatchWorker to start in RedditDiscoveryPhase.
+	RedditDiscoveryBatchWorkers int `json:"reddit_discovery_batch_workers"`
+	// RedditBindingPaginatorWaitTime is the time is the "waitTime" to supply to any api.Paginator created for the
+	// Reddit api.API.
+	RedditBindingPaginatorWaitTime Duration `json:"reddit_binding_paginator_wait_time"`
+	// RedditCommentsPerPost is the number of comments to retrieve per-post in SubredditFetch.
+	RedditCommentsPerPost int `json:"reddit_comments_per_post"`
+	// RedditPostsPerSubreddit is the number of posts to process per-subreddit. If there are more posts than this in top
+	// for the current week then we will divide the number of total posts available with RedditPostsPerSubreddit and use
+	// this number as the number of posts to skip before processing another post.
+	RedditPostsPerSubreddit int `json:"reddit_posts_per_subreddit"`
 	// UpdateDeveloperWorkers is the number of updateDeveloperWorker that will be spun up in the update phase.
 	UpdateDeveloperWorkers int `json:"update_developer_workers"`
-	// MaxUpdateTweets is the maximum number of tweets fetched in the update phase.
+	// MaxUpdateTweets is the maximum number of tweets fetched per models.Developer in the update phase.
 	MaxUpdateTweets int `json:"max_update_tweets"`
+	// MaxUpdatePosts is the maximum number of Reddit posts fetched per models.Developer in the update phase.
+	MaxUpdatePosts int `json:"max_update_posts"`
+	// RedditProducerBatchMultiplier is the multiplier that will be applied to the batch size (passed into the Scout
+	// procedure) for the redditBatchProducer in the Update Phase.
+	RedditProducerBatchMultiplier float64 `json:"reddit_producer_batch_multiplier"`
+	// RedditProducerBatchSleepTime is the minimum amount of time to sleep after each queued batch of jobs the
+	// redditBatchProducer routine executes in the Update Phase.
+	RedditProducerBatchSleepTime Duration `json:"reddit_producer_batch_sleep_time"`
 	// SecondsBetweenDiscoveryBatches is the number of seconds to sleep between DiscoveryBatch batches.
 	SecondsBetweenDiscoveryBatches Duration `json:"seconds_between_discovery_batches"`
 	// SecondsBetweenUpdateBatches is the number of seconds to sleep between queue batches of updateDeveloperJob.
@@ -602,13 +669,17 @@ type ScrapeConstants struct {
 	// MaxTotalDiscoveryTweetsDailyPercent is the maximum percentage that the discoveryTweets number can be out of
 	// myTwitter.TweetsPerDay.
 	MaxTotalDiscoveryTweetsDailyPercent float64 `json:"max_total_discovery_tweets_daily_percent"`
-	// MaxEnabledDevelopersAfterEnablePhase is the number of enabled developers that should exist after the Enable phase.
+	// MaxEnabledDevelopersAfterEnablePhase is the number of enabled developers that should exist after the Enable phase
+	// for each models.DeveloperType.
 	MaxEnabledDevelopersAfterEnablePhase float64 `json:"max_enabled_developers_after_enable_phase"`
-	// MaxEnabledDevelopersAfterDisablePhase is the number of developers to keep in the Disable phase.
+	// MaxEnabledDevelopersAfterDisablePhase is the number of developers to keep enabled in the Disable phase for each
+	// models.DeveloperType.
 	MaxEnabledDevelopersAfterDisablePhase float64 `json:"max_enabled_developers_after_disable_phase"`
-	// MaxDevelopersToEnable is the maximum number of developers that can be re-enabled in the Enable phase.
+	// MaxDevelopersToEnable is the maximum number of developers that can be re-enabled in the Enable phase for each
+	// models.DeveloperType.
 	MaxDevelopersToEnable float64 `json:"max_developers_to_enable"`
-	// PercentageOfDisabledDevelopersToDelete is the percentage of all disabled developers to delete in the Delete phase.
+	// PercentageOfDisabledDevelopersToDelete is the percentage of all disabled developers to delete in the Delete
+	// phase.
 	PercentageOfDisabledDevelopersToDelete float64 `json:"percentage_of_disabled_developers_to_delete"`
 	// StaleDeveloperDays is the number of days after which a developer can become stale if their latest snapshot was
 	// created StaleDeveloperDays ago.
@@ -633,6 +704,9 @@ type ScrapeConstants struct {
 	// MaxGamesPerTweet is the maximum number of games for each tweet we process in the Discovery and Update Phase. This
 	// is needed so that we don't overload the queue to the models.StorefrontScrapers.
 	MaxGamesPerTweet int `json:"max_games_per_tweet"`
+	// MaxGamesPerPost is the maximum number of games for each Reddit post we process in the Discovery and Update Phase.
+	// This is needed so that we don't overload the queue to the models.StorefrontScrapers.
+	MaxGamesPerPost int `json:"max_games_per_post"`
 
 	// MaxTrendWorkers is the maximum number of trendFinder workers to start to find the models.Trend,
 	// models.DeveloperSnapshot, and models.Game for a models.Developer to use in the models.TrendingDev field in
@@ -759,6 +833,7 @@ type Config struct {
 	Email         *EmailConfig         `json:"email"`
 	Tasks         *TaskConfig          `json:"tasks"`
 	Twitter       *TwitterConfig       `json:"twitter"`
+	Reddit        *RedditConfig        `json:"reddit"`
 	Monday        *MondayConfig        `json:"monday,omitempty"`
 	Scrape        *ScrapeConfig        `json:"scrape"`
 	SteamWebPipes *SteamWebPipesConfig `json:"SteamWebPipes"`
