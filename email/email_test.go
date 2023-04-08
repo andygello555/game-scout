@@ -3,8 +3,8 @@ package email
 import (
 	"bytes"
 	"fmt"
+	"github.com/andygello555/agem"
 	"github.com/andygello555/game-scout/db/models"
-	"github.com/andygello555/game-scout/errors"
 	"github.com/g8rswimmer/go-twitter/v2"
 	smtpmock "github.com/mocktools/go-smtp-mock/v2"
 	"io"
@@ -383,7 +383,7 @@ func ExampleNewEmail() {
 	email.FromAddress = "test@test.com"
 	defer email.Close()
 
-	if err = errors.MergeErrors(
+	if err = agem.MergeErrors(
 		email.AddPart(Part{Buffer: bytes.NewReader([]byte("Hello world!"))}),
 		email.AddPart(Part{Buffer: bytes.NewReader([]byte("<h1>Hello world!</h1>"))}),
 		email.AddPart(Part{

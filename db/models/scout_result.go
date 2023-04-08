@@ -1,7 +1,7 @@
 package models
 
 import (
-	myErrors "github.com/andygello555/game-scout/errors"
+	myErrors "github.com/andygello555/agem"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"

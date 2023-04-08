@@ -3,7 +3,7 @@ package monday
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/andygello555/game-scout/api"
+	"github.com/andygello555/gapi"
 	"github.com/andygello555/gotils/v2/slices"
 	"reflect"
 )
