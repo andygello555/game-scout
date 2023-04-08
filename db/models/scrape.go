@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/browser"
+	urlfmt "github.com/andygello555/url-fmt"
 	mapset "github.com/deckarep/golang-set/v2"
 	"gorm.io/gorm"
 	"math/rand"
@@ -89,7 +90,7 @@ func (sf Storefront) Values() []string {
 
 // ScrapeURL returns the browser.ScrapeURL that can be used to return a standardised version of the URL for a game on
 // this Storefront.
-func (sf Storefront) ScrapeURL() browser.ScrapeURL {
+func (sf Storefront) ScrapeURL() urlfmt.URL {
 	switch sf {
 	case UnknownStorefront:
 		return ""

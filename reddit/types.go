@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/anaskhan96/soup"
-	"github.com/andygello555/game-scout/errors"
+	"github.com/andygello555/agem"
 	"html"
 	"net/http"
 	"strconv"
@@ -737,7 +737,7 @@ func (cr *commentResponse) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		var more moreResponse
 		if err2 := json.Unmarshal(data, &more); err2 != nil {
-			return errors.MergeErrors(err2, err)
+			return agem.MergeErrors(err2, err)
 		}
 		cr.more = &more
 	} else {

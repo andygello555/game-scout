@@ -7,7 +7,7 @@ import (
 	"github.com/RichardKnop/machinery/v1"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/RichardKnop/machinery/v1/tasks"
-	myErrors "github.com/andygello555/game-scout/errors"
+	myErrors "github.com/andygello555/agem"
 	task "github.com/andygello555/game-scout/tasks"
 	"github.com/pkg/errors"
 	"os/exec"

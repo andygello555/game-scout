@@ -5,7 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
-	myErrors "github.com/andygello555/game-scout/errors"
+	myErrors "github.com/andygello555/agem"
 	"github.com/pkg/errors"
 	"io"
 	"os"

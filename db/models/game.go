@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/anaskhan96/soup"
-	"github.com/andygello555/game-scout/api"
+	myErrors "github.com/andygello555/agem"
 	"github.com/andygello555/game-scout/browser"
-	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/andygello555/game-scout/monday"
-	"github.com/andygello555/game-scout/steamcmd"
+	"github.com/andygello555/gapi"
+	"github.com/andygello555/go-steamcmd"
 	"github.com/andygello555/gotils/v2/numbers"
 	"github.com/andygello555/gotils/v2/slices"
 	mapset "github.com/deckarep/golang-set/v2"
@@ -1001,7 +1001,7 @@ func (g *GameSteamStorefront) ScrapeExtra(config ScrapeConfig, maxTries int, min
 
 		// We will get around the agecheck by setting the following cookies
 		var req *http.Request
-		if _, req, err = browser.SteamAppPage.Request(appID); err != nil {
+		if _, req, err = browser.SteamAppPage.GetRequest(appID); err != nil {
 			return
 		}
 		req.AddCookie(&http.Cookie{Name: "birthtime", Value: "568022401"})

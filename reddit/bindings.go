@@ -2,7 +2,7 @@ package reddit
 
 import (
 	"fmt"
-	"github.com/andygello555/game-scout/api"
+	"github.com/andygello555/gapi"
 	"net/http"
 	"net/url"
 	"strings"

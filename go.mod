@@ -8,11 +8,11 @@ require (
 	github.com/RichardKnop/machinery v1.10.6
 	github.com/anaskhan96/soup v1.2.5
 	github.com/andygello555/gotils/v2 v2.2.0
-	github.com/deckarep/golang-set/v2 v2.1.0
+	github.com/deckarep/golang-set/v2 v2.3.0
 	github.com/g8rswimmer/go-twitter/v2 v2.1.2
 	github.com/google/uuid v1.3.0
 	github.com/gorilla/websocket v1.5.0
-	github.com/hjson/hjson-go/v4 v4.2.0
+	github.com/hjson/hjson-go/v4 v4.3.0
 	github.com/lib/pq v1.10.2
 	github.com/machinebox/graphql v0.2.2
 	github.com/mocktools/go-smtp-mock/v2 v2.0.5
@@ -35,6 +35,10 @@ require (
 	cloud.google.com/go/compute/metadata v0.2.1 // indirect
 	cloud.google.com/go/iam v0.7.0 // indirect
 	cloud.google.com/go/pubsub v1.10.0 // indirect
+	github.com/andygello555/agem v1.0.2 // indirect
+	github.com/andygello555/gapi v1.0.0 // indirect
+	github.com/andygello555/go-steamcmd v1.0.0 // indirect
+	github.com/andygello555/url-fmt v1.0.0 // indirect
 	github.com/antonmedv/expr v1.12.0 // indirect
 	github.com/aws/aws-sdk-go v1.42.34 // indirect
 	github.com/blend/go-sdk v1.20220411.3 // indirect

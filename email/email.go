@@ -6,7 +6,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
-	myErrors "github.com/andygello555/game-scout/errors"
+	myErrors "github.com/andygello555/agem"
 	"github.com/andygello555/gotils/v2/slices"
 	"github.com/pkg/errors"
 	"io"

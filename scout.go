@@ -3,10 +3,10 @@ package main
 import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
+	myErrors "github.com/andygello555/agem"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/game-scout/email"
-	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/pkg/errors"
 	"github.com/schollz/progressbar/v3"
 	"math"

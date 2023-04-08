@@ -3,10 +3,10 @@ package main
 import (
 	"container/heap"
 	"github.com/RichardKnop/machinery/v1/log"
+	myErrors "github.com/andygello555/agem"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/game-scout/email"
-	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/andygello555/gotils/v2/numbers"
 	"github.com/andygello555/gotils/v2/slices"
 	"github.com/google/uuid"
