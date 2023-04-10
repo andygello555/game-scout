@@ -31,6 +31,7 @@ import (
 
 func init() {
 	gob.Register(Game{})
+	gob.Register(&Game{})
 }
 
 // Game represents a game (supposedly) being developed by a Developer. The Website of which can be on one of many
@@ -591,7 +592,7 @@ func (g *Game) VerifiedDeveloper(db *gorm.DB) *Developer {
 	}
 	developer := Developer{}
 	devType, firstVerified := DevTypeFromUsername(g.VerifiedDeveloperUsernames[0])
-	if err := db.Limit(1).Find(&developer, "username = ? AND type = ?", firstVerified, devType).Error; err != nil {
+	if err := db.Where("username = ? AND type = ?", firstVerified, devType).First(&developer).Error; errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil
 	}
 	return &developer

@@ -22,6 +22,7 @@ import (
 
 func init() {
 	gob.Register(MeasureContext{})
+	gob.Register(&MeasureContext{})
 }
 
 //go:embed templates/*

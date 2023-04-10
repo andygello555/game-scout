@@ -14,7 +14,9 @@ import (
 
 func init() {
 	gob.Register(Developer{})
+	gob.Register(&Developer{})
 	gob.Register(TrendingDev{})
+	gob.Register(&TrendingDev{})
 }
 
 type DeveloperType string
@@ -188,7 +190,7 @@ func (d *Developer) DeveloperSnapshots(db *gorm.DB) (developerSnapshots []*Devel
 func (d *Developer) LatestDeveloperSnapshot(db *gorm.DB) (developerSnap *DeveloperSnapshot, err error) {
 	developerSnap = &DeveloperSnapshot{}
 	err = db.Model(&DeveloperSnapshot{}).Where("developer_id = ?", d.ID).Order("version desc").Limit(1).First(developerSnap).Error
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		err = errors.Wrapf(err, "could not find the latest DeveloperSnapshot for %s", d.ID)
 	}
 	return

@@ -19,6 +19,7 @@ import (
 
 func init() {
 	gob.Register(DeveloperSnapshot{})
+	gob.Register(&DeveloperSnapshot{})
 }
 
 type RedditPostMetrics struct {

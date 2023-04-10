@@ -384,7 +384,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 				}
 				developer := models.Developer{}
 				devType, firstVerified := models.DevTypeFromUsername(watchedGame.VerifiedDeveloperUsernames[0])
-				if err = db.DB.Limit(1).Find(&developer, "username = ? AND type = ?", firstVerified, devType).Error; err != nil {
+				if err = db.DB.Where("username = ? AND type = ?", firstVerified, devType).First(&developer).Error; errors.Is(err, gorm.ErrRecordNotFound) {
 					log.WARNING.Printf("\tCould not find verified developer for Game %q: %v", watchedGame.String(), err)
 				} else {
 					log.INFO.Printf("\tFound verified Developer for Game %q: %v", watchedGame.String(), developer)

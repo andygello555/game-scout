@@ -28,6 +28,7 @@ import (
 
 func init() {
 	gob.Register(SteamApp{})
+	gob.Register(&SteamApp{})
 }
 
 // SteamApp represents an app on Steam that has been consumed from the ScoutWebPipes co-process. It can be
