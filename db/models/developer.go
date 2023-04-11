@@ -13,9 +13,7 @@ import (
 )
 
 func init() {
-	gob.Register(Developer{})
 	gob.Register(&Developer{})
-	gob.Register(TrendingDev{})
 	gob.Register(&TrendingDev{})
 }
 

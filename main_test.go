@@ -20,6 +20,7 @@ import (
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
+	"github.com/sajari/regression"
 	"github.com/schollz/progressbar/v3"
 	"github.com/volatiletech/null/v9"
 	"gorm.io/gorm"
@@ -1009,12 +1010,19 @@ func ExampleStateLoadOrCreate() {
 	state.GetCachedField(DeveloperSnapshotsType).SetOrAdd("1234", &models.DeveloperSnapshot{DeveloperID: "1234"})
 	state.GetCachedField(RedditDeveloperSnapshotsType).SetOrAdd("r1234", &models.DeveloperSnapshot{DeveloperID: "r1234"})
 	state.GetCachedField(GameIDsType).SetOrAdd(uuid.New(), uuid.New(), uuid.New())
+
+	deletedDeveloper := &models.Developer{
+		ID:       "1234",
+		Name:     "Deleted developer 1",
+		Username: "dd1",
+	}
+	r := regression.Regression{}
+	r.SetObserved(deletedDeveloper.GetObservedName())
+	for i, name := range deletedDeveloper.GetVariableNames() {
+		r.SetVar(i, name)
+	}
 	state.GetCachedField(DeletedDevelopersType).SetOrAdd(&models.TrendingDev{
-		Developer: &models.Developer{
-			ID:       "1234",
-			Name:     "Deleted developer 1",
-			Username: "dd1",
-		},
+		Developer: deletedDeveloper,
 		Snapshots: []*models.DeveloperSnapshot{
 			{ID: uuid.New()},
 			{ID: uuid.New()},
@@ -1023,7 +1031,10 @@ func ExampleStateLoadOrCreate() {
 			{ID: uuid.New()},
 			{ID: uuid.New()},
 		},
-		Trend: &models.Trend{},
+		Trend: &models.Trend{
+			Model:      deletedDeveloper,
+			Regression: &r,
+		},
 	})
 	state.GetCachedField(StateType).SetOrAdd("Phase", Disable)
 	// Save the ScoutState to disk
@@ -1056,7 +1067,7 @@ func ExampleStateLoadOrCreate() {
 	fmt.Println("phase:", phase)
 	state.Delete()
 	// Output:
-	// state.Result.DiscoveryStats: &{1 2 0 0 0}
+	// state.Result.DiscoveryStats: &{1 2 0 0 0 0}
 	// state.Result.DisableStats: &{EnabledDevelopersBefore:0 DisabledDevelopersBefore:0 EnabledDevelopersAfter:2 DisabledDevelopersAfter:0 DeletedDevelopers:0 TotalSampledDevelopers:0 TotalFinishedSamples:0}
 	// userTweetTimes: 2
 	// redditUserPostTimes: 2

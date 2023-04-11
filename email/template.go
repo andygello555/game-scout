@@ -21,7 +21,6 @@ import (
 )
 
 func init() {
-	gob.Register(MeasureContext{})
 	gob.Register(&MeasureContext{})
 }
 
