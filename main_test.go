@@ -58,6 +58,11 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 
+	// Compile the config
+	if err := globalConfig.Compile(); err != nil {
+		panic(err)
+	}
+
 	// Swap Monday.Mapping with Monday.TestMapping if it exists
 	if globalConfig.Monday.TestMapping != nil {
 		globalConfig.Monday.Mapping, globalConfig.Monday.TestMapping = globalConfig.Monday.TestMapping, globalConfig.Monday.Mapping
@@ -806,10 +811,8 @@ func enablePhaseTest(t *testing.T) (state *ScoutState, enabledDeveloperCount int
 	}
 
 	// Create 500 more developers for each DeveloperType to disable
-	noDevTypes := len(models.UnknownDeveloperType.Types())
 	fakeDevelopers := int(math.Floor(globalConfig.Scrape.Constants.MaxEnabledDevelopersAfterDisablePhase + float64(extraDevelopers)))
 	start, end := fakeDevelopers, fakeDevelopers+additionalDisabledDevelopers
-	fmt.Println("start", start, "end", end, "fakeDevelopers", fakeDevelopers, "noDevTypes", noDevTypes)
 	createdDevelopers := createFakeDevelopersWithSnaps(t, start, end, end, true)
 	if err = db.DB.Model(
 		&models.Developer{},
@@ -870,6 +873,7 @@ func TestDeletePhase(t *testing.T) {
 	clearDB(t)
 
 	state, _ := enablePhaseTest(t)
+	state.GetCachedField(StateType).SetOrAdd("Debug", true)
 
 	// Create a referenced SteamApp for each disabled developer
 	var disabledDevelopersBefore []*models.Developer
@@ -1186,10 +1190,6 @@ func TestMeasurePhase(t *testing.T) {
 	var err error
 	if globalConfig.Monday == nil {
 		t.Fatalf("Cannot run TestMeasurePhase when there is no Monday config specified")
-	}
-
-	if err = globalConfig.Compile(); err != nil {
-		t.Fatalf("Cannot compile config: %v", err)
 	}
 
 	monday.CreateClient(globalConfig.Monday)
