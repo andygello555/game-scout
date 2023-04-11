@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
+	myErrors "github.com/andygello555/agem"
 	"github.com/andygello555/game-scout/browser"
-	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/pkg/errors"
 	"net/http"
@@ -409,9 +409,11 @@ func (w *ClientWrapper) CheckRateLimit(binding *Binding, totalResources int) (er
 				Happened:               now,
 			}
 		}
+
 		// If the number of requests we can make in the remaining time on the rate limit exceeds the number of requests
-		// we would have to make to satisfy the totalResources to get.
-		if remaining := rateLimit.Reset.Time().Sub(now) / w.Config.TwitterRateLimits().LimitPerRequest(); int64(remaining) < int64(totalResources/binding.MaxResourcesPerRequest) {
+		// we would have to make to satisfy the totalResources to get. We also check if remaining is != 0. This is
+		// because the rate limit will just about be reset by the time we make the actual request.
+		if remaining := rateLimit.Reset.Time().Sub(now) / w.Config.TwitterRateLimits().LimitPerRequest(); int64(remaining) < int64(totalResources/binding.MaxResourcesPerRequest) && remaining != 0 {
 			log.WARNING.Printf(
 				"There is %s remaining on the rate limit meaning we cannot make the %d requests required for %d %ss",
 				remaining.String(),
@@ -427,6 +429,14 @@ func (w *ClientWrapper) CheckRateLimit(binding *Binding, totalResources int) (er
 				ResourceType:           binding.ResourceType,
 				Happened:               now,
 			}
+		} else if remaining == 0 {
+			// Wait however long it takes for the rateLimit to reset. This will never be longer than LimitPerRequest.
+			waitTime := rateLimit.Reset.Time().Sub(now)
+			log.WARNING.Printf(
+				"(%s - %s) / %s == 0, so we will wait %s until the rateLimit reset time",
+				rateLimit.Reset.Time().String(), now.String(), w.Config.TwitterRateLimits().LimitPerRequest(), waitTime,
+			)
+			time.Sleep(waitTime)
 		}
 	}
 

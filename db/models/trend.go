@@ -17,6 +17,7 @@ import (
 
 func init() {
 	gob.Register(Trend{})
+	gob.Register(&Trend{})
 }
 
 // trendModel is implemented by Model instances that need to have their trends measured by one or more metrics that

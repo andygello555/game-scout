@@ -3,10 +3,10 @@ package main
 import (
 	"container/heap"
 	"github.com/RichardKnop/machinery/v1/log"
+	myErrors "github.com/andygello555/agem"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/game-scout/email"
-	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/andygello555/gotils/v2/numbers"
 	"github.com/andygello555/gotils/v2/slices"
 	"github.com/google/uuid"
@@ -83,7 +83,7 @@ func DeletePhase(state *ScoutState) (err error) {
 	whereZeroVerified := db.DB.Model(&models.Game{}).Select(
 		"COUNT(*)",
 	).Where(
-		"developers.username = ANY(games.verified_developer_usernames)",
+		"developers.type || developers.username = ANY(games.verified_developer_usernames)",
 	)
 
 	latestSnapshotQuery := db.DB.Model(
@@ -109,7 +109,7 @@ func DeletePhase(state *ScoutState) (err error) {
 	// WHERE ds2.created_at < NOW() - (<staleDeveloperDays> * INTERVAL '1 DAY') AND ds2.version < 2 AND (
 	//   SELECT COUNT(*)
 	//   FROM games
-	//   WHERE developers.username = ANY(games.verified_developer_usernames)
+	//   WHERE developers.type || developers.username = ANY(games.verified_developer_usernames)
 	// ) = 0
 	// ORDER BY ds2.weighted_score
 
@@ -168,7 +168,7 @@ func DeletePhase(state *ScoutState) (err error) {
 	// WHERE developers.disabled AND (
 	//   SELECT COUNT(*)
 	//   FROM games
-	//   WHERE developers.username = ANY(games.verified_developer_usernames)
+	//   WHERE developers.type || developers.username = ANY(games.verified_developer_usernames)
 	// ) = 0
 	// ORDER BY ds2.weighted_score
 
@@ -281,6 +281,7 @@ func DeletePhase(state *ScoutState) (err error) {
 		if err = state.Save(); err != nil {
 			log.ERROR.Printf("Could not save State cache to disk in Enable: %v", err)
 		}
+		state.GetCachedField(StateType).SetOrAdd("Result", "DeleteStats", "TotalFinishedSamples", models.SetOrAddInc.Func())
 		sample++
 	}
 
@@ -295,8 +296,8 @@ func DeletePhase(state *ScoutState) (err error) {
 		for iter.Continue() {
 			deletedDev := iter.Key().(*models.TrendingDev)
 			log.INFO.Printf(
-				"Starting process to remove any traces of Developer %v which is %s in our list of devs to delete",
-				deletedDev.Developer, numbers.Ordinal(iter.I()+1),
+				"Starting process to remove any traces of Developer %v which is %s in our list of %d devs to delete",
+				deletedDev.Developer, numbers.Ordinal(iter.I()+1), deletedDevelopers.Len(),
 			)
 			gameIDs := slices.Comprehension(deletedDev.Games, func(idx int, value *models.Game, arr []*models.Game) uuid.UUID {
 				return value.ID
@@ -314,7 +315,7 @@ func DeletePhase(state *ScoutState) (err error) {
 				gameIDs,
 			).Update(
 				"developers",
-				gorm.Expr("array_remove(developers, ?)", deletedDev.Developer.Username),
+				gorm.Expr("array_remove(developers, ?)", deletedDev.Developer.TypedUsername()),
 			).Error; err != nil {
 				log.ERROR.Printf(
 					"\tCould not remove \"%s\" from the developers field of all Games related to Developer %v: %v",

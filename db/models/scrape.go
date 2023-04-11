@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/browser"
+	urlfmt "github.com/andygello555/url-fmt"
 	"github.com/antonmedv/expr/vm"
 	mapset "github.com/deckarep/golang-set/v2"
 	"gorm.io/gorm"
@@ -54,7 +55,7 @@ func (sf Storefront) LogoSrc() string {
 	case SteamStorefront:
 		return "https://store.cloudflare.steamstatic.com/public/shared/images/header/logo_steam.svg"
 	case ItchIOStorefront:
-		return "https://static.itch.io/images/logo-black-new.svg"
+		return "https://static.itch.io/images/logo-white-new.svg"
 	default:
 		return ""
 	}
@@ -90,7 +91,7 @@ func (sf Storefront) Values() []string {
 
 // ScrapeURL returns the browser.ScrapeURL that can be used to return a standardised version of the URL for a game on
 // this Storefront.
-func (sf Storefront) ScrapeURL() browser.ScrapeURL {
+func (sf Storefront) ScrapeURL() urlfmt.URL {
 	switch sf {
 	case UnknownStorefront:
 		return ""

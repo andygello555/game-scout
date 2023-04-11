@@ -6,8 +6,8 @@ import (
 	"embed"
 	"encoding/gob"
 	"fmt"
+	myErrors "github.com/andygello555/agem"
 	"github.com/andygello555/game-scout/browser"
-	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/pkg/errors"
 	"github.com/playwright-community/playwright-go"
 	"html/template"
@@ -22,6 +22,7 @@ import (
 
 func init() {
 	gob.Register(MeasureContext{})
+	gob.Register(&MeasureContext{})
 }
 
 //go:embed templates/*

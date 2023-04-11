@@ -173,7 +173,7 @@ func TestScrapeStorefrontsForGameWrapper(t *testing.T) {
 			expectedStorefront:                 SteamStorefront,
 			expectedWebsite:                    "https://store.steampowered.com/app/477160",
 			expectedPublisher:                  "Curve Games",
-			expectedVerifiedDeveloperUsernames: mapset.NewThreadUnsafeSet[string]("curvegames"),
+			expectedVerifiedDeveloperUsernames: mapset.NewThreadUnsafeSet[string]("Tcurvegames"),
 			expectedDevelopers:                 mapset.NewThreadUnsafeSet[string]("curvegames"),
 			expectedReleaseDate:                time.Unix(1469206680, 0),
 			gameModel:                          &Game{Developers: []string{"curvegames"}},

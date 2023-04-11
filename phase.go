@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
-	"github.com/andygello555/game-scout/errors"
+	"github.com/andygello555/agem"
+	"github.com/andygello555/game-scout/db/models"
+	"github.com/andygello555/gotils/v2/slices"
 	"github.com/deckarep/golang-set/v2"
 	"github.com/google/uuid"
 	errors2 "github.com/pkg/errors"
@@ -84,7 +86,7 @@ func (p Phase) Run(state *ScoutState) (err error) {
 		// If the number of discovery tweets we requested is more than maxDiscoveryTweetsDailyPercent of the total tweets
 		// available for a day then we will error out.
 		if float64(discoveryTweets) > globalConfig.Scrape.Constants.maxTotalDiscoveryTweets() {
-			return errors.TemporaryErrorf(
+			return agem.TemporaryErrorf(
 				false,
 				"cannot request more than %d tweets per day for discovery purposes",
 				int(globalConfig.Twitter.RateLimits.TweetsPerDay),
@@ -122,7 +124,9 @@ func (p Phase) Run(state *ScoutState) (err error) {
 		// these to the scrapedDevelopers also
 		stateState := state.GetCachedField(StateType).(*State)
 		if len(stateState.UpdatedDevelopers) > 0 {
-			scrapedDevelopers = append(scrapedDevelopers, stateState.UpdatedDevelopers...)
+			scrapedDevelopers = append(scrapedDevelopers, slices.Comprehension(stateState.UpdatedDevelopers, func(idx int, value models.DeveloperMinimal, arr []models.DeveloperMinimal) string {
+				return value.ID
+			})...)
 		}
 
 		// Run the UpdatePhase.

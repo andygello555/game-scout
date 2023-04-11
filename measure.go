@@ -4,17 +4,19 @@ import (
 	"container/heap"
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
+	myErrors "github.com/andygello555/agem"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/game-scout/email"
-	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/andygello555/game-scout/monday"
+	"github.com/andygello555/gapi"
 	"github.com/andygello555/gotils/v2/slices"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"math"
+	"strconv"
 	"time"
 )
 
@@ -78,8 +80,8 @@ func MeasurePhase(state *ScoutState) (err error) {
 	var (
 		mondayGames              []*models.Game
 		mondaySteamApps          []*models.SteamApp
-		gamePaginator            *monday.Paginator[monday.ItemResponse, []*models.Game]
-		steamAppPaginator        *monday.Paginator[monday.ItemResponse, []*models.SteamApp]
+		gamePaginator            api.Paginator[monday.ItemResponse, []*models.Game]
+		steamAppPaginator        api.Paginator[monday.ItemResponse, []*models.SteamApp]
 		mondayGameIDs            mapset.Set[uuid.UUID]
 		mondayWatchedGameIDs     mapset.Set[uuid.UUID]
 		mondaySteamAppIDs        mapset.Set[uint64]
@@ -87,7 +89,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 	)
 
 	if globalConfig.Monday != nil {
-		if gamePaginator, err = monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, models.GetGamesFromMonday, globalConfig.Monday, db.DB); err != nil {
+		if gamePaginator, err = api.NewTypedPaginator(monday.DefaultClient, time.Millisecond*100, models.GetGamesFromMonday, globalConfig.Monday, db.DB); err != nil {
 			log.ERROR.Printf("Could not create paginator for GetGamesFromMonday: %v", err)
 		} else {
 			if mondayGames, err = gamePaginator.All(); err != nil {
@@ -95,7 +97,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 			}
 		}
 
-		if steamAppPaginator, err = monday.NewPaginator(monday.DefaultClient, time.Millisecond*100, models.GetSteamAppsFromMonday, globalConfig.Monday, db.DB); err != nil {
+		if steamAppPaginator, err = api.NewTypedPaginator(monday.DefaultClient, time.Millisecond*100, models.GetSteamAppsFromMonday, globalConfig.Monday, db.DB); err != nil {
 			log.ERROR.Printf("Could not create paginator for GetSteamAppsFromMonday: %v", err)
 		} else {
 			if mondaySteamApps, err = steamAppPaginator.All(); err != nil {
@@ -109,12 +111,32 @@ func MeasurePhase(state *ScoutState) (err error) {
 		})...)
 		mondayWatchedGameIDs = mapset.NewSet[uuid.UUID]()
 		for _, game := range mondayGames {
+			if game.MondayItemID != 0 && game.MondayBoardID != "" {
+				var boardID int64
+				if boardID, err = strconv.ParseInt(game.MondayBoardID, 10, 64); err != nil {
+					log.ERROR.Printf(
+						"\tCould not parse board ID %q for linked item %d for Game %q: %v",
+						game.MondayBoardID, game.MondayItemID, game.String(), err,
+					)
+				} else {
+					if _, err = models.UpdateGameInMonday.Execute(monday.DefaultClient, game, game.MondayItemID, int(boardID), globalConfig.Monday); err != nil {
+						log.ERROR.Printf(
+							"\tCould not update linked item %d for Game %q: %v",
+							game.MondayItemID, game.String(), err,
+						)
+					}
+				}
+			}
+
+			isWatchedLog := " "
 			if game.Watched != nil {
-				log.INFO.Printf("Game %q is watched", game.String())
+				isWatchedLog = fmt.Sprintf(" is watched (%s) and has ", *game.Watched)
 				mondayWatchedGameIDs.Add(game.ID)
 			}
+			log.INFO.Printf("\tGame %q%shas vote score: %d", game.String(), isWatchedLog, game.Votes)
+
 			if err = db.DB.Save(game).Error; err != nil {
-				log.ERROR.Printf("Could not save Game %q: %v", game.String(), err)
+				log.ERROR.Printf("\tCould not save Game %q: %v", game.String(), err)
 			}
 		}
 
@@ -124,12 +146,30 @@ func MeasurePhase(state *ScoutState) (err error) {
 		})...)
 		mondayWatchedSteamAppIDs = mapset.NewSet[uint64]()
 		for _, app := range mondaySteamApps {
+			if app.MondayItemID != 0 && app.MondayBoardID != "" {
+				var boardID int64
+				if boardID, err = strconv.ParseInt(app.MondayBoardID, 10, 64); err != nil {
+					log.ERROR.Printf(
+						"\tCould not parse board ID %q for linked item %d for SteamApp %q: %v",
+						app.MondayBoardID, app.MondayItemID, app.String(), err,
+					)
+				} else {
+					if _, err = models.UpdateSteamAppInMonday.Execute(monday.DefaultClient, app, app.MondayItemID, int(boardID), globalConfig.Monday); err != nil {
+						log.ERROR.Printf(
+							"\tCould not update linked item %d for SteamApp %q: %v",
+							app.MondayItemID, app.String(), err,
+						)
+					}
+				}
+			}
+
 			if app.Watched != nil {
-				log.INFO.Printf("SteamApp %q is watched", app.String())
+				log.INFO.Printf("\tSteamApp %q is watched", app.String())
 				mondayWatchedSteamAppIDs.Add(app.ID)
 			}
+
 			if err = db.DB.Save(app).Error; err != nil {
-				log.ERROR.Printf("Could not save Game %q: %v", app.String(), err)
+				log.ERROR.Printf("\tCould not save Game %q: %v", app.String(), err)
 			}
 		}
 	} else {
@@ -316,7 +356,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 		if err = db.DB.Find(&watchedGames, "watched is not null").Error; err != nil {
 			log.ERROR.Printf("Could not find Watched Games: %v", err)
 		}
-		log.INFO.Println("There are %d Games that are marked as Watched in the DB", len(watchedGames))
+		log.INFO.Printf("There are %d Games that are marked as Watched in the DB", len(watchedGames))
 		for _, watchedGame := range watchedGames {
 			if !mondayWatchedGameIDs.Contains(watchedGame.ID) {
 				log.WARNING.Printf("\tGame %q is no longer being watched on Monday. Updating...", watchedGame.String())
@@ -337,13 +377,14 @@ func MeasurePhase(state *ScoutState) (err error) {
 						log.ERROR.Printf("\tCould not save Game %q after setting Watched to nil: %v", watchedGame.String(), err)
 					}
 				}
-			} else {
+			} else if len(watchedGame.VerifiedDeveloperUsernames) > 0 {
 				log.INFO.Printf("\tGame %q is still being watched on Monday getting TrendingDev", watchedGame.String())
 				watchedTrendingDev := models.TrendingDev{
 					Games: []*models.Game{watchedGame},
 				}
 				developer := models.Developer{}
-				if err = db.DB.Limit(1).Find(&developer, "username IN ?", watchedGame.VerifiedDeveloperUsernames).Error; err != nil {
+				devType, firstVerified := models.DevTypeFromUsername(watchedGame.VerifiedDeveloperUsernames[0])
+				if err = db.DB.Where("username = ? AND type = ?", firstVerified, devType).First(&developer).Error; errors.Is(err, gorm.ErrRecordNotFound) {
 					log.WARNING.Printf("\tCould not find verified developer for Game %q: %v", watchedGame.String(), err)
 				} else {
 					log.INFO.Printf("\tFound verified Developer for Game %q: %v", watchedGame.String(), developer)
@@ -363,6 +404,8 @@ func MeasurePhase(state *ScoutState) (err error) {
 					}
 					measureContext.WatchedDevelopers = append(measureContext.WatchedDevelopers, &watchedTrendingDev)
 				}
+			} else {
+				log.WARNING.Printf("\tThere are no verified developers for Game %q", watchedGame.String())
 			}
 		}
 
@@ -370,7 +413,7 @@ func MeasurePhase(state *ScoutState) (err error) {
 		if err = db.DB.Find(&watchedSteamApps, "watched is not null").Error; err != nil {
 			log.ERROR.Printf("Could not find Watched SteamApps: %v", err)
 		}
-		log.INFO.Println("There are %d SteamApps that are marked as Watched in the DB", len(watchedGames))
+		log.INFO.Printf("There are %d SteamApps that are marked as Watched in the DB", len(watchedSteamApps))
 		for _, watchedApp := range watchedSteamApps {
 			if !mondayWatchedSteamAppIDs.Contains(watchedApp.ID) {
 				log.WARNING.Printf("\tSteamApp %q is no longer being watched on Monday. Updating...", watchedApp.String())

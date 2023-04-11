@@ -3,10 +3,10 @@ package main
 import (
 	"fmt"
 	"github.com/RichardKnop/machinery/v1/log"
+	myErrors "github.com/andygello555/agem"
 	"github.com/andygello555/game-scout/db"
 	"github.com/andygello555/game-scout/db/models"
 	"github.com/andygello555/game-scout/email"
-	myErrors "github.com/andygello555/game-scout/errors"
 	"github.com/pkg/errors"
 	"github.com/schollz/progressbar/v3"
 	"math"
@@ -44,23 +44,11 @@ func sleepBar(sleepDuration time.Duration) {
 func Scout(batchSize int, discoveryTweets int) (err error) {
 	var state *ScoutState
 	if state, err = StateLoadOrCreate(false); err != nil {
-		return errors.Wrapf(err, "could not load/create ScoutState when starting Scout procedure")
+		err = errors.Wrapf(err, "could not load/create ScoutState when starting Scout procedure")
+		return
 	}
 
-	timer := time.AfterFunc(globalConfig.Scrape.Constants.ScoutTimeout.Duration, func() {
-		panic(fmt.Errorf(
-			"scout procedure has been running for longer than %s, shutting it down",
-			globalConfig.Scrape.Constants.ScoutTimeout.String(),
-		))
-	})
-
-	defer func() {
-		// Stop the timer as we have exited the Scout procedure. This will either be because:
-		// • The Scout procedure has completed successfully
-		// • An error has bubbled up
-		// • A panic has occurred. Hopefully, from the timer above.
-		timer.Stop()
-
+	defer func(state *ScoutState) {
 		// Check if a panic has occurred. If so, we will merge it into the currently set error return parameter.
 		p := recover()
 		if p != nil {
@@ -88,88 +76,104 @@ func Scout(batchSize int, discoveryTweets int) (err error) {
 				log.ERROR.Printf("Errors after sending error email: %v", err)
 			}
 		}
-	}()
+	}(state)
 
-	if state.Loaded {
-		log.WARNING.Printf("Previous ScoutState \"%s\" was loaded from disk so we are ignoring batchSize and discoveryTweets parameters:", state.BaseDir())
-		log.WARNING.Println(state.String())
+	result := make(chan error, 1)
+	go func(state *ScoutState) {
+		if state.Loaded {
+			log.WARNING.Printf("Previous ScoutState \"%s\" was loaded from disk so we are ignoring batchSize and discoveryTweets parameters:", state.BaseDir())
+			log.WARNING.Println(state.String())
 
-		// Set the discoveryTweets and batchSize parameters according to the saved values in ScoutState
-		batchSizeAny, _ := state.GetCachedField(StateType).Get("BatchSize")
-		batchSize = batchSizeAny.(int)
-		discoveryTweetsAny, _ := state.GetCachedField(StateType).Get("DiscoveryTweets")
-		discoveryTweets = discoveryTweetsAny.(int)
-	} else {
-		// If no state has been loaded, then we'll assume that the previous run of Scout was successful and set up
-		// ScoutState as usual
-		state.GetCachedField(StateType).SetOrAdd("Start", time.Now().UTC())
-		state.GetCachedField(StateType).SetOrAdd("Result", "Started", time.Now().UTC())
-		state.GetCachedField(StateType).SetOrAdd("Phase", Discovery)
-		state.GetCachedField(StateType).SetOrAdd("BatchSize", batchSize)
-		state.GetCachedField(StateType).SetOrAdd("DiscoveryTweets", discoveryTweets)
-	}
-	// We always set the Debug flag in the State to be the same as the debug flag in the ScrapeConfig.
-	state.GetCachedField(StateType).SetOrAdd("Debug", globalConfig.Scrape.Debug)
-
-	// Send the Started email Template
-	var startedTemplate *email.Template
-	startedContext := &StartedContext{State: state}
-	if startedTemplate = startedContext.Execute(); startedTemplate.Error != nil {
-		log.ERROR.Printf("Could not fill Started Template with StartedContext: %v", startedTemplate.Error)
-	}
-	startedTemplate.SendAsyncAndConsume(func(resp email.Response) {
-		if resp.Error != nil {
-			log.ERROR.Printf("Error occurred whilst sending Started Template: %v", resp.Error)
+			// Set the discoveryTweets and batchSize parameters according to the saved values in ScoutState
+			batchSizeAny, _ := state.GetCachedField(StateType).Get("BatchSize")
+			batchSize = batchSizeAny.(int)
+			discoveryTweetsAny, _ := state.GetCachedField(StateType).Get("DiscoveryTweets")
+			discoveryTweets = discoveryTweetsAny.(int)
 		} else {
-			log.INFO.Printf("Successfully sent Started email in %s", resp.Email.Profiling.Total().String())
+			// If no state has been loaded, then we'll assume that the previous run of Scout was successful and set up
+			// ScoutState as usual
+			state.GetCachedField(StateType).SetOrAdd("Start", time.Now().UTC())
+			state.GetCachedField(StateType).SetOrAdd("Result", "Started", time.Now().UTC())
+			state.GetCachedField(StateType).SetOrAdd("Phase", Discovery)
+			state.GetCachedField(StateType).SetOrAdd("BatchSize", batchSize)
+			state.GetCachedField(StateType).SetOrAdd("DiscoveryTweets", discoveryTweets)
 		}
-	})
+		// We always set the Debug flag in the State to be the same as the debug flag in the ScrapeConfig.
+		state.GetCachedField(StateType).SetOrAdd("Debug", globalConfig.Scrape.Debug)
 
-	getPhase := func() Phase {
-		phase, _ := state.GetCachedField(StateType).Get("Phase")
-		return phase.(Phase)
-	}
-
-	// Loop over all the Phases and Run each one until the done phase
-	for phase := getPhase(); phase != Done; phase = getPhase() {
-		if err = phase.Run(state); err != nil {
-			return err
+		// Send the Started email Template
+		var startedTemplate *email.Template
+		startedContext := &StartedContext{State: state}
+		if startedTemplate = startedContext.Execute(); startedTemplate.Error != nil {
+			log.ERROR.Printf("Could not fill Started Template with StartedContext: %v", startedTemplate.Error)
 		}
-	}
+		startedTemplate.SendAsyncAndConsume(func(resp email.Response) {
+			if resp.Error != nil {
+				log.ERROR.Printf("Error occurred whilst sending Started Template: %v", resp.Error)
+			} else {
+				log.INFO.Printf("Successfully sent Started email in %s", resp.Email.Profiling.Total().String())
+			}
+		})
 
-	// Save the ScoutResult
-	scoutResultAny, _ := state.GetCachedField(StateType).Get("Result")
-	if err = db.DB.Create(scoutResultAny).Error; err != nil {
-		return errors.Wrap(err, "could not create ScoutResult")
-	}
-	log.INFO.Println("Saved ScoutResult")
+		getPhase := func() Phase {
+			phase, _ := state.GetCachedField(StateType).Get("Phase")
+			return phase.(Phase)
+		}
 
-	// Set the Finished time in ScoutState, then retrieve the Start and Finished times to calculate the duration.
-	state.GetCachedField(StateType).SetOrAdd("Finished", time.Now().UTC())
-	start, _ := state.GetCachedField(StateType).Get("Start")
-	finished, _ := state.GetCachedField(StateType).Get("Finished")
+		// Loop over all the Phases and Run each one until the done phase
+		for phase := getPhase(); phase != Done; phase = getPhase() {
+			if err = phase.Run(state); err != nil {
+				result <- err
+				return
+			}
+		}
 
-	// Send the Finished email Template
-	var finishedTemplate *email.Template
-	finishedContext := &email.FinishedContext{
-		BatchSize:       batchSize,
-		DiscoveryTweets: discoveryTweets,
-		Started:         start.(time.Time),
-		Finished:        finished.(time.Time),
-		Result:          scoutResultAny.(*models.ScoutResult),
-	}
-	if finishedTemplate = finishedContext.Execute(); finishedTemplate.Error != nil {
-		log.ERROR.Printf("Could not fill Finished Template with FinishedContext: %v", finishedTemplate.Error)
-	}
-	if resp := finishedTemplate.SendSync(); resp.Error != nil {
-		log.ERROR.Printf("Error occurred whilst sending Finished Template: %v", resp.Error)
-	} else {
-		log.INFO.Printf("Successfully sent Finished email in %s", resp.Email.Profiling.Total().String())
-	}
+		// Save the ScoutResult
+		scoutResultAny, _ := state.GetCachedField(StateType).Get("Result")
+		if err = db.DB.Create(scoutResultAny).Error; err != nil {
+			result <- errors.Wrap(err, "could not create ScoutResult")
+			return
+		}
+		log.INFO.Println("Saved ScoutResult")
 
-	log.INFO.Printf("Finished Scout in %s", finishedContext.Finished.Sub(finishedContext.Started))
+		// Set the Finished time in ScoutState, then retrieve the Start and Finished times to calculate the duration.
+		state.GetCachedField(StateType).SetOrAdd("Finished", time.Now().UTC())
+		start, _ := state.GetCachedField(StateType).Get("Start")
+		finished, _ := state.GetCachedField(StateType).Get("Finished")
 
-	// Finally, delete the state
-	state.Delete()
+		// Send the Finished email Template
+		var finishedTemplate *email.Template
+		finishedContext := &email.FinishedContext{
+			BatchSize:       batchSize,
+			DiscoveryTweets: discoveryTweets,
+			Started:         start.(time.Time),
+			Finished:        finished.(time.Time),
+			Result:          scoutResultAny.(*models.ScoutResult),
+		}
+		if finishedTemplate = finishedContext.Execute(); finishedTemplate.Error != nil {
+			log.ERROR.Printf("Could not fill Finished Template with FinishedContext: %v", finishedTemplate.Error)
+		}
+		if resp := finishedTemplate.SendSync(); resp.Error != nil {
+			log.ERROR.Printf("Error occurred whilst sending Finished Template: %v", resp.Error)
+		} else {
+			log.INFO.Printf("Successfully sent Finished email in %s", resp.Email.Profiling.Total().String())
+		}
+
+		log.INFO.Printf("Finished Scout in %s", finishedContext.Finished.Sub(finishedContext.Started))
+
+		// Finally, delete the state
+		state.Delete()
+		result <- nil
+	}(state)
+
+	select {
+	case <-time.After(globalConfig.Scrape.Constants.ScoutTimeout.Duration):
+		err = fmt.Errorf(
+			"scout procedure has been running for longer than %s, shutting it down",
+			globalConfig.Scrape.Constants.ScoutTimeout.String(),
+		)
+	case err = <-result:
+		break
+	}
 	return
 }

@@ -6,7 +6,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
-	myErrors "github.com/andygello555/game-scout/errors"
+	myErrors "github.com/andygello555/agem"
 	"github.com/andygello555/gotils/v2/slices"
 	"github.com/pkg/errors"
 	"io"
@@ -155,12 +155,12 @@ type Profiling map[profilingKey][]time.Duration
 
 // start returns a function that should be called when the action corresponding to the given profilingKey has finished.
 func (prof *Profiling) start(key profilingKey) func() {
-	start := time.Now()
+	start := time.Now().UTC()
 	return func() {
 		if _, ok := (*prof)[key]; !ok {
 			(*prof)[key] = make([]time.Duration, 0)
 		}
-		(*prof)[key] = append((*prof)[key], time.Now().Sub(start))
+		(*prof)[key] = append((*prof)[key], time.Now().UTC().Sub(start))
 	}
 }
 

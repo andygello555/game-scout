@@ -3,8 +3,8 @@ package email
 import (
 	"bytes"
 	"fmt"
+	"github.com/andygello555/agem"
 	"github.com/andygello555/game-scout/db/models"
-	"github.com/andygello555/game-scout/errors"
 	"github.com/g8rswimmer/go-twitter/v2"
 	smtpmock "github.com/mocktools/go-smtp-mock/v2"
 	"io"
@@ -34,10 +34,10 @@ func (c *templateConfig) TemplateMaxImageHeight() int { return c.MaxImageHeight 
 func (c *templateConfig) TemplateDebugTo() []string   { return c.DebugTo }
 func (c *templateConfig) TemplateTo() []string        { return c.To }
 func (c *templateConfig) TemplateSubject() string {
-	return time.Now().Format(c.SubjectFormat)
+	return time.Now().UTC().Format(c.SubjectFormat)
 }
 func (c *templateConfig) TemplateAttachmentName() string {
-	return time.Now().Format(c.AttachmentNameFormat)
+	return time.Now().UTC().Format(c.AttachmentNameFormat)
 }
 func (c *templateConfig) TemplateSendRetries() int { return c.SendRetries }
 func (c *templateConfig) TemplateSendBackoff() (time.Duration, error) {
@@ -102,8 +102,8 @@ type exampleContext struct {
 var examples = []exampleContext{
 	{
 		context: &MeasureContext{
-			Start: time.Now(),
-			End:   time.Now(),
+			Start: time.Now().UTC(),
+			End:   time.Now().UTC(),
 			TrendingDevs: []*models.TrendingDev{
 				{
 					Developer: &models.Developer{
@@ -191,7 +191,7 @@ Number of games captured by snapshot
 Total weighted score for each game
 11000.
 Weighted score for this snapshot
-13000.`, time.Now().Format("02/01/2006"), time.Now().Format("02/01/2006")),
+13000.`, time.Now().UTC().Format("02/01/2006"), time.Now().UTC().Format("02/01/2006")),
 	},
 }
 
@@ -383,7 +383,7 @@ func ExampleNewEmail() {
 	email.FromAddress = "test@test.com"
 	defer email.Close()
 
-	if err = errors.MergeErrors(
+	if err = agem.MergeErrors(
 		email.AddPart(Part{Buffer: bytes.NewReader([]byte("Hello world!"))}),
 		email.AddPart(Part{Buffer: bytes.NewReader([]byte("<h1>Hello world!</h1>"))}),
 		email.AddPart(Part{

@@ -7,7 +7,7 @@ import (
 	"github.com/RichardKnop/machinery/v1"
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/RichardKnop/machinery/v1/tasks"
-	myErrors "github.com/andygello555/game-scout/errors"
+	myErrors "github.com/andygello555/agem"
 	task "github.com/andygello555/game-scout/tasks"
 	"github.com/pkg/errors"
 	"os/exec"
@@ -64,39 +64,41 @@ func worker() (err error) {
 		return err
 	}
 
-	// Create the ScoutWebPipes co-process
-	scoutWebPipes := exec.Command(globalConfig.SteamWebPipes.BinaryLocation)
-	// Hook the stdout to the INFO level logger
-	scoutWebPipes.Stdout = &throughWriter{logger: log.INFO}
-	// Start the ScoutWebPipes process
-	if err = scoutWebPipes.Start(); err != nil {
-		return errors.Wrapf(
-			err,
-			"cannot start ScoutWebPipes (%s) process",
-			globalConfig.SteamWebPipes.BinaryLocation,
-		)
+	if !globalConfig.SteamWebPipes.Disable {
+		// Create the ScoutWebPipes co-process
+		scoutWebPipes := exec.Command(globalConfig.SteamWebPipes.BinaryLocation)
+		// Hook the stdout to the INFO level logger
+		scoutWebPipes.Stdout = &throughWriter{logger: log.INFO}
+		// Start the ScoutWebPipes process
+		if err = scoutWebPipes.Start(); err != nil {
+			return errors.Wrapf(
+				err,
+				"cannot start ScoutWebPipes (%s) process",
+				globalConfig.SteamWebPipes.BinaryLocation,
+			)
+		}
+
+		// The SteamAppWebsocketScraper will handle all the changelists pushed to the websocket by ScoutWebPipes, by
+		// scraping and saving each one as a SteamApp.
+		websocketScraper := NewSteamAppWebsocketScraper(1, globalConfig)
+
+		// Defer a function that will kill the scoutWebPipes process. We also stop the SteamAppWebsocketScraper and wait for
+		// it to gracefully exit.
+		defer func() {
+			log.INFO.Printf("Stopping ScoutWebPipes and waiting for SteamAppWebsocketScraper")
+			err = myErrors.MergeErrors(err, errors.Wrapf(
+				scoutWebPipes.Process.Kill(),
+				"cannot kill ScoutWebPipes (%s) process",
+				globalConfig.SteamWebPipes.BinaryLocation,
+			))
+			_, waitErr := scoutWebPipes.Process.Wait()
+			err = myErrors.MergeErrors(err, errors.Wrap(waitErr, "wait failed"))
+			err = myErrors.MergeErrors(err, errors.Wrap(websocketScraper.Stop(), "could not stop SteamAppWebsocketScraper"))
+		}()
+
+		// Start the SteamAppWebsocketScraper
+		websocketScraper.Start()
 	}
-
-	// The SteamAppWebsocketScraper will handle all the changelists pushed to the websocket by ScoutWebPipes, by
-	// scraping and saving each one as a SteamApp.
-	websocketScraper := NewSteamAppWebsocketScraper(1, globalConfig)
-
-	// Defer a function that will kill the scoutWebPipes process. We also stop the SteamAppWebsocketScraper and wait for
-	// it to gracefully exit.
-	defer func() {
-		log.INFO.Printf("Stopping ScoutWebPipes and waiting for SteamAppWebsocketScraper")
-		err = myErrors.MergeErrors(err, errors.Wrapf(
-			scoutWebPipes.Process.Kill(),
-			"cannot kill ScoutWebPipes (%s) process",
-			globalConfig.SteamWebPipes.BinaryLocation,
-		))
-		_, waitErr := scoutWebPipes.Process.Wait()
-		err = myErrors.MergeErrors(err, errors.Wrap(waitErr, "wait failed"))
-		err = myErrors.MergeErrors(err, errors.Wrap(websocketScraper.Stop(), "could not stop SteamAppWebsocketScraper"))
-	}()
-
-	// Start the SteamAppWebsocketScraper
-	websocketScraper.Start()
 
 	// The second argument is a consumer tag
 	// Ideally, each worker should have a unique tag (worker1, worker2 etc)

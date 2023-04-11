@@ -19,6 +19,16 @@ import (
 
 func init() {
 	gob.Register(DeveloperSnapshot{})
+	gob.Register(&DeveloperSnapshot{})
+}
+
+type RedditPostMetrics struct {
+	Ups                  int     `json:"ups"`
+	Downs                int     `json:"downs"`
+	Score                int     `json:"score"`
+	UpvoteRatio          float32 `json:"upvote_ratio"`
+	NumberOfComments     int     `json:"num_comments"`
+	SubredditSubscribers int     `json:"subreddit_subscribers"`
 }
 
 // DeveloperSnapshot is snapshot of a potential developer's public user metrics, aggregations of tweet metrics
@@ -35,24 +45,33 @@ type DeveloperSnapshot struct {
 	// DeveloperID is the foreign key to the Developer this snapshot is for.
 	DeveloperID string
 	Developer   *Developer `gorm:"constraint:OnDelete:CASCADE;"`
-	// Tweets is the number of tweets that could be scraped for this Developer for this DeveloperSnapshot.
+	// Tweets is the number of tweets/Reddit posts that could be scraped for this Developer for this DeveloperSnapshot.
 	Tweets int32
 	// TweetIDs is the IDs of the Tweets captured by this DeveloperSnapshot. Using these, we can generate links for each
 	// Tweet.
 	TweetIDs pq.StringArray `gorm:"type:varchar(64)[];default:'{}'"`
-	// TweetTimeRange is the time.Duration between the Developer's earliest tweet (that was scraped) and their latest
-	// tweet (that was scraped). This is set to nil when only one tweet was scraped.
+	// RedditPostIDs are subreddit name, post ID pairs captured by this DeveloperSnapshot. I.e. a subreddit name
+	// followed by a Reddit post ID. Using these, we can generate links for each post.
+	RedditPostIDs pq.StringArray `gorm:"type:varchar(32)[];default:'{}'"`
+	// TweetTimeRange is the time.Duration between the Developer's earliest tweet/post (that was scraped) and their
+	// latest tweet/post (that was scraped). This is set to nil when only one tweet/post was scraped.
 	TweetTimeRange NullDuration
-	// LastTweetTime is the time of the last tweet that was scraped.
+	// LastTweetTime is the time of the last tweet/post that was scraped.
 	LastTweetTime time.Time
-	// TweetTimeRange is the average time.Duration between all the Developer's tweets that were scraped for this
-	// DeveloperSnapshot. This is set to nil when only one tweet was scraped.
+	// TweetTimeRange is the average time.Duration between all the Developer's tweets/posts that were scraped for this
+	// DeveloperSnapshot. This is set to nil when only one tweet/post was scraped.
 	AverageDurationBetweenTweets NullDuration
 	// TweetsPublicMetrics is the sum of all public metrics for the tweets that were scraped for this Developer for this
 	// DeveloperSnapshot.
 	TweetsPublicMetrics *twitter.TweetMetricsObj `gorm:"embedded;embeddedPrefix:total_tweet_"`
+	// PostPublicMetrics is the sum of all public metrics for the Reddit posts that were scraped for this Developer for
+	// this DeveloperSnapshot. This only applies if the Developer is of the RedditDeveloperType.
+	PostPublicMetrics *RedditPostMetrics `gorm:"embedded;embeddedPrefix:total_post_"`
 	// UserPublicMetrics is the public metrics for the Developer at the time this DeveloperSnapshot was created.
 	UserPublicMetrics *twitter.UserMetricsObj `gorm:"embedded;embeddedPrefix:user_"`
+	// RedditPublicMetrics contains the Developer's karma at the time this DeveloperSnapshot was created (if they are a
+	// RedditDeveloperType Developer).
+	RedditPublicMetrics *RedditUserMetrics `gorm:"embedded;embeddedPrefix:reddit_user_"`
 	// ContextAnnotationSet is the set of all ContextAnnotations for all tweets that were scraped for this Developer for
 	// this DeveloperSnapshot.
 	ContextAnnotationSet *myTwitter.ContextAnnotationSet
@@ -79,7 +98,9 @@ const (
 	TweetTimeRangeWeight               developerSnapshotWeight = 0.35
 	AverageDurationBetweenTweetsWeight developerSnapshotWeight = 0.45
 	TweetsPublicMetricsWeight          developerSnapshotWeight = 0.75
+	PostPublicMetricsWeight            developerSnapshotWeight = 0.8
 	UserPublicMetricsWeight            developerSnapshotWeight = 0.45
+	RedditPublicMetricsWeight          developerSnapshotWeight = 0.55
 	ContextAnnotationSetWeight         developerSnapshotWeight = 0.55
 	GamesWeight                        developerSnapshotWeight = 0.7
 	GameWeightedScoresSumWeight        developerSnapshotWeight = 0.8
@@ -95,7 +116,9 @@ const (
 	TweetTimeRange               developerSnapshotWeightedField = "TweetTimeRange"
 	AverageDurationBetweenTweets developerSnapshotWeightedField = "AverageDurationBetweenTweets"
 	TweetsPublicMetrics          developerSnapshotWeightedField = "TweetsPublicMetrics"
+	PostPublicMetrics            developerSnapshotWeightedField = "PostPublicMetrics"
 	UserPublicMetrics            developerSnapshotWeightedField = "UserPublicMetrics"
+	RedditPublicMetrics          developerSnapshotWeightedField = "RedditPublicMetrics"
 	ContextAnnotationSet         developerSnapshotWeightedField = "ContextAnnotationSet"
 	Games                        developerSnapshotWeightedField = "Games"
 	GameWeightedScoresSum        developerSnapshotWeightedField = "GameWeightedScoresSum"
@@ -117,8 +140,12 @@ func (wf developerSnapshotWeightedField) Weight() (w float64, inverse bool) {
 		w = float64(AverageDurationBetweenTweetsWeight)
 	case TweetsPublicMetrics:
 		w = float64(TweetsPublicMetricsWeight)
+	case PostPublicMetrics:
+		w = float64(PostPublicMetricsWeight)
 	case UserPublicMetrics:
 		w = float64(UserPublicMetricsWeight)
+	case RedditPublicMetrics:
+		w = float64(RedditPublicMetricsWeight)
 	case ContextAnnotationSet:
 		w = float64(ContextAnnotationSetWeight)
 	case Games:
@@ -173,7 +200,7 @@ func (wf developerSnapshotWeightedField) GetValueFromWeightedModel(model Weighte
 	case TweetsPublicMetrics:
 		tweetMetricsObj := f.Interface().(*twitter.TweetMetricsObj)
 		if tweetMetricsObj != nil {
-			// Clamp all tweet public metrics to 5000
+			// Clamp all tweet public metrics to 1000
 			return []float64{
 				float64(numbers.Clamp(tweetMetricsObj.Impressions, 1000)),
 				float64(numbers.Clamp(tweetMetricsObj.URLLinkClicks, 1000)),
@@ -185,6 +212,19 @@ func (wf developerSnapshotWeightedField) GetValueFromWeightedModel(model Weighte
 			}
 		}
 		return []float64{0.0}
+	case PostPublicMetrics:
+		postMetricsObj := f.Interface().(*RedditPostMetrics)
+		if postMetricsObj != nil {
+			return []float64{
+				float64(numbers.Clamp(postMetricsObj.Ups, 1000)),
+				float64(numbers.Clamp(postMetricsObj.Downs, 1000)),
+				float64(numbers.Clamp(postMetricsObj.Score, 1000)),
+				float64(numbers.Clamp(postMetricsObj.UpvoteRatio, 1000)),
+				float64(numbers.Clamp(postMetricsObj.NumberOfComments, 1000)),
+				float64(numbers.Clamp(postMetricsObj.SubredditSubscribers, 1000)),
+			}
+		}
+		return []float64{0.0}
 	case UserPublicMetrics:
 		userMetricsObj := f.Interface().(*twitter.UserMetricsObj)
 		if userMetricsObj != nil {
@@ -193,6 +233,15 @@ func (wf developerSnapshotWeightedField) GetValueFromWeightedModel(model Weighte
 				float64(numbers.Clamp(userMetricsObj.Following, 1000)),
 				numbers.ScaleRange(float64(numbers.Clamp(userMetricsObj.Tweets, 10_000)), 0.0, 10_000.0, 100_000.0, -1_000_000.0),
 				float64(numbers.Clamp(userMetricsObj.Listed, 1000)),
+			}
+		}
+		return []float64{0.0}
+	case RedditPublicMetrics:
+		redditMetricsObj := f.Interface().(*RedditUserMetrics)
+		if redditMetricsObj != nil {
+			return []float64{
+				float64(numbers.Clamp(redditMetricsObj.PostKarma, 5000)),
+				float64(numbers.Clamp(redditMetricsObj.CommentKarma, 5000)),
 			}
 		}
 		return []float64{0.0}
@@ -247,7 +296,7 @@ func (ds *DeveloperSnapshot) calculateGameField(tx *gorm.DB) (err error) {
 	}
 
 	// Find all the games containing the developer's username within their developers column
-	games := tx.Model(&Game{}).Where("? = ANY(developers)", developer.Username)
+	games := tx.Model(&Game{}).Where("? = ANY(developers)", developer.TypedUsername())
 	if games.Error != nil {
 		return errors.Wrapf(
 			games.Error,
