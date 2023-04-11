@@ -981,7 +981,11 @@ func main() {
 						fmt.Printf("\tDeveloper %v, has %d games:\n", developer, len(games))
 						if len(games) > 0 {
 							for i, game := range games {
-								fmt.Printf("\t\t%d) %v\n", i+1, game)
+								var weightedAverage float64
+								if weightedAverage, err = globalConfig.Scrape.ScrapeWeightedModelCalc(game); err != nil {
+									return cli.NewExitError(err.Error(), 1)
+								}
+								fmt.Printf("\t\t%d) %v, calculated score = %f\n", i+1, game, weightedAverage)
 							}
 						}
 					}
@@ -1077,10 +1081,7 @@ func main() {
 							if weightedAverage, err = globalConfig.Scrape.ScrapeWeightedModelCalc(snapshot); err != nil {
 								return cli.NewExitError(err.Error(), 1)
 							}
-							fmt.Printf(
-								"Calculated score = %f vs. existing score = %f (match = %t)\n",
-								weightedAverage, snapshot.WeightedScore, weightedAverage == snapshot.WeightedScore,
-							)
+							fmt.Printf("Calculated score = %f\n", weightedAverage)
 						}
 					}
 
@@ -1535,6 +1536,11 @@ func main() {
 					Required: false,
 				},
 				cli.BoolFlag{
+					Name:     "weightedScore",
+					Usage:    "calculate the weighted score",
+					Required: false,
+				},
+				cli.BoolFlag{
 					Name:     "measureWatched",
 					Usage:    "execute the Measure template for this SteamApp but treat it as though it has been Watched",
 					Required: false,
@@ -1577,6 +1583,14 @@ func main() {
 
 					if c.Bool("measureWatched") {
 						measureContext.WatchedSteamApps[steamAppNo] = &steamApp
+					}
+
+					if c.Bool("weightedScore") {
+						var weightedAverage float64
+						if weightedAverage, err = globalConfig.Scrape.ScrapeWeightedModelCalc(&steamApp); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+						fmt.Printf("Calculated score = %f\n", weightedAverage)
 					}
 
 					if c.Bool("printAfter") {

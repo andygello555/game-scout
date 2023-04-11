@@ -153,6 +153,15 @@ type ScrapeConfig interface {
 	ScrapeWeightedModelCalc(modelInstance any) (weightedAverage float64, err error)
 }
 
+// scrapeConfig is a package-wide variable containing the ScrapeConfig, this is necessary for calculating the weighted
+// score of model instances.
+var scrapeConfig ScrapeConfig
+
+// SetScrapeConfig will set the package-wide ScrapeConfig variable for the models package.
+func SetScrapeConfig(config ScrapeConfig) {
+	scrapeConfig = config
+}
+
 // ScrapableGameSource represents a source that can be scraped for a GameModelStorefrontScraper for a Storefront.
 type ScrapableGameSource int
 

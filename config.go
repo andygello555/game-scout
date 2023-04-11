@@ -824,8 +824,28 @@ func (wmf *WeightedModelFieldEvaluator) ModelField(modelInstance any) any {
 }
 
 var weightedModelEvaluatorFunctions = []expr.Option{
+	expr.Function("abs", func(params ...interface{}) (interface{}, error) {
+		v := reflect.ValueOf(params[0])
+		_, duration := v.Interface().(time.Duration)
+		switch {
+		case v.CanInt():
+			return math.Abs(float64(v.Int())), nil
+		case v.CanUint():
+			return float64(v.Uint()), nil
+		case v.CanFloat():
+			return math.Abs(v.Float()), nil
+		case duration:
+			return float64(v.Interface().(time.Duration).Abs()), nil
+		default:
+			return 0.0, fmt.Errorf("cannot find absolute of %v (type %s) as float64", v.Interface(), v.Type().String())
+		}
+	}, new(func(x int) float64), new(func(x int8) float64), new(func(x int16) float64), new(func(x int32) float64),
+		new(func(x int64) float64), new(func(x uint) float64), new(func(x uint8) float64), new(func(x uint16) float64),
+		new(func(x uint32) float64), new(func(x uint64) float64), new(func(x float32) float64), new(func(x float64) float64),
+		new(func(x time.Duration) float64)),
 	expr.Function("float", func(params ...interface{}) (interface{}, error) {
 		v := reflect.ValueOf(params[0])
+		_, duration := v.Interface().(time.Duration)
 		switch {
 		case v.CanInt():
 			return float64(v.Int()), nil
@@ -833,14 +853,18 @@ var weightedModelEvaluatorFunctions = []expr.Option{
 			return float64(v.Uint()), nil
 		case v.CanFloat():
 			return v.Float(), nil
+		case duration:
+			return float64(v.Interface().(time.Duration)), nil
 		default:
 			return 0.0, fmt.Errorf("cannot convert %v (type %s) to float64", v.Interface(), v.Type().String())
 		}
 	}, new(func(x int) float64), new(func(x int8) float64), new(func(x int16) float64), new(func(x int32) float64),
 		new(func(x int64) float64), new(func(x uint) float64), new(func(x uint8) float64), new(func(x uint16) float64),
-		new(func(x uint32) float64), new(func(x uint64) float64), new(func(x float32) float64), new(func(x float64) float64)),
+		new(func(x uint32) float64), new(func(x uint64) float64), new(func(x float32) float64), new(func(x float64) float64),
+		new(func(x time.Duration) float64)),
 	expr.Function("int", func(params ...interface{}) (interface{}, error) {
 		v := reflect.ValueOf(params[0])
+		_, duration := v.Interface().(time.Duration)
 		switch {
 		case v.CanInt():
 			return v.Int(), nil
@@ -848,12 +872,15 @@ var weightedModelEvaluatorFunctions = []expr.Option{
 			return int64(v.Uint()), nil
 		case v.CanFloat():
 			return int64(v.Float()), nil
+		case duration:
+			return int64(v.Interface().(time.Duration)), nil
 		default:
 			return int64(0), fmt.Errorf("cannot convert %v (type %s) to int64", v.Interface(), v.Type().String())
 		}
 	}, new(func(x int) int64), new(func(x int8) int64), new(func(x int16) int64), new(func(x int32) int64),
 		new(func(x int64) int64), new(func(x uint) int64), new(func(x uint8) int64), new(func(x uint16) int64),
-		new(func(x uint32) int64), new(func(x uint64) int64), new(func(x float32) int64), new(func(x float64) int64)),
+		new(func(x uint32) int64), new(func(x uint64) int64), new(func(x float32) int64), new(func(x float64) int64),
+		new(func(x time.Duration) int64)),
 	expr.Function("scale_range", func(params ...interface{}) (interface{}, error) {
 		return numbers.ScaleRange(params[0].(float64), params[1].(float64), params[2].(float64), params[3].(float64), params[4].(float64)), nil
 	}, new(func(x, xMin, xMax, yMin, yMax float64) float64)),
@@ -867,29 +894,47 @@ var weightedModelEvaluatorFunctions = []expr.Option{
 		return time.Now().UTC(), nil
 	}, time.Now),
 	expr.Function("duration", func(params ...interface{}) (interface{}, error) {
-		switch strings.ToLower(params[0].(string)) {
-		case "nanosecond", "":
-			return time.Nanosecond, nil
-		case "microsecond":
-			return time.Microsecond, nil
-		case "millisecond":
-			return time.Millisecond, nil
-		case "second":
-			return time.Second, nil
-		case "minute":
-			return time.Minute, nil
-		case "hour":
-			return time.Hour, nil
-		case "day":
-			return time.Hour * 24, nil
-		case "week":
-			return time.Hour * 24 * 7, nil
-		case "month":
-			return time.Hour * 24 * 30, nil
+		switch params[0].(type) {
+		case float64:
+			return time.Duration(int64(params[0].(float64))), nil
+		case int:
+			return time.Duration(int64(params[0].(int))), nil
+		case int64:
+			return time.Duration(params[0].(int64)), nil
+		case string:
+			switch strings.ToLower(params[0].(string)) {
+			case "nanosecond", "":
+				return time.Nanosecond, nil
+			case "microsecond":
+				return time.Microsecond, nil
+			case "millisecond":
+				return time.Millisecond, nil
+			case "second":
+				return time.Second, nil
+			case "minute":
+				return time.Minute, nil
+			case "hour":
+				return time.Hour, nil
+			case "day":
+				return time.Hour * 24, nil
+			case "week":
+				return time.Hour * 24 * 7, nil
+			case "month":
+				return time.Hour * 24 * 30, nil
+			default:
+				return time.ParseDuration(params[0].(string))
+			}
 		default:
-			return time.ParseDuration(params[0].(string))
+			return time.Nanosecond, nil
 		}
-	}, new(func(string) time.Duration)),
+	}, new(func(string) time.Duration), new(func(int) time.Duration), new(func(int64) time.Duration),
+		new(func(float64) time.Duration)),
+	expr.Function("boolMap", func(params ...interface{}) (interface{}, error) {
+		return map[bool]any{
+			true:  params[0],
+			false: params[1],
+		}, nil
+	}, new(func(t, f any) map[bool]any)),
 }
 
 func (wmf *WeightedModelFieldEvaluator) Env(modelInstance any) map[string]any {
@@ -924,10 +969,10 @@ func (wmf *WeightedModelFieldEvaluator) Env(modelInstance any) map[string]any {
 func (wmf *WeightedModelFieldEvaluator) Compile() (err error) {
 	if wmf.Expression != "" {
 		env := wmf.Env(nil)
-		fmt.Printf(
-			"%s.%s: %q - model = %s, field = %#+v\n",
-			wmf.ModelName, wmf.Field, wmf.Expression, reflect.TypeOf(env["model"]).String(), env["field"],
-		)
+		//fmt.Printf(
+		//	"%s.%s: %q - model = %s, field = %#+v\n",
+		//	wmf.ModelName, wmf.Field, wmf.Expression, reflect.TypeOf(env["model"]).String(), env["field"],
+		//)
 		options := []expr.Option{expr.Env(env)}
 		options = append(options, weightedModelEvaluatorFunctions...)
 		if wmf.expression, err = expr.Compile(wmf.Expression, options...); err != nil {
@@ -1084,7 +1129,7 @@ func (sc *ScrapeConfig) ScrapeWeightedModelCalc(modelInstance any) (weightedAver
 		}
 		// Then we calculate the weighted value and add it to the sum of the weighted values
 		weightSum += valueSum * weight
-		//fmt.Printf("\t%s.%s = %v\n", evaluator.ModelName, evaluator.Field, valueSum)
+		//fmt.Printf("\t%s.%s = %v\n", evaluator.ModelName, evaluator.Field, valueSum*weight)
 	}
 	return weightSum / weightFactorSum, nil
 }
@@ -1156,6 +1201,7 @@ func LoadConfig() error {
 	if err = json.Unmarshal(configData, globalConfig); err != nil {
 		return err
 	}
+	models.SetScrapeConfig(globalConfig.Scrape)
 	return nil
 }
 
