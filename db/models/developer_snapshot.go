@@ -2,9 +2,7 @@ package models
 
 import (
 	"encoding/gob"
-	"fmt"
 	myTwitter "github.com/andygello555/game-scout/twitter"
-	"github.com/andygello555/gotils/v2/numbers"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/g8rswimmer/go-twitter/v2"
 	"github.com/google/uuid"
@@ -12,8 +10,6 @@ import (
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	"math"
-	"reflect"
 	"time"
 )
 
@@ -87,202 +83,6 @@ type DeveloperSnapshot struct {
 	WeightedScore float64
 }
 
-// developerSnapshotWeight represents a weight for a developerSnapshotWeightedField. If the developerSnapshotWeight is
-// negative then this means to take the inverse of the value first, then multiply it by the
-// math.Abs(developerSnapshotWeight).
-type developerSnapshotWeight float64
-
-const (
-	TweetsWeight                       developerSnapshotWeight = 0.65
-	TweetTimeRangeWeight               developerSnapshotWeight = 0.35
-	AverageDurationBetweenTweetsWeight developerSnapshotWeight = 0.45
-	TweetsPublicMetricsWeight          developerSnapshotWeight = 0.75
-	PostPublicMetricsWeight            developerSnapshotWeight = 0.8
-	UserPublicMetricsWeight            developerSnapshotWeight = 0.45
-	RedditPublicMetricsWeight          developerSnapshotWeight = 0.55
-	ContextAnnotationSetWeight         developerSnapshotWeight = 0.55
-	GamesWeight                        developerSnapshotWeight = 0.7
-	GameWeightedScoresSumWeight        developerSnapshotWeight = 0.8
-	TimesHighlightedWeight             developerSnapshotWeight = 0.9
-)
-
-// developerSnapshotWeightedField represents a field that can have a weighting calculation applied to it in
-// DeveloperSnapshot.
-type developerSnapshotWeightedField string
-
-const (
-	Tweets                       developerSnapshotWeightedField = "Tweets"
-	TweetTimeRange               developerSnapshotWeightedField = "TweetTimeRange"
-	AverageDurationBetweenTweets developerSnapshotWeightedField = "AverageDurationBetweenTweets"
-	TweetsPublicMetrics          developerSnapshotWeightedField = "TweetsPublicMetrics"
-	PostPublicMetrics            developerSnapshotWeightedField = "PostPublicMetrics"
-	UserPublicMetrics            developerSnapshotWeightedField = "UserPublicMetrics"
-	RedditPublicMetrics          developerSnapshotWeightedField = "RedditPublicMetrics"
-	ContextAnnotationSet         developerSnapshotWeightedField = "ContextAnnotationSet"
-	Games                        developerSnapshotWeightedField = "Games"
-	GameWeightedScoresSum        developerSnapshotWeightedField = "GameWeightedScoresSum"
-	TimesHighlighted             developerSnapshotWeightedField = "TimesHighlighted"
-)
-
-// String returns the string value of the developerSnapshotWeightedField.
-func (wf developerSnapshotWeightedField) String() string { return string(wf) }
-
-// Weight returns the developerSnapshotWeight for a developerSnapshotWeightedField, as well as whether the value should
-// have its inverse taken first.
-func (wf developerSnapshotWeightedField) Weight() (w float64, inverse bool) {
-	switch wf {
-	case Tweets:
-		w = float64(TweetsWeight)
-	case TweetTimeRange:
-		w = float64(TweetTimeRangeWeight)
-	case AverageDurationBetweenTweets:
-		w = float64(AverageDurationBetweenTweetsWeight)
-	case TweetsPublicMetrics:
-		w = float64(TweetsPublicMetricsWeight)
-	case PostPublicMetrics:
-		w = float64(PostPublicMetricsWeight)
-	case UserPublicMetrics:
-		w = float64(UserPublicMetricsWeight)
-	case RedditPublicMetrics:
-		w = float64(RedditPublicMetricsWeight)
-	case ContextAnnotationSet:
-		w = float64(ContextAnnotationSetWeight)
-	case Games:
-		w = float64(GamesWeight)
-	case GameWeightedScoresSum:
-		w = float64(GameWeightedScoresSumWeight)
-	case TimesHighlighted:
-		w = float64(TimesHighlightedWeight)
-	default:
-		panic(fmt.Errorf("\"%s\" is not a developerSnapshotWeightedField", wf))
-	}
-	inverse = w < 0.0
-	w = math.Abs(w)
-	return
-}
-
-// GetValueFromWeightedModel uses reflection to get the value of the developerSnapshotWeightedField from the given
-// DeveloperSnapshot, and will return a list of floats for use in the calculation of the DeveloperSnapshot.WeightedScore.
-func (wf developerSnapshotWeightedField) GetValueFromWeightedModel(model WeightedModel) []float64 {
-	r := reflect.ValueOf(model)
-	f := reflect.Indirect(r).FieldByName(wf.String())
-	switch wf {
-	case GameWeightedScoresSum:
-		// We will actually take the average here by finding the number of Games as well.
-		games := reflect.Indirect(r).FieldByName("Games").Int()
-		if games > 0 {
-			return []float64{f.Float() / float64(games)}
-		}
-		return []float64{0.0}
-	case Tweets:
-		// Tweets are clamped to 100, anymore is kinda sus within a 7-day period (this is usually against bots and AI)
-		return []float64{numbers.ScaleRange(float64(numbers.Clamp(f.Int(), 100)), 0.0, 100.0, 100_000.0, -500_000.0)}
-	case Games:
-		// Return a penalty if the number of games is 0...
-		val := float64(f.Int())
-		if val == 0.0 {
-			return []float64{-15_000_000.0}
-		}
-
-		// Clamp the number of games to 100 and scale to a range of 100_000 -> -1_000_000
-		// Note: reflects badly against bots; which is what we want.
-		return []float64{numbers.ScaleRange(numbers.Clamp(val, 100.0), 1.0, 100.0, 100_000.0, -5_000_000.0)}
-	case TweetTimeRange, AverageDurationBetweenTweets:
-		var val float64
-		duration := f.Interface().(NullDuration)
-		if duration.IsValid() {
-			val = duration.Ptr().Minutes()
-		} else {
-			return []float64{-10_000.0}
-		}
-		return []float64{numbers.ScaleRange(numbers.ClampMinMax(val, 1.0, 10_000.0), 1.0, 10_000.0, -10_000.0, 10_000.0)}
-	case TweetsPublicMetrics:
-		tweetMetricsObj := f.Interface().(*twitter.TweetMetricsObj)
-		if tweetMetricsObj != nil {
-			// Clamp all tweet public metrics to 1000
-			return []float64{
-				float64(numbers.Clamp(tweetMetricsObj.Impressions, 1000)),
-				float64(numbers.Clamp(tweetMetricsObj.URLLinkClicks, 1000)),
-				float64(numbers.Clamp(tweetMetricsObj.UserProfileClicks, 1000)),
-				float64(numbers.Clamp(tweetMetricsObj.Likes, 1000)),
-				float64(numbers.Clamp(tweetMetricsObj.Replies, 1000)),
-				float64(numbers.Clamp(tweetMetricsObj.Retweets, 1000)),
-				float64(numbers.Clamp(tweetMetricsObj.Quotes, 1000)),
-			}
-		}
-		return []float64{0.0}
-	case PostPublicMetrics:
-		postMetricsObj := f.Interface().(*RedditPostMetrics)
-		if postMetricsObj != nil {
-			return []float64{
-				float64(numbers.Clamp(postMetricsObj.Ups, 1000)),
-				float64(numbers.Clamp(postMetricsObj.Downs, 1000)),
-				float64(numbers.Clamp(postMetricsObj.Score, 1000)),
-				float64(numbers.Clamp(postMetricsObj.UpvoteRatio, 1000)),
-				float64(numbers.Clamp(postMetricsObj.NumberOfComments, 1000)),
-				float64(numbers.Clamp(postMetricsObj.SubredditSubscribers, 1000)),
-			}
-		}
-		return []float64{0.0}
-	case UserPublicMetrics:
-		userMetricsObj := f.Interface().(*twitter.UserMetricsObj)
-		if userMetricsObj != nil {
-			return []float64{
-				float64(numbers.Clamp(userMetricsObj.Followers, 1000)),
-				float64(numbers.Clamp(userMetricsObj.Following, 1000)),
-				numbers.ScaleRange(float64(numbers.Clamp(userMetricsObj.Tweets, 10_000)), 0.0, 10_000.0, 100_000.0, -1_000_000.0),
-				float64(numbers.Clamp(userMetricsObj.Listed, 1000)),
-			}
-		}
-		return []float64{0.0}
-	case RedditPublicMetrics:
-		redditMetricsObj := f.Interface().(*RedditUserMetrics)
-		if redditMetricsObj != nil {
-			return []float64{
-				float64(numbers.Clamp(redditMetricsObj.PostKarma, 5000)),
-				float64(numbers.Clamp(redditMetricsObj.CommentKarma, 5000)),
-			}
-		}
-		return []float64{0.0}
-	case ContextAnnotationSet:
-		contextAnnotationSet := f.Interface().(*myTwitter.ContextAnnotationSet)
-		if contextAnnotationSet != nil {
-			values := make([]float64, contextAnnotationSet.Cardinality())
-			iterator := contextAnnotationSet.Set.Iterator()
-			var i int
-			for contextAnnotation := range iterator.C {
-				values[i] = contextAnnotation.Domain.Value()
-				i++
-			}
-			return values
-		}
-		return []float64{0.0}
-	case TimesHighlighted:
-		// TimesHighlighted is turned into a negative number that is in the thousands, we really don't want highlighted
-		// developers to come up again.
-		return []float64{float64(f.Int()) * -10000.0}
-	default:
-		panic(fmt.Errorf(
-			"developerSnapshotWeightedField has type %s, and cannot be converted to []float64",
-			f.Type().String(),
-		))
-	}
-}
-
-func (wf developerSnapshotWeightedField) Fields() []WeightedField {
-	return []WeightedField{
-		Tweets,
-		TweetTimeRange,
-		AverageDurationBetweenTweets,
-		TweetsPublicMetrics,
-		UserPublicMetrics,
-		ContextAnnotationSet,
-		Games,
-		GameWeightedScoresSum,
-		TimesHighlighted,
-	}
-}
-
 // calculateGameField calculates the Games and GameWeightedScoresSum fields for DeveloperSnapshot using the Game table.
 func (ds *DeveloperSnapshot) calculateGameField(tx *gorm.DB) (err error) {
 	var developer Developer
@@ -340,7 +140,7 @@ func (ds *DeveloperSnapshot) calculateGameField(tx *gorm.DB) (err error) {
 }
 
 func (ds *DeveloperSnapshot) UpdateComputedFields(tx *gorm.DB) (err error) {
-	ds.WeightedScore = CalculateWeightedScore(ds, Tweets)
+	ds.WeightedScore, err = scrapeConfig.ScrapeWeightedModelCalc(ds)
 	return
 }
 

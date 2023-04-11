@@ -11,7 +11,6 @@ import (
 	"github.com/andygello555/game-scout/monday"
 	"github.com/andygello555/gapi"
 	"github.com/andygello555/go-steamcmd"
-	"github.com/andygello555/gotils/v2/numbers"
 	"github.com/andygello555/gotils/v2/slices"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/google/uuid"
@@ -104,162 +103,6 @@ type Game struct {
 	WeightedScore null.Float64
 }
 
-// gameWeight represents a weight for a gameWeightedField. If the gameWeight is negative then this means to take the
-// inverse of the value first, then multiply it by the math.Abs(gameWeight).
-type gameWeight float64
-
-const (
-	GamePublisherWeight      gameWeight = 0.55
-	GameTotalReviewsWeight   gameWeight = 0.75
-	GameReviewScoreWeight    gameWeight = 0.65
-	GameTotalUpvotesWeight   gameWeight = 0.45
-	GameTotalDownvotesWeight gameWeight = 0.25
-	GameTotalCommentsWeight  gameWeight = 0.35
-	GameTagScoreWeight       gameWeight = 0.25
-	GameUpdatesWeight        gameWeight = -0.15
-	GameReleaseDateWeight    gameWeight = 0.7
-	GameVotesWeight          gameWeight = 0.8
-)
-
-// gameWeightedField represents a field that can have a weighting calculation applied to it in Game.
-type gameWeightedField string
-
-const (
-	GamePublisher      gameWeightedField = "Publisher"
-	GameTotalReviews   gameWeightedField = "TotalReviews"
-	GameReviewScore    gameWeightedField = "ReviewScore"
-	GameTotalUpvotes   gameWeightedField = "TotalUpvotes"
-	GameTotalDownvotes gameWeightedField = "TotalDownvotes"
-	GameTotalComments  gameWeightedField = "TotalComments"
-	GameTagScore       gameWeightedField = "TagScore"
-	GameUpdates        gameWeightedField = "Updates"
-	GameReleaseDate    gameWeightedField = "ReleaseDate"
-	GameVotes          gameWeightedField = "Votes"
-)
-
-// String returns the string value of the gameWeightedField.
-func (gf gameWeightedField) String() string { return string(gf) }
-
-// Weight returns the gameWeight for a gameWeightedField, as well as whether the value should have its inverse taken
-// first.
-func (gf gameWeightedField) Weight() (w float64, inverse bool) {
-	switch gf {
-	case GamePublisher:
-		w = float64(GamePublisherWeight)
-	case GameTotalReviews:
-		w = float64(GameTotalReviewsWeight)
-	case GameReviewScore:
-		w = float64(GameReviewScoreWeight)
-	case GameTotalUpvotes:
-		w = float64(GameTotalUpvotesWeight)
-	case GameTotalDownvotes:
-		w = float64(GameTotalDownvotesWeight)
-	case GameTotalComments:
-		w = float64(GameTotalCommentsWeight)
-	case GameTagScore:
-		w = float64(GameTagScoreWeight)
-	case GameUpdates:
-		w = float64(GameUpdatesWeight)
-	case GameReleaseDate:
-		w = float64(GameReleaseDateWeight)
-	case GameVotes:
-		w = float64(GameVotesWeight)
-	default:
-		panic(fmt.Errorf("\"%s\" is not a gameWeightedField", gf))
-	}
-	inverse = w < 0.0
-	w = math.Abs(w)
-	return
-}
-
-// GetValueFromWeightedModel uses reflection to get the value of the gameWeightedField from the given Game, and will
-// return a list of floats for use in the calculation of the Game.WeightedScore.
-func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []float64 {
-	r := reflect.ValueOf(model)
-	f := reflect.Indirect(r).FieldByName(gf.String())
-	switch gf {
-	case GamePublisher:
-		nullString := f.Interface().(null.String)
-		val := -50000.0
-		if !nullString.IsValid() {
-			val = 4000.0
-		}
-		return []float64{val}
-	case GameReviewScore:
-		nullFloat64 := f.Interface().(null.Float64)
-		var val float64
-		if nullFloat64.IsValid() {
-			val = (*nullFloat64.Ptr()) * 1500.0
-		}
-		return []float64{val}
-	case GameTotalReviews:
-		nullInt32 := f.Interface().(null.Int32)
-		var val float64
-		if nullInt32.IsValid() {
-			valInt := (*nullInt32.Ptr()) + 1
-			if valInt > 5000 {
-				valInt = 5000
-			}
-			val = numbers.ScaleRange(float64(valInt), 1.0, 5000.0, 1000000.0, -1000000.0)
-		}
-		return []float64{val}
-	case GameTotalUpvotes, GameTotalDownvotes, GameTotalComments:
-		nullInt32 := f.Interface().(null.Int32)
-		var val float64
-		if nullInt32.IsValid() {
-			val = float64(*nullInt32.Ptr()) * 2
-			if val > 5000 {
-				val = 5000
-			}
-			val = numbers.ScaleRange(val*2, 0, 10000, -1000, 10000)
-		}
-		return []float64{val}
-	case GameTagScore:
-		nullInt64 := f.Interface().(null.Float64)
-		var val float64
-		if nullInt64.IsValid() {
-			val = *nullInt64.Ptr()
-		}
-		return []float64{val}
-	case GameUpdates:
-		return []float64{float64(f.Uint()+1) / 1500.0}
-	case GameReleaseDate:
-		nullTime := f.Interface().(null.Time)
-		var val float64
-		if nullTime.IsValid() && !nullTime.Time.IsZero() {
-			// The value for release date is calculated by subtracting the time now from the release date, then finding the
-			// hours for that duration. We also subtract 1 month from the duration, so we still look positively on games
-			// that have been released one month before today. Finally, we clamp the duration to be between +/- 5
-			// months.
-			timeDiff := nullTime.Time.Sub(time.Now().UTC()) - time.Hour*24*30
-			if timeDiff.Abs() > time.Hour*24*30*5 {
-				timeDiff = map[bool]time.Duration{true: -1, false: 1}[timeDiff < 0] * time.Hour * 24 * 30 * 5
-			}
-			val = timeDiff.Hours()
-		}
-		return []float64{val}
-	case GameVotes:
-		return []float64{float64(f.Int() * 100000)}
-	default:
-		panic(fmt.Errorf("gameWeightedField %s is not recognized, and cannot be converted to []float64", gf))
-	}
-}
-
-func (gf gameWeightedField) Fields() []WeightedField {
-	return []WeightedField{
-		GamePublisher,
-		GameTotalReviews,
-		GameReviewScore,
-		GameTotalUpvotes,
-		GameTotalDownvotes,
-		GameTotalComments,
-		GameTagScore,
-		GameUpdates,
-		GameReleaseDate,
-		GameVotes,
-	}
-}
-
 func (g *Game) String() string {
 	return fmt.Sprintf("%s Game \"%s\"", g.Storefront.String(), g.Website.String)
 }
@@ -300,7 +143,11 @@ func (g *Game) UpdateComputedFields(tx *gorm.DB) (err error) {
 	// Then we set the WeightedScore
 	g.WeightedScore = null.Float64FromPtr(nil)
 	if g.CheckCalculateWeightedScore() {
-		g.WeightedScore = null.Float64From(CalculateWeightedScore(g, GamePublisher))
+		var weightedScore float64
+		if weightedScore, err = scrapeConfig.ScrapeWeightedModelCalc(g); err != nil {
+			return
+		}
+		g.WeightedScore = null.Float64From(weightedScore)
 	}
 	return
 }

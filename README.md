@@ -222,6 +222,230 @@ All configuration variables for game-scout exist in a `config.json` file that mu
         }
       }
     ],
+    "weighted_model_expressions": {
+      "DeveloperSnapshot": [
+        {
+          "model_name":"DeveloperSnapshot",
+          "field": "Tweets",
+          "weight": 0.65,
+          "expression": "scale_range(clamp(float(field.Val), 100.0), 0.0, 100.0, 100_000.0, -500_000.0)"
+        },
+        {
+          "model_name": "DeveloperSnapshot",
+          "field": "TweetTimeRange",
+          "weight": 0.35,
+          "expression": "field.Ptr.IsValid() ? scale_range(clamp_min_max(field.Ptr.Ptr().Minutes(), 1.0, 10_000.0), 1.0, 10_000.0, -10_000.0, 10_000.0) : -10_000.0"
+        },
+        {
+          "model_name": "DeveloperSnapshot",
+          "field": "AverageDurationBetweenTweets",
+          "weight": 0.45,
+          "expression": "field.Ptr.IsValid() ? scale_range(clamp_min_max(field.Ptr.Ptr().Minutes(), 1.0, 10_000.0), 1.0, 10_000.0, -10_000.0, 10_000.0) : -10_000.0"
+        },
+        {
+          "model_name": "DeveloperSnapshot",
+          "field": "TweetsPublicMetrics",
+          "weight": 0.75,
+          "expression": "field.Val != nil ? [clamp(float(field.Val.Impressions), 1000.0), clamp(float(field.Val.URLLinkClicks), 1000.0), clamp(float(field.Val.UserProfileClicks), 1000.0), clamp(float(field.Val.Likes), 1000.0), clamp(float(field.Val.Replies), 1000.0), clamp(float(field.Val.Retweets), 1000.0), clamp(float(field.Val.Quotes), 1000.0)] : 0.0"
+        },
+        {
+          "model_name": "DeveloperSnapshot",
+          "field": "PostPublicMetrics",
+          "weight": 0.8,
+          "expression": "field.Val != nil ? [clamp(float(field.Val.Ups), 1000.0), clamp(float(field.Val.Downs), 1000.0), clamp(float(field.Val.Score), 1000.0), clamp(float(field.Val.UpvoteRatio), 1000.0), clamp(float(field.Val.NumberOfComments), 1000.0), clamp(float(field.Val.SubredditSubscribers), 1000.0)] : 0.0"
+        },
+        {
+          "model_name": "DeveloperSnapshot",
+          "field": "UserPublicMetrics",
+          "weight": 0.45,
+          "expression": "field.Val != nil ? [clamp(float(field.Val.Followers), 1000.0), clamp(float(field.Val.Following), 1000.0), scale_range(clamp(float(field.Val.Tweets), 10_000.0), 0.0, 10_000.0, 100_000.0, -1_000_000.0), clamp(float(field.Val.Listed), 1000.0)] : 0.0"
+        },
+        {
+          "model_name": "DeveloperSnapshot",
+          "field": "RedditPublicMetrics",
+          "weight": 0.55,
+          "expression": "field.Val != nil ? [clamp(float(field.Val.PostKarma), 5000.0), clamp(float(field.Val.CommentKarma), 5000.0)] : 0.0"
+        },
+        {
+          "model_name": "DeveloperSnapshot",
+          "field": "ContextAnnotationSet",
+          "weight": 0.55,
+          "expression": "field.Val != nil ? map(field.Val.ToSlice(), {#.Domain.Value()}) : 0.0"
+        },
+        {
+          "model_name": "DeveloperSnapshot",
+          "field": "Games",
+          "weight": 0.7,
+          "expression": "field.Val == 0.0 ? -15_000_000.0 : scale_range(clamp(float(field.Val), 100.0), 1.0, 100.0, 100_000.0, -5_000_000.0)"
+        },
+        {
+          "model_name": "DeveloperSnapshot",
+          "field": "GameWeightedScoresSum",
+          "weight": 0.8,
+          "expression": "model.Games > 0 ? field.Val / float(model.Games) : 0.0"
+        },
+        {
+          "model_name": "DeveloperSnapshot",
+          "field": "TimesHighlighted",
+          "weight": 0.9,
+          "expression": "float(field.Val) * -10000.0"
+        }
+      ],
+      "Game": [
+        {
+          "model_name": "Game",
+          "field": "Publisher",
+          "weight": 0.55,
+          "expression": "field.Val.IsValid() ? -100000.0 : 4000.0"
+        },
+        {
+          "model_name": "Game",
+          "field": "TotalReviews",
+          "weight": 0.75,
+          "expression": "field.Val.IsValid() ? scale_range(clamp(float(field.Val.Int32 + 1), 5000.0), 1.0, 5000.0, 1000000.0, -1000000.0) : 0.0"
+        },
+        {
+          "model_name": "Game",
+          "field": "ReviewScore",
+          "weight": 0.65,
+          "expression": "field.Val.IsValid() ? field.Val.Float64 * 1500.0 : 0.0"
+        },
+        {
+          "model_name": "Game",
+          "field": "TotalUpvotes",
+          "weight": 0.45,
+          "expression": "field.Val.IsValid() ? scale_range(clamp(float(field.Val.Int32 * 2), 5000.0) * 2.0, 0.0, 10000.0, -1000.0, 10000.0) : 0.0"
+        },
+        {
+          "model_name": "Game",
+          "field": "TotalDownvotes",
+          "weight": 0.25,
+          "expression": "field.Val.IsValid() ? scale_range(clamp(float(field.Val.Int32 * 2), 5000.0) * 2.0, 0.0, 10000.0, -1000.0, 10000.0) : 0.0"
+        },
+        {
+          "model_name": "Game",
+          "field": "TotalComments",
+          "weight": 0.35,
+          "expression": "field.Val.IsValid() ? scale_range(clamp(float(field.Val.Int32 * 2), 5000.0) * 2.0, 0.0, 10000.0, -1000.0, 10000.0) : 0.0"
+        },
+        {
+          "model_name": "Game",
+          "field": "TagScore",
+          "weight": 0.25,
+          "expression": "field.Val.IsValid() ? field.Val.Float64 : 0.0"
+        },
+        {
+          "model_name": "Game",
+          "field": "Updates",
+          "weight": -0.15,
+          "expression": "float(field.Val + 1) / 1500.0"
+        },
+        {
+          "model_name": "Game",
+          "field": "ReleaseDate",
+          "weight": 0.7,
+          "expression": "field.Val.IsValid() && !field.Val.Time.IsZero() ? (abs(int(field.Val.Time.Sub(now())) - int(duration(\"month\"))) > int(duration(\"month\")) * 5 ? duration(boolMap(-1, 1)[int(field.Val.Time.Sub(now())) - int(duration(\"month\")) < 0] * int(duration(\"month\")) * 5).Hours() : duration(int(field.Val.Time.Sub(now())) - int(duration(\"month\"))).Hours()) : 0.0"
+        },
+        {
+          "model_name": "Game",
+          "field": "Votes",
+          "weight": 0.8,
+          "expression": "float(field.Val * 100000)"
+        }
+      ],
+      "SteamApp": [
+        {
+          "model_name": "SteamApp",
+          "field": "Publisher",
+          "weight": 0.55,
+          "expression": "field.Val.IsValid() ? -120000.0 : 4000.0"
+        },
+        {
+          "model_name": "SteamApp",
+          "field": "TotalReviews",
+          "weight": 0.75,
+          "expression": "scale_range(clamp(float(field.Val + 1), 5000.0), 1.0, 5000.0, 1000000.0, -1000000.0)"
+        },
+        {
+          "model_name": "SteamApp",
+          "field": "ReviewScore",
+          "weight": 0.65,
+          "expression": "field.Val * 1500.0"
+        },
+        {
+          "model_name": "SteamApp",
+          "field": "TotalUpvotes",
+          "weight": 0.45,
+          "expression": "scale_range(clamp(float(field.Val), 5000.0) * 2.0, 0.0, 10000.0, -1000.0, 10000.0)"
+        },
+        {
+          "model_name": "SteamApp",
+          "field": "TotalDownvotes",
+          "weight": 0.25,
+          "expression": "scale_range(clamp(float(field.Val), 5000.0) * 2.0, 0.0, 10000.0, -1000.0, 10000.0)"
+        },
+        {
+          "model_name": "SteamApp",
+          "field": "TotalComments",
+          "weight": 0.35,
+          "expression": "scale_range(clamp(float(field.Val), 5000.0) * 2.0, 0.0, 10000.0, -1000.0, 10000.0)"
+        },
+        {
+          "model_name": "SteamApp",
+          "field": "TagScore",
+          "weight": 0.25,
+          "expression": "field.Val == 0 && model.ReleaseDate.After(now()) ? 5000.0 : field.Val"
+        },
+        {
+          "model_name": "SteamApp",
+          "field": "Updates",
+          "weight": -0.55,
+          "expression": "field.Val == 0 ? float(field.Val + 1) / 150000.0 : float(field.Val + 1) / 1500.0"
+        },
+        {
+          "model_name": "SteamApp",
+          "field": "AssetModifiedTime",
+          "weight": 0.2,
+          "expression": "scale_range(duration(clamp(float(now().Sub(field.Val)), float(duration(\"month\")) * 5.0)).Hours(), 0.0, 24.0 * 30.0 * 5.0, 2000.0, 0.0)"
+        },
+        {
+          "model_name": "SteamApp",
+          "field": "CreatedAt",
+          "weight": 0.8,
+          "expression": "scale_range(duration(clamp(float(now().Sub(field.Val)), float(duration(\"month\")) * 5.0)).Hours(), 0.0, 24.0 * 30.0 * 5.0, 2000.0, 0.0)"
+        },
+        {
+          "model_name": "SteamApp",
+          "field": "ReleaseDate",
+          "weight": 0.6,
+          "expression": "duration(abs(int(field.Val.Sub(now())) - int(duration(\"month\"))) > int(duration(\"month\")) * 5 ? boolMap(-1, 1)[int(field.Val.Sub(now())) - int(duration(\"month\")) < 0] * int(duration(\"month\")) * 5 : int(field.Val.Sub(now())) - int(duration(\"month\"))).Hours()"
+        },
+        {
+          "model_name": "SteamApp",
+          "field": "TimesHighlighted",
+          "weight": 0.9,
+          "expression": "float(field.Val) * -10000.0"
+        },
+        {
+          "model_name": "SteamApp",
+          "field": "OwnersOnly",
+          "weight": 0.7,
+          "expression": "boolMap(-100000.0, 100.0)[field.Val]"
+        },
+        {
+          "model_name": "SteamApp",
+          "field": "HasStorepage",
+          "weight": 0.7,
+          "expression": "boolMap(100.0, -50000.0)[field.Val]"
+        },
+        {
+          "model_name": "SteamApp",
+          "field": "Votes",
+          "weight": 0.8,
+          "expression": "float(field.Val * 100000)"
+        }
+      ]
+    },
     "constants": {
       "scout_timeout": "5h",
       "transform_tweet_workers": 5,
@@ -419,9 +643,9 @@ game-scout has a Monday integration to mirror over each [Game](db/models/game.go
 | Signature                                             | Description                                                                                                                                                                                                                                                               | Example                                                                                                                                                                                                                                                    |
 |-------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `db() *gorm.DB`                                       | Returns the default DB connection used by game-scout to connect to the PostgreSQL ORM.                                                                                                                                                                                    | `game.VerifiedDeveloper(db())`: Calls the VerifiedDeveloper method for a Game/SteamApp which requires a `*gorm.DB` instance.                                                                                                                               |
-| `str(v any) string)`                                  | Returns the string representation of the given value. This is done using `fmt.Sprintf` and the `%v` verb.                                                                                                                                                                 | `str(game.ID)`: Converts the `uint64` ID of a SteamApp to a string.                                                                                                                                                                                        |
-| `sprintf(format string, a ...any)`                    | `fmt.Sprintf` function.                                                                                                                                                                                                                                                   | `sprintf("https://twitter.com/%s", game.GetVerifiedDeveloperUsernames()[0])`: Constructs a URL for the Twitter handle for a Game.                                                                                                                          |
-| `now()`                                               | Returns the result of `time.Now().UTC()`.                                                                                                                                                                                                                                 | `build_date(now())`: Builds a `monday.DateTime` for _**_today_**_.                                                                                                                                                                                         |
+| `str(v any) string`                                   | Returns the string representation of the given value. This is done using `fmt.Sprintf` and the `%v` verb.                                                                                                                                                                 | `str(game.ID)`: Converts the `uint64` ID of a SteamApp to a string.                                                                                                                                                                                        |
+| `sprintf(format string, a ...any) string`             | `fmt.Sprintf` function.                                                                                                                                                                                                                                                   | `sprintf("https://twitter.com/%s", game.GetVerifiedDeveloperUsernames()[0])`: Constructs a URL for the Twitter handle for a Game.                                                                                                                          |
+| `now() time.Time`                                     | Returns the result of `time.Now().UTC()`.                                                                                                                                                                                                                                 | `build_date(now())`: Builds a `monday.DateTime` for _**_today_**_.                                                                                                                                                                                         |
 | `build_date(t time.Time) monday.DateTime`             | Returns a `monday.DateTime` that can be used when POSTing to the Monday API to set Date columns on Monday. The time segment of the given time will be zeroed so just the date, month and year is set.                                                                     | `build_date(now())`: Builds a `monday.DateTime` for _**_today_**_.                                                                                                                                                                                         |
 | `build_date_time(t time.Time) monday.DateTime`        | Returns a `monday.DateTime` that can be used when POSTing to the Monday API to set DateTime columns on Monday.                                                                                                                                                            | `build_date_time(now())`: Builds a `monday.DateTime` for **_now_**.                                                                                                                                                                                        |
 | `build_status_index(index int) monday.StatusIndex`    | Returns a `monday.StatusIndex` that can be used when POSTing to the Monday API to set Status columns by index on Monday. The given integer should be an index of an existing label for the mapped status column.                                                          | `build_status_index(0)`: Builds a `monday.StatusIndex` for the first label.                                                                                                                                                                                |
@@ -456,11 +680,48 @@ The [`monday`](monday) package contains all the types and bindings that are used
 
 This contains the settings for the scrape procedures that are run for the different supported Storefronts, as well as general configuration settings/constants for game-scout. At the moment, the only supported Storefronts are [Steam](https://store.steampowered.com/) and [Itch.IO](https://itch.io/).
 
-| Key           | Type                             | Description                                                                                                                |
-|---------------|----------------------------------|----------------------------------------------------------------------------------------------------------------------------|
-| `debug`       | `bool`                           | Used as a sort of global debug flag throughout the game-scout system                                                       |
-| `storefronts` | `[]*StorefrontConfig` as `array` | The configurations for each supported storefront. See the [Storefront config](#storefront-config) section for more details |
-| `constants`   | `ScrapeConstants` as `object`    | The constants used throughout the Scout procedure as well as the ScoutWebPipes co-process                                  |
+| Key                          | Type                                                    | Description                                                                                                                                                                                                                                                                            |
+|------------------------------|---------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `debug`                      | `bool`                                                  | Used as a sort of global debug flag throughout the game-scout system                                                                                                                                                                                                                   |
+| `storefronts`                | `[]*StorefrontConfig` as `array`                        | The configurations for each supported storefront. See the [Storefront config](#storefront-config) section for more details                                                                                                                                                             |
+| `weighted_model_expressions` | `map[string][]*WeightedModelFieldEvaluator` as `object` | Mapping of [`models.WeightedModel`](db/models/fields.go) names (with no package prefix) to an array of [`WeightedModelFieldEvaluator`s](config.go) that are used to calculate each the value of each field which contributes to the weighted score of a models.WeightedModel instance. |
+| `constants`                  | `ScrapeConstants` as `object`                           | The constants used throughout the Scout procedure as well as the ScoutWebPipes co-process                                                                                                                                                                                              |
+
+#### Weighted model field evaluators
+
+| Key          | Type      | Description                                                                                                                                                                                                                                                                                                                                              |
+|--------------|-----------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `model_name` | `string`  | The name of the [`models.WeightedModel`](db/models/fields.go) that this `WeightedModelFieldEvaluator` is for. This is not prefixed by the package name.                                                                                                                                                                                                  |
+| `field`      | `string`  | The name of the `field` within the `models.WeightedModel` instance that this `WeightedModelFieldEvaluator` will evaluate.                                                                                                                                                                                                                                |
+| `weight`     | `float64` | The weight of this `field`, which affects how much it influences the weighted score/weighted average for each `models.WeightedModel` instance. If this is negative, then the value produced by the evaluated `expression` will have its inverse taken before multiplying by the `weight`.                                                                |
+| `expression` | `string`  | The raw source code for the expression that will be compiled by [`Compile`](config.go) to produce a `vm.Program` that is used to calculate the weighted value for this `field` for a `models.WeightedModel` instance. The `expression` should return a `float64` value, or a list of `float64` values, that have not yet had the `weight` applied to it. |
+
+
+`WeightedModelFieldEvaluator`s contain expressions that calculated the value that will be used to calculate the weighted score of an instance of a [`models.WeightedModel`](db/models/fields.go). They store the `models.WeightedModel`'s name, the name of the field, the weighting of the field, and the expression that will be used to evaluate the weighted score.
+
+The weighted score for a `models.WeightedModel` instance is a weighted average of all the values for each field with an expression. A negative weight for a field indicates that the inverse of the `models.WeightedModel` instance should be taken first before that value is multiplied by the weight.
+
+On startup, the expressions for each field for each `models.WeightedModel` will be compiled. Each expression is passed the following variables:
+
+- **"model"**: The `models.WeightedModel` instance.
+- **"field.Val"**: The value of the appropriate field from the models.WeightModel instance.
+- **"field.Ptr"**: A pointer to the value of "field.Val". This is useful when the field value has pointer receiver methods. This is only set if the "field" value can be addressed by reflect.
+
+As well as these variables, the following functions are also provided:
+
+| Signature                                                                                                   | Description                                                                                                                                                                                                                                                                                                                                                                                                                                       | Example                                                                                                                                                                                             |
+|-------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| <code>abs(x int&#124;uint&#124;float&#124;time.Duration) int&#124;uint&#124;float&#124;time.Duration</code> | Returns the absolute value of `x`.                                                                                                                                                                                                                                                                                                                                                                                                                | `abs(duration("month"))`: Returns the absolute value of the `time.Duration` for a month. I.e. calls `time.Duration.Abs()`.                                                                          |
+| <code>float(x int&#124;uint&#124;float&#124;time.Duration) float64</code>                                   | Returns the value `x` as a `float64`.                                                                                                                                                                                                                                                                                                                                                                                                             | `float(1)`: Returns the `float64` representation of the integer literal: `1`, which would be `1.0`.                                                                                                 |
+| <code>int(x int&#124;uint&#124;float&#124;time.Duration) int64</code>                                       | Returns the value `x` as a `int64`.                                                                                                                                                                                                                                                                                                                                                                                                               | `int(1.0)`: Returns the `int64` representation of the floating-point literal: `1.0`, which would be `1`.                                                                                            |
+| <code>scale_range(x, xMin, xMax, yMin, yMax float64) float64</code>                                         | Scales the given float `x`, that is between `xMin` and `xMax`, so that it is between `yMin` and `yMax`. Also supports inverse ranges, where `yMax` is less than the `yMin`.                                                                                                                                                                                                                                                                       | `scale_range(50.0, 0.0, 100.0, 0.0, 1.0)`: Scales the floating-point literal: `50.0`, that is between `0.0` and `100.0`, so that it is between `0.0` and `1.0`. This invocation would return `0.5`. |
+| <code>clamp(x, max float64) float64</code>                                                                  | Clamps `x` to a maximum of `max`.                                                                                                                                                                                                                                                                                                                                                                                                                 | `clamp(1.1, 1.0)`: Clamps `1.1` to a maximum of `1.0`. This invocation would return `1.0`.                                                                                                          |
+| <code>clamp_min_max(x, min, max float64) float64</code>                                                     | Clamps `x` to a minimum of `min`, and a maximum of `max`.                                                                                                                                                                                                                                                                                                                                                                                         | `clamp_min_max(-0.1, 0.0, 1.0)`: Clamps `-0.1` to a minimum of `0.0`, and a maximum of `1.0`. This invocation would return `0.0`.                                                                   |
+| <code>now() time.Time</code>                                                                                | Returns the result of `time.Now().UTC()`.                                                                                                                                                                                                                                                                                                                                                                                                         | `now()`: Returns the time now in UTC.                                                                                                                                                               |
+| <code>duration(x string&#124;time.Duration&#124;int&#124;int64) time.Duration</code>                        | If `x` is one of the following `string`s: `"nanosecond"`, `"microsecond"`, `"millisecond"`, `"second"`, `"minute"`, `"hour"`, `"day"`, `"week"`, or `"month"` then a `time.Duration` representing that duration will be returned. Otherwise, the `string` will be parsed into a `time.Duration` using `time.ParseDuration`. If `x` is not a `string` then it will be cast to an `int64` and converted to a `time.Duration` instance and returned. | `duration("month")`: Returns the equivalent of `time.Hour * 24 * 30`.                                                                                                                               |
+| <code>boolMap(y, n any) map[bool]any</code>                                                                 | Constructs a `map[bool]any` where `y` will be bound to the `true` key, and `n` will be bound to the `false` key.                                                                                                                                                                                                                                                                                                                                  | `boolMap("yes", "no")[boolVar]`: Implements a simple yes-or-no switch for a boolean value.                                                                                                          |
+
+**When `int`, `uint`, or `float` are written, this refers to all possible bit sizes.**
 
 #### Storefront config
 

@@ -888,6 +888,11 @@ func main() {
 					Required: false,
 				},
 				cli.BoolFlag{
+					Name:     "snapshots",
+					Usage:    "snapshots for the developer",
+					Required: false,
+				},
+				cli.BoolFlag{
 					Name:     "trend",
 					Usage:    "find the trend of a Developer's snapshots",
 					Required: false,
@@ -976,7 +981,11 @@ func main() {
 						fmt.Printf("\tDeveloper %v, has %d games:\n", developer, len(games))
 						if len(games) > 0 {
 							for i, game := range games {
-								fmt.Printf("\t\t%d) %v\n", i+1, game)
+								var weightedAverage float64
+								if weightedAverage, err = globalConfig.Scrape.ScrapeWeightedModelCalc(game); err != nil {
+									return cli.NewExitError(err.Error(), 1)
+								}
+								fmt.Printf("\t\t%d) %v, calculated score = %f\n", i+1, game, weightedAverage)
 							}
 						}
 					}
@@ -1058,6 +1067,21 @@ func main() {
 							if err = state.Save(); err != nil {
 								return cli.NewExitError(err.Error(), 1)
 							}
+						}
+					}
+
+					if c.Bool("snapshots") {
+						var snapshots []*models.DeveloperSnapshot
+						if snapshots, err = developer.DeveloperSnapshots(db.DB); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+						for i, snapshot := range snapshots {
+							fmt.Printf("Snapshot %d for Developer %v: %+v\n", i+1, developer, snapshot)
+							var weightedAverage float64
+							if weightedAverage, err = globalConfig.Scrape.ScrapeWeightedModelCalc(snapshot); err != nil {
+								return cli.NewExitError(err.Error(), 1)
+							}
+							fmt.Printf("Calculated score = %f\n", weightedAverage)
 						}
 					}
 
@@ -1512,6 +1536,11 @@ func main() {
 					Required: false,
 				},
 				cli.BoolFlag{
+					Name:     "weightedScore",
+					Usage:    "calculate the weighted score",
+					Required: false,
+				},
+				cli.BoolFlag{
 					Name:     "measureWatched",
 					Usage:    "execute the Measure template for this SteamApp but treat it as though it has been Watched",
 					Required: false,
@@ -1554,6 +1583,14 @@ func main() {
 
 					if c.Bool("measureWatched") {
 						measureContext.WatchedSteamApps[steamAppNo] = &steamApp
+					}
+
+					if c.Bool("weightedScore") {
+						var weightedAverage float64
+						if weightedAverage, err = globalConfig.Scrape.ScrapeWeightedModelCalc(&steamApp); err != nil {
+							return cli.NewExitError(err.Error(), 1)
+						}
+						fmt.Printf("Calculated score = %f\n", weightedAverage)
 					}
 
 					if c.Bool("printAfter") {
