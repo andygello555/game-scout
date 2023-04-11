@@ -6,6 +6,7 @@ import (
 	"github.com/RichardKnop/machinery/v1/log"
 	"github.com/andygello555/game-scout/browser"
 	urlfmt "github.com/andygello555/url-fmt"
+	"github.com/antonmedv/expr/vm"
 	mapset "github.com/deckarep/golang-set/v2"
 	"gorm.io/gorm"
 	"math/rand"
@@ -129,12 +130,36 @@ type ScrapeConstants interface {
 	DefaultMinDelay() time.Duration
 }
 
+type EvaluatorConfig interface {
+	EvaluatorModelName() string
+	EvaluatorField() string
+	EvaluatorExpression() string
+	EvaluatorCompiledExpression() *vm.Program
+	WeightAndInverse() (float64, bool)
+	ModelType() reflect.Type
+	ModelField(modelInstance any) any
+	Env(modelInstance any) map[string]any
+	Eval(modelInstance any) ([]float64, error)
+}
+
 // ScrapeConfig contains the configuration for the scrape.
 type ScrapeConfig interface {
 	ScrapeDebug() bool
 	ScrapeStorefronts() []StorefrontConfig
 	ScrapeGetStorefront(storefront Storefront) StorefrontConfig
 	ScrapeConstants() ScrapeConstants
+	ScrapeFieldEvaluatorForWeightedModelField(model any, field string) (evaluator EvaluatorConfig, err error)
+	ScrapeEvalForWeightedModelField(modelInstance any, field string) (values []float64, err error)
+	ScrapeWeightedModelCalc(modelInstance any) (weightedAverage float64, err error)
+}
+
+// scrapeConfig is a package-wide variable containing the ScrapeConfig, this is necessary for calculating the weighted
+// score of model instances.
+var scrapeConfig ScrapeConfig
+
+// SetScrapeConfig will set the package-wide ScrapeConfig variable for the models package.
+func SetScrapeConfig(config ScrapeConfig) {
+	scrapeConfig = config
 }
 
 // ScrapableGameSource represents a source that can be scraped for a GameModelStorefrontScraper for a Storefront.

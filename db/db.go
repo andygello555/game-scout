@@ -259,17 +259,12 @@ func UpdateComputedFieldsForModels(modelNames []string, pks []any) (err error) {
 									panic(workerErr)
 								}
 
-								//beforeScore := instance.(*myModels.DeveloperSnapshot).WeightedScore
 								// We then assert the instance to a ComputedFieldsModel and call the UpdateComputedFields
 								// method.
 								if workerErr = instance.(ComputedFieldsModel).UpdateComputedFields(DB); workerErr != nil {
 									panic(workerErr)
 								}
 
-								//afterScore := instance.(*myModels.DeveloperSnapshot).WeightedScore
-								//if afterScore != beforeScore {
-								//	log.WARNING.Printf("%f != %f", beforeScore, afterScore)
-								//}
 								// Finally, save the instance
 								if workerErr = DB.Save(instance).Error; workerErr != nil {
 									panic(workerErr)
@@ -278,8 +273,9 @@ func UpdateComputedFieldsForModels(modelNames []string, pks []any) (err error) {
 							}
 
 							log.INFO.Printf(
-								"Processed %d rows from %d to %d in %s",
-								rowsProcessed, job*pageSize, job*pageSize+pageSize, time.Now().UTC().Sub(start).String(),
+								"Processed %d rows from %d to %d/%d in %s",
+								rowsProcessed, job*pageSize, job*pageSize+pageSize, count,
+								time.Now().UTC().Sub(start).String(),
 							)
 							if workerErr = rows.Close(); workerErr != nil {
 								panic(workerErr)
@@ -370,6 +366,12 @@ func RegisterExtension(extension string) {
 // GetModel will return the DBModel from the models mapping that matches the type name of the given model.
 func GetModel(model any) *DBModel {
 	return models[reflect.TypeOf(model).Elem().Name()]
+}
+
+// GetModelByName will return the DBModel from the models mapping that matches the given name. Remember that names
+// should not be prefixed with their package name.
+func GetModelByName(name string) *DBModel {
+	return models[name]
 }
 
 // connectPostgres connects to the postgres DB via GORM. It returns the gorm.DB as well as a function to close the

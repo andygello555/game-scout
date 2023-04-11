@@ -11,13 +11,11 @@ import (
 	"github.com/andygello555/game-scout/monday"
 	"github.com/andygello555/gapi"
 	"github.com/andygello555/go-steamcmd"
-	"github.com/andygello555/gotils/v2/numbers"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/pkg/errors"
 	"github.com/volatiletech/null/v9"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	"math"
 	"net/http"
 	"reflect"
 	"regexp"
@@ -107,197 +105,6 @@ type SteamApp struct {
 	WeightedScore null.Float64
 }
 
-// steamAppWeight represents a weight for a steamAppWeightedField. If the steamAppWeight is negative then this means to
-// take the inverse of the value first, then multiply it by the math.Abs(steamAppWeight).
-type steamAppWeight float64
-
-const (
-	SteamAppPublisherWeight         steamAppWeight = 0.55
-	SteamAppTotalReviewsWeight      steamAppWeight = 0.75
-	SteamAppReviewScoreWeight       steamAppWeight = 0.65
-	SteamAppTotalUpvotesWeight      steamAppWeight = 0.45
-	SteamAppTotalDownvotesWeight    steamAppWeight = 0.25
-	SteamAppTotalCommentsWeight     steamAppWeight = 0.35
-	SteamAppTagScoreWeight          steamAppWeight = 0.25
-	SteamAppUpdatesWeight           steamAppWeight = -0.55
-	SteamAppAssetModifiedTimeWeight steamAppWeight = 0.2
-	SteamAppCreatedAtWeight         steamAppWeight = 0.8
-	SteamAppReleaseDateWeight       steamAppWeight = 0.6
-	SteamAppTimesHighlightedWeight  steamAppWeight = 0.9
-	SteamAppOwnersOnlyWeight        steamAppWeight = 0.7
-	SteamAppHasStorepageWeight      steamAppWeight = 0.7
-	SteamAppVotesWeight             steamAppWeight = 0.8
-)
-
-// steamAppWeightedField represents a field that can have a weighting calculation applied to it in SteamApp.
-type steamAppWeightedField string
-
-const (
-	SteamAppPublisher         steamAppWeightedField = "Publisher"
-	SteamAppTotalReviews      steamAppWeightedField = "TotalReviews"
-	SteamAppReviewScore       steamAppWeightedField = "ReviewScore"
-	SteamAppTotalUpvotes      steamAppWeightedField = "TotalUpvotes"
-	SteamAppTotalDownvotes    steamAppWeightedField = "TotalDownvotes"
-	SteamAppTotalComments     steamAppWeightedField = "TotalComments"
-	SteamAppTagScore          steamAppWeightedField = "TagScore"
-	SteamAppUpdates           steamAppWeightedField = "Updates"
-	SteamAppAssetModifiedTime steamAppWeightedField = "AssetModifiedTime"
-	SteamAppCreatedAt         steamAppWeightedField = "CreatedAt"
-	SteamAppReleaseDate       steamAppWeightedField = "ReleaseDate"
-	SteamAppTimesHighlighted  steamAppWeightedField = "TimesHighlighted"
-	SteamAppOwnersOnly        steamAppWeightedField = "OwnersOnly"
-	SteamAppHasStorepage      steamAppWeightedField = "HasStorepage"
-	SteamAppVotes             steamAppWeightedField = "Votes"
-)
-
-// String returns the string value of the gameWeightedField.
-func (sf steamAppWeightedField) String() string { return string(sf) }
-
-// Weight returns the steamAppWeight for a steamAppWeightedField, as well as whether the value should have its inverse
-// taken first.
-func (sf steamAppWeightedField) Weight() (w float64, inverse bool) {
-	switch sf {
-	case SteamAppPublisher:
-		w = float64(SteamAppPublisherWeight)
-	case SteamAppTotalReviews:
-		w = float64(SteamAppTotalReviewsWeight)
-	case SteamAppReviewScore:
-		w = float64(SteamAppReviewScoreWeight)
-	case SteamAppTotalUpvotes:
-		w = float64(SteamAppTotalUpvotesWeight)
-	case SteamAppTotalDownvotes:
-		w = float64(SteamAppTotalDownvotesWeight)
-	case SteamAppTotalComments:
-		w = float64(SteamAppTotalCommentsWeight)
-	case SteamAppTagScore:
-		w = float64(SteamAppTagScoreWeight)
-	case SteamAppUpdates:
-		w = float64(SteamAppUpdatesWeight)
-	case SteamAppAssetModifiedTime:
-		w = float64(SteamAppAssetModifiedTimeWeight)
-	case SteamAppCreatedAt:
-		w = float64(SteamAppCreatedAtWeight)
-	case SteamAppReleaseDate:
-		w = float64(SteamAppReleaseDateWeight)
-	case SteamAppTimesHighlighted:
-		w = float64(SteamAppTimesHighlightedWeight)
-	case SteamAppOwnersOnly:
-		w = float64(SteamAppOwnersOnlyWeight)
-	case SteamAppHasStorepage:
-		w = float64(SteamAppHasStorepageWeight)
-	case SteamAppVotes:
-		w = float64(SteamAppVotesWeight)
-	default:
-		panic(fmt.Errorf("\"%s\" is not a steamAppWeightedField", sf))
-	}
-	inverse = w < 0.0
-	w = math.Abs(w)
-	return
-}
-
-// GetValueFromWeightedModel uses reflection to get the value of the steamAppWeightedField from the given SteamApp, and
-// will return a list of floats for use in the calculation of the SteamApp.WeightedScore.
-func (sf steamAppWeightedField) GetValueFromWeightedModel(model WeightedModel) []float64 {
-	r := reflect.ValueOf(model)
-	f := reflect.Indirect(r).FieldByName(sf.String())
-	switch sf {
-	case SteamAppPublisher:
-		nullString := f.Interface().(null.String)
-		val := -7000.0
-		if !nullString.IsValid() {
-			val = 4000.0
-		}
-		return []float64{val}
-	case SteamAppTotalReviews:
-		totalReviews := f.Int() + 1
-		if totalReviews > 5000 {
-			totalReviews = 5000
-		}
-		return []float64{numbers.ScaleRange(float64(totalReviews), 1.0, 5000.0, 1000000.0, -1000000.0)}
-	case SteamAppReviewScore:
-		return []float64{f.Float() * 1500.0}
-	case SteamAppTotalUpvotes, SteamAppTotalDownvotes, SteamAppTotalComments:
-		total := f.Int()
-		if total > 5000 {
-			total = 5000
-		}
-		return []float64{numbers.ScaleRange(float64(total*2), 0, 10000, -1000, 10000)}
-	case SteamAppTagScore:
-		// If the game has no tags and a release date that is in the future, we will give the tag score a boost
-		tagScore := f.Float()
-		if f.Float() == 0 && reflect.Indirect(r).FieldByName("ReleaseDate").Interface().(time.Time).After(time.Now().UTC()) {
-			tagScore = 5000
-		}
-		return []float64{tagScore}
-	case SteamAppUpdates:
-		updates := f.Uint()
-		// Give a boost to the score when on the first update
-		if updates == 0 {
-			return []float64{float64(updates+1) / 150000.0}
-		}
-		return []float64{float64(updates+1) / 1500.0}
-	case SteamAppAssetModifiedTime, SteamAppCreatedAt:
-		// The value for a time is calculated by subtracting the time value from the time now, then clamping
-		// this duration to be +5 months, then finally scale the number of hours to be between the range 2000-0 (inverse
-		// range).
-		// Note: these times will always be before or equal to the current time, so we don't have to deal with
-		//       negative clamping.
-		timeDiff := time.Now().UTC().Sub(f.Interface().(time.Time))
-		if timeDiff > time.Hour*24*30*5 {
-			timeDiff = time.Hour * 24 * 30 * 5
-		}
-		return []float64{numbers.ScaleRange(timeDiff.Hours(), 0, 24*30*5, 2000, 0)}
-	case SteamAppReleaseDate:
-		// The value for release date is calculated by subtracting the time now from the release date, then finding the
-		// hours for that duration. We also subtract 1 month from the duration, so we still look positively on games
-		// that have been released one month before today. Finally, we clamp the duration to be between +/- 5
-		// months.
-		timeDiff := f.Interface().(time.Time).Sub(time.Now().UTC()) - time.Hour*24*30
-		if timeDiff.Abs() > time.Hour*24*30*5 {
-			timeDiff = map[bool]time.Duration{true: -1, false: 1}[timeDiff < 0] * time.Hour * 24 * 30 * 5
-		}
-		return []float64{timeDiff.Hours()}
-	case SteamAppTimesHighlighted:
-		// TimesHighlighted is turned into a negative number that is in the thousands, we really don't want highlighted
-		// developers to come up again.
-		return []float64{float64(f.Int()) * -10000.0}
-	case SteamAppOwnersOnly:
-		return []float64{map[bool]float64{
-			true:  -100000.0,
-			false: 100.0,
-		}[f.Bool()]}
-	case SteamAppHasStorepage:
-		return []float64{map[bool]float64{
-			true:  100.0,
-			false: -50000.0,
-		}[f.Bool()]}
-	case SteamAppVotes:
-		return []float64{float64(f.Int() * 100000)}
-	default:
-		panic(fmt.Errorf("steamAppWeightedField \"%s\" is not recognized, and cannot be converted to []float64", sf))
-	}
-}
-
-func (sf steamAppWeightedField) Fields() []WeightedField {
-	return []WeightedField{
-		SteamAppPublisher,
-		SteamAppTotalReviews,
-		SteamAppReviewScore,
-		SteamAppTotalUpvotes,
-		SteamAppTotalDownvotes,
-		SteamAppTotalComments,
-		SteamAppTagScore,
-		SteamAppUpdates,
-		SteamAppAssetModifiedTime,
-		SteamAppCreatedAt,
-		SteamAppReleaseDate,
-		SteamAppTimesHighlighted,
-		SteamAppOwnersOnly,
-		SteamAppHasStorepage,
-		SteamAppVotes,
-	}
-}
-
 func (app *SteamApp) String() string {
 	return fmt.Sprintf("\"%s\" (%d)", app.Name, app.ID)
 }
@@ -323,7 +130,11 @@ func (app *SteamApp) UpdateComputedFields(tx *gorm.DB) (err error) {
 	// Calculate the WeightedScore
 	app.WeightedScore = null.Float64FromPtr(nil)
 	if app.CheckCalculateWeightedScore() {
-		app.WeightedScore = null.Float64From(CalculateWeightedScore(app, SteamAppUpdates))
+		var weightedScore float64
+		if weightedScore, err = scrapeConfig.ScrapeWeightedModelCalc(app); err != nil {
+			return
+		}
+		app.WeightedScore = null.Float64From(weightedScore)
 	}
 	return
 }
