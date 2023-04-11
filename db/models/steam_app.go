@@ -27,7 +27,6 @@ import (
 )
 
 func init() {
-	gob.Register(SteamApp{})
 	gob.Register(&SteamApp{})
 }
 

@@ -16,7 +16,6 @@ import (
 )
 
 func init() {
-	gob.Register(Trend{})
 	gob.Register(&Trend{})
 }
 

@@ -30,7 +30,6 @@ import (
 )
 
 func init() {
-	gob.Register(Game{})
 	gob.Register(&Game{})
 }
 
