@@ -190,14 +190,14 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 		nullFloat64 := f.Interface().(null.Float64)
 		var val float64
 		if nullFloat64.IsValid() {
-			val = (*nullFloat64.Ptr()) * 1500.0
+			val = nullFloat64.Float64 * 1500.0
 		}
 		return []float64{val}
 	case GameTotalReviews:
 		nullInt32 := f.Interface().(null.Int32)
 		var val float64
 		if nullInt32.IsValid() {
-			valInt := (*nullInt32.Ptr()) + 1
+			valInt := nullInt32.Int32 + 1
 			if valInt > 5000 {
 				valInt = 5000
 			}
@@ -208,7 +208,7 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 		nullInt32 := f.Interface().(null.Int32)
 		var val float64
 		if nullInt32.IsValid() {
-			val = float64(*nullInt32.Ptr()) * 2
+			val = float64(nullInt32.Int32) * 2.0
 			if val > 5000 {
 				val = 5000
 			}
@@ -219,7 +219,7 @@ func (gf gameWeightedField) GetValueFromWeightedModel(model WeightedModel) []flo
 		nullInt64 := f.Interface().(null.Float64)
 		var val float64
 		if nullInt64.IsValid() {
-			val = *nullInt64.Ptr()
+			val = nullInt64.Float64
 		}
 		return []float64{val}
 	case GameUpdates:

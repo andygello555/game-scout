@@ -863,6 +863,33 @@ var weightedModelEvaluatorFunctions = []expr.Option{
 	expr.Function("clamp_min_max", func(params ...interface{}) (interface{}, error) {
 		return numbers.ClampMinMax(params[0].(float64), params[1].(float64), params[2].(float64)), nil
 	}, new(func(x, min, max float64) float64)),
+	expr.Function("now", func(params ...interface{}) (interface{}, error) {
+		return time.Now().UTC(), nil
+	}, time.Now),
+	expr.Function("duration", func(params ...interface{}) (interface{}, error) {
+		switch strings.ToLower(params[0].(string)) {
+		case "nanosecond", "":
+			return time.Nanosecond, nil
+		case "microsecond":
+			return time.Microsecond, nil
+		case "millisecond":
+			return time.Millisecond, nil
+		case "second":
+			return time.Second, nil
+		case "minute":
+			return time.Minute, nil
+		case "hour":
+			return time.Hour, nil
+		case "day":
+			return time.Hour * 24, nil
+		case "week":
+			return time.Hour * 24 * 7, nil
+		case "month":
+			return time.Hour * 24 * 30, nil
+		default:
+			return time.ParseDuration(params[0].(string))
+		}
+	}, new(func(string) time.Duration)),
 }
 
 func (wmf *WeightedModelFieldEvaluator) Env(modelInstance any) map[string]any {
