@@ -643,9 +643,7 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 		// RecentSearch binding, or checkDeveloper is zero (we cannot make this request as there are too many
 		// developers)
 		for totalTweetsForEachDeveloper < myTwitter.RecentSearch.Binding().MinResourcesPerRequest && checkDeveloperNo > 0 {
-			unscrapedDevelopersQuery.Model(&models.Developer{}).Joins(
-				"left join developer_snapshots on developer_snapshots.developer_id = developer.id",
-			).Where(
+			unscrapedDevelopersQuery.Model(&models.Developer{}).Where(
 				"developer_snapshots.weighted_score IS NOT NULL AND developers.type = ?",
 				models.TwitterDeveloperType,
 			).Order(
