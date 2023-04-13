@@ -140,7 +140,7 @@ func DeletePhase(state *ScoutState) (err error) {
 	)
 
 	added := 0
-	for _, staleDeveloper := range staleDevelopers {
+	for i, staleDeveloper := range staleDevelopers {
 		var trendingDev *models.TrendingDev
 		if trendingDev, err = staleDeveloper.TrendingDev(db.DB); err != nil && !strings.Contains(err.Error(), "could not find Trend for") {
 			log.WARNING.Printf("Error occurred whilst creating TrendingDev for stale developer: %v", err)
@@ -148,7 +148,7 @@ func DeletePhase(state *ScoutState) (err error) {
 		}
 		state.GetIterableCachedField(DeletedDevelopersType).SetOrAdd(trendingDev)
 		added++
-		log.INFO.Printf("\tAdded stale Developer %v to DeletedDevelopers", staleDeveloper)
+		log.INFO.Printf("\tAdded stale Developer %d/%d %v to DeletedDevelopers", i, len(staleDevelopers), staleDeveloper)
 	}
 	log.INFO.Printf("Finished adding %d/%d stale Developers to DeletedDevelopers", added, len(staleDevelopers))
 
