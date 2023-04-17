@@ -17,10 +17,12 @@ import (
 )
 
 type ClientWrapper struct {
-	Client     *twitter.Client
-	Config     Config
-	Mutex      sync.Mutex
-	RateLimits map[BindingType]*twitter.RateLimit
+	Client        *twitter.Client
+	Config        Config
+	TweetCapMutex sync.RWMutex
+	// RateLimits stores the twitter.RateLimit for each BindingType that has been executed. Actual map type:
+	//  map[BindingType]*twitter.RateLimit
+	RateLimits sync.Map
 	TweetCap   *TweetCap
 }
 
@@ -69,7 +71,7 @@ func ClientCreate(config Config) error {
 			Host:   "https://api.twitter.com",
 		},
 		Config:     config,
-		RateLimits: make(map[BindingType]*twitter.RateLimit),
+		RateLimits: sync.Map{},
 	}
 	if err := Client.GetTweetCap(); err != nil {
 		return errors.Wrap(err, "could not create client, could not get Tweet cap")
@@ -103,6 +105,13 @@ func (tc *TweetCap) CheckFresh() bool {
 	return !(tc.LastFetched.Before(tc.Resets) && time.Now().UTC().After(tc.Resets))
 }
 
+// RateLimit returns the latest twitter.RateLimit for the given BindingType. The bool represents whether there is a
+// twitter.RateLimit for the given BindingType.
+func (w *ClientWrapper) RateLimit(bindingType BindingType) (*twitter.RateLimit, bool) {
+	rateLimitAny, ok := w.RateLimits.Load(bindingType)
+	return rateLimitAny.(*twitter.RateLimit), ok
+}
+
 // GetTweetCap will first check if the TweetCap cache file exists. If so, then it will read the TweetCap from there.
 // Otherwise, it will log in to the Twitter developer portal using browser.Browser and parse the details on the
 // dashboard to a TweetCap instance.
@@ -116,20 +125,37 @@ func (w *ClientWrapper) GetTweetCap() (err error) {
 			return err
 		}
 
-		w.TweetCap = &TweetCap{}
-		if err = json.Unmarshal(tweetCapData, w.TweetCap); err != nil {
-			return err
+		if err = func() error {
+			w.TweetCapMutex.Lock()
+			defer w.TweetCapMutex.Unlock()
+			w.TweetCap = &TweetCap{}
+			return json.Unmarshal(tweetCapData, w.TweetCap)
+		}(); err != nil {
+			return
 		}
+	}
+
+	tweetCapStringer := func() string {
+		w.TweetCapMutex.RLock()
+		defer w.TweetCapMutex.RUnlock()
+		return w.TweetCap.String()
 	}
 
 	// If the TweetCap was not loaded from a file, or the TweetCap is not fresh then we will fetch the TweetCap using a
 	// browser.Browser.
-	if w.TweetCap == nil || !w.TweetCap.CheckFresh() {
+	nilTweetCap, refresh := func() (bool, bool) {
+		w.TweetCapMutex.RLock()
+		defer w.TweetCapMutex.RUnlock()
+		nilTweetCap := w.TweetCap == nil
+		return nilTweetCap, nilTweetCap || !w.TweetCap.CheckFresh()
+	}()
+
+	if refresh {
 		message := "not fresh"
-		if w.TweetCap == nil {
+		if nilTweetCap {
 			message = "nil"
 		} else {
-			message += " (" + w.TweetCap.String() + ")"
+			message += " (" + tweetCapStringer() + ")"
 		}
 		log.INFO.Printf("\tTweetCap is %s, fetching TweetCap from web", message)
 		var b *browser.Browser
@@ -272,27 +298,43 @@ func (w *ClientWrapper) GetTweetCap() (err error) {
 			tweetCap.Resets.Location(),
 		)
 		tweetCap.LastFetched = time.Now().UTC()
-		w.TweetCap = tweetCap
-		log.INFO.Printf("\t\tSuccessfully fetched new TweetCap from web: %s", w.TweetCap.String())
+
+		func() {
+			w.TweetCapMutex.Lock()
+			defer w.TweetCapMutex.Unlock()
+			w.TweetCap = tweetCap
+		}()
+
+		log.INFO.Printf("\t\tSuccessfully fetched new TweetCap from web: %s", tweetCapStringer())
 		if err = w.WriteTweetCap(); err != nil {
 			return errors.Wrap(err, "could not write TweetCap cache file")
 		}
 		log.INFO.Printf("\tSuccessfully wrote TweetCap to %s", w.Config.TwitterTweetCapLocation())
 	}
-	log.INFO.Printf("Successfully fetched TweetCap: %s", w.TweetCap.String())
+
+	log.INFO.Printf("Successfully fetched TweetCap: %s", tweetCapStringer())
 	return nil
 }
 
 // WriteTweetCap will write the TweetCap to a JSON cache file located at DefaultTweetCapLocation.
 func (w *ClientWrapper) WriteTweetCap() (err error) {
+	// Marshall the TweetCap to JSON (whilst holding a read lock)
 	var jsonBytes []byte
-	if jsonBytes, err = json.Marshal(w.TweetCap); err != nil {
+	if jsonBytes, err = func() ([]byte, error) {
+		w.TweetCapMutex.RLock()
+		defer w.TweetCapMutex.RUnlock()
+		return json.Marshal(w.TweetCap)
+	}(); err != nil {
 		return errors.Wrap(err, "could not Marshal TweetCap to JSON")
 	}
+
+	// Create a file for the TweetCap at the location from the config
 	var file *os.File
 	if file, err = os.Create(w.Config.TwitterTweetCapLocation()); err != nil {
 		return errors.Wrapf(err, "could not create TweetCap file %s", w.Config.TwitterTweetCapLocation())
 	}
+
+	// Defer a function to close the file
 	defer func(file *os.File) {
 		err = myErrors.MergeErrors(err, errors.Wrapf(
 			file.Close(),
@@ -300,6 +342,8 @@ func (w *ClientWrapper) WriteTweetCap() (err error) {
 			w.Config.TwitterTweetCapLocation(),
 		))
 	}(file)
+
+	// Write the TweetCap JSON bytes to the file
 	if _, err = file.Write(jsonBytes); err != nil {
 		return errors.Wrapf(err, "could not write to TweetCap file %s", w.Config.TwitterTweetCapLocation())
 	}
@@ -313,8 +357,9 @@ func (w *ClientWrapper) SetTweetCap(used int, remaining int, total int, resets t
 		"Setting TweetCap to: %d used, %d remaining, %d total, %s reset, %s fetched",
 		used, remaining, total, resets.String(), lastFetched.String(),
 	)
-	w.Mutex.Lock()
-	defer w.Mutex.Unlock()
+
+	w.TweetCapMutex.Lock()
+	defer w.TweetCapMutex.Unlock()
 	if w.TweetCap == nil {
 		w.TweetCap = &TweetCap{}
 	}
@@ -356,28 +401,24 @@ func (w *ClientWrapper) CheckRateLimit(binding *Binding, totalResources int) (er
 
 	// We create copies of both the tweet cap and the current rate limit for this action (if there is one) so we don't
 	// have to lock the mutex for a long time.
-	w.Mutex.Lock()
-	tweetCap := TweetCap{
-		Used:        w.TweetCap.Used,
-		Remaining:   w.TweetCap.Remaining,
-		Total:       w.TweetCap.Total,
-		Resets:      w.TweetCap.Resets,
-		LastFetched: w.TweetCap.LastFetched,
-	}
-	rateLimit, rateLimitOk := w.RateLimits[binding.Type]
-	if rateLimitOk {
-		rateLimit = &twitter.RateLimit{
-			Limit:     rateLimit.Limit,
-			Remaining: rateLimit.Remaining,
-			Reset:     rateLimit.Reset,
+	tweetCap := func() TweetCap {
+		w.TweetCapMutex.RLock()
+		defer w.TweetCapMutex.RUnlock()
+		tweetCap := TweetCap{
+			Used:        w.TweetCap.Used,
+			Remaining:   w.TweetCap.Remaining,
+			Total:       w.TweetCap.Total,
+			Resets:      w.TweetCap.Resets,
+			LastFetched: w.TweetCap.LastFetched,
 		}
-	}
-	w.Mutex.Unlock()
+		return tweetCap
+	}()
+	rateLimit, rateLimitOk := w.RateLimit(binding.Type)
 
 	// If we don't have enough of our monthly tweet cap remaining to fetch the requested number of tweets then we will
 	// return an error.
 	if binding.ResourceType == Tweet && totalResources > tweetCap.Remaining {
-		log.WARNING.Printf("TweetCap check for %s failed when requesting %d tweets (%s)", binding.Type.String(), totalResources, w.TweetCap.String())
+		log.WARNING.Printf("TweetCap check for %s failed when requesting %d tweets (%s)", binding.Type.String(), totalResources, tweetCap.String())
 		return &RateLimitError{
 			Config:                 w.Config.TwitterRateLimits(),
 			TweetCap:               &tweetCap,
@@ -472,8 +513,7 @@ func (w *ClientWrapper) ExecuteBinding(bindingType BindingType, options *Binding
 	// and the number of requests remaining.
 	updateRateLimits := func() {
 		rateLimit := bindingResult.RateLimit()
-		w.Mutex.Lock()
-		latestRateLimit, ok := w.RateLimits[bindingType]
+		latestRateLimit, ok := w.RateLimit(bindingType)
 		update := !ok
 		if ok {
 			// We initialise some booleans to make things more readable
@@ -482,12 +522,13 @@ func (w *ClientWrapper) ExecuteBinding(bindingType BindingType, options *Binding
 			afterPeriod := rateLimit.Reset.Time().After(latestRateLimit.Reset.Time())
 			update = (samePeriod && smallerRemaining) || afterPeriod
 		}
+
 		if update {
 			log.INFO.Printf(
 				"Updating RateLimit for %s to %d/%d (%s)",
 				bindingType.String(), rateLimit.Remaining, rateLimit.Limit, rateLimit.Reset.Time().String(),
 			)
-			w.RateLimits[bindingType] = rateLimit
+			w.RateLimits.Store(bindingType, rateLimit)
 		} else {
 			log.WARNING.Printf(
 				"RateLimit for %s: %d/%d (%s) was not newer than the currently cached RateLimit for %s: %d/%d (%s)",
@@ -495,7 +536,17 @@ func (w *ClientWrapper) ExecuteBinding(bindingType BindingType, options *Binding
 				bindingType.String(), latestRateLimit.Remaining, latestRateLimit.Limit, latestRateLimit.Reset.Time().String(),
 			)
 		}
-		w.Mutex.Unlock()
+	}
+
+	getTweetCap := func(offset int) (used int, remaining int, total int, resets time.Time, lastFetched time.Time) {
+		w.TweetCapMutex.RLock()
+		defer w.TweetCapMutex.RUnlock()
+		used = w.TweetCap.Used + offset
+		remaining = w.TweetCap.Remaining - offset
+		total = w.TweetCap.Total
+		resets = w.TweetCap.Resets
+		lastFetched = w.TweetCap.LastFetched
+		return
 	}
 
 	var response any
@@ -574,7 +625,8 @@ func (w *ClientWrapper) ExecuteBinding(bindingType BindingType, options *Binding
 
 			// Finally, we update the rate limits. First up it's the Tweet cap (if the BindingResourceType is Tweet)
 			if binding.ResourceType == Tweet {
-				if err = w.SetTweetCap(w.TweetCap.Used+offset, w.TweetCap.Remaining-offset, w.TweetCap.Total, w.TweetCap.Resets, w.TweetCap.LastFetched); err != nil {
+				used, remaining, total, resets, lastFetched := getTweetCap(offset)
+				if err = w.SetTweetCap(used, remaining, total, resets, lastFetched); err != nil {
 					return bindingResult, errors.Wrapf(err, "could not set TweetCap after request no. %d", requestNo-1)
 				}
 			}
@@ -614,7 +666,8 @@ func (w *ClientWrapper) ExecuteBinding(bindingType BindingType, options *Binding
 
 		// Finally, we update the rate limits. First up it's the Tweet cap (if the BindingResourceType is Tweet)
 		if binding.ResourceType == Tweet {
-			if err = w.SetTweetCap(w.TweetCap.Used+maxResults, w.TweetCap.Remaining-maxResults, w.TweetCap.Total, w.TweetCap.Resets, w.TweetCap.LastFetched); err != nil {
+			used, remaining, total, resets, lastFetched := getTweetCap(maxResults)
+			if err = w.SetTweetCap(used, remaining, total, resets, lastFetched); err != nil {
 				return bindingResult, errors.Wrapf(err, "could not set TweetCap after singleton %s request", binding.Type.String())
 			}
 		}

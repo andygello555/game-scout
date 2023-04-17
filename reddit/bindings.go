@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 var API = api.NewAPI(nil, api.Schema{
@@ -22,12 +21,8 @@ var API = api.NewAPI(nil, api.Schema{
 		return api.HTTPRequest{Request: req}
 	}).SetResponseMethod(func(binding api.Binding[accessTokenResponse, AccessToken], response accessTokenResponse, args ...any) AccessToken {
 		client := binding.Attrs()["client"].(*Client)
-		client.AccessToken = &AccessToken{
-			accessTokenResponse: response,
-			FetchedTime:         time.Now().UTC(),
-			ExpireTime:          time.Now().UTC().Add(time.Second * time.Duration(response.ExpiresIn)),
-		}
-		return *client.AccessToken
+		client.setAccessToken(response)
+		return *client.AccessToken()
 	}).AddAttrs(
 		func(client api.Client) (string, any) { return "client", client },
 	).SetName("access_token")),

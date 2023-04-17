@@ -100,8 +100,9 @@ func (r *RateLimit) String() string {
 const requestsPeriodCountMax = 300
 
 type Client struct {
-	Config      Config
-	AccessToken *AccessToken
+	Config           Config
+	accessTokenMutex sync.RWMutex
+	accessToken      *AccessToken
 	// rateLimits is a sync.Map of binding names to references to api.RateLimit(s). I.e.
 	//  map[string]api.RateLimit
 	rateLimits sync.Map
@@ -156,8 +157,37 @@ func (c *Client) Log(msg string) {
 	log.WARNING.Println(msg)
 }
 
+func (c *Client) AccessToken() *AccessToken {
+	c.accessTokenMutex.RLock()
+	defer c.accessTokenMutex.RUnlock()
+	if c.accessToken == nil {
+		return nil
+	}
+	return &AccessToken{
+		accessTokenResponse: c.accessToken.accessTokenResponse,
+		FetchedTime:         c.accessToken.FetchedTime,
+		ExpireTime:          c.accessToken.ExpireTime,
+	}
+}
+
+func (c *Client) setAccessToken(response accessTokenResponse) {
+	c.accessTokenMutex.Lock()
+	defer c.accessTokenMutex.Unlock()
+	c.accessToken = &AccessToken{
+		accessTokenResponse: response,
+		FetchedTime:         time.Now().UTC(),
+		ExpireTime:          time.Now().UTC().Add(time.Second * time.Duration(response.ExpiresIn)),
+	}
+}
+
 func (c *Client) RefreshToken() (err error) {
-	if c.AccessToken == nil || c.AccessToken.Expired() {
+	refresh := func() bool {
+		c.accessTokenMutex.RLock()
+		defer c.accessTokenMutex.RUnlock()
+		return c.accessToken == nil || c.accessToken.Expired()
+	}()
+
+	if refresh {
 		if _, err = API.Execute("access_token"); err != nil {
 			err = errors.Wrap(err, "could not fetched access_token for Reddit API")
 		}
@@ -240,7 +270,13 @@ func (c *Client) Run(ctx context.Context, bindingName string, attrs map[string]a
 		}
 
 		// Then we will set the headers from the AccessToken for this request
-		for header, values := range c.AccessToken.Headers() {
+		headers := func() http.Header {
+			c.accessTokenMutex.RLock()
+			defer c.accessTokenMutex.RUnlock()
+			return c.accessToken.Headers()
+		}()
+
+		for header, values := range headers {
 			for _, value := range values {
 				request.Header.Add(header, value)
 			}

@@ -61,6 +61,8 @@ github.com/andygello555/agem v1.0.2 h1:+WvErgnQYSmSZfviOnGbqn6HC2Z5Gkq4jPv5xLP7X
 github.com/andygello555/agem v1.0.2/go.mod h1:QX1Da5PpvjO8oujQ2oOIVOxsI63t2mwzGMg2w2vnbzM=
 github.com/andygello555/gapi v1.0.0 h1:kqxk37lFjAiGQZpwYD52L2FM9h0uvUvYhZSuZ4huZ20=
 github.com/andygello555/gapi v1.0.0/go.mod h1:dzB8kvK74KuQTGFo7EvmRbtuu78Y9neyXmnwlbd9UHo=
+github.com/andygello555/gapi v1.0.1 h1:FnGGYVl2SkpkD5sAcroApSVeR0/wtFotI8ywvBEhtBA=
+github.com/andygello555/gapi v1.0.1/go.mod h1:dzB8kvK74KuQTGFo7EvmRbtuu78Y9neyXmnwlbd9UHo=
 github.com/andygello555/go-steamcmd v1.0.0 h1:fci0WASRmbLH4bmRifPojyOXI+3QBYZiTMxznd9pRVo=
 github.com/andygello555/go-steamcmd v1.0.0/go.mod h1:NXdNjIrm0ALxOtVbEH9TFwU7fvJB6vZJmfG10rShonQ=
 github.com/andygello555/gotils/v2 v2.1.0 h1:/nL14tDKiVyVNY/iBU8nQZHVYmQF4A5WoUbWUC0XvAY=

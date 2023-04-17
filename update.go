@@ -437,9 +437,7 @@ func twitterBatchProducer(
 		}
 
 		// Check if there is a new rate limit
-		myTwitter.Client.Mutex.Lock()
-		rateLimit, ok = myTwitter.Client.RateLimits[myTwitter.RecentSearch]
-		myTwitter.Client.Mutex.Unlock()
+		rateLimit, ok = myTwitter.Client.RateLimit(myTwitter.RecentSearch)
 		log.INFO.Printf("Twitter batchNo: %d) I'm awake. New RateLimit?: %t", batchNo, ok)
 
 		// Set low and high for the next batch
@@ -709,10 +707,7 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 			len(unscrapedTwitterDevelopers), len(unscrapedTwitterDevelopers),
 		)
 
-		myTwitter.Client.Mutex.Lock()
-		rateLimit, ok := myTwitter.Client.RateLimits[myTwitter.RecentSearch]
-		myTwitter.Client.Mutex.Unlock()
-
+		rateLimit, ok := myTwitter.Client.RateLimit(myTwitter.RecentSearch)
 		// If we cannot find the rate limit, or it has already ended then we will keep making singleton requests
 		// until we refresh the rate limit.
 		for !ok || rateLimit.Reset.Time().Before(time.Now().UTC()) {
@@ -737,9 +732,7 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 			}
 
 			// Get the rate limit again
-			myTwitter.Client.Mutex.Lock()
-			rateLimit, ok = myTwitter.Client.RateLimits[myTwitter.RecentSearch]
-			myTwitter.Client.Mutex.Unlock()
+			rateLimit, ok = myTwitter.Client.RateLimit(myTwitter.RecentSearch)
 		}
 
 		log.WARNING.Printf("Managed to get rate limit for RecentSearch: %v", rateLimit)

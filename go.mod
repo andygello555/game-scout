@@ -36,7 +36,7 @@ require (
 	cloud.google.com/go/iam v0.7.0 // indirect
 	cloud.google.com/go/pubsub v1.10.0 // indirect
 	github.com/andygello555/agem v1.0.2 // indirect
-	github.com/andygello555/gapi v1.0.0 // indirect
+	github.com/andygello555/gapi v1.0.1 // indirect
 	github.com/andygello555/go-steamcmd v1.0.0 // indirect
 	github.com/andygello555/url-fmt v1.0.0 // indirect
 	github.com/antonmedv/expr v1.12.0 // indirect
