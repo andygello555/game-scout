@@ -383,7 +383,7 @@ func queueDeveloperRange(jobs chan<- *updateDeveloperJob, unscrapedDevelopers []
 }
 
 func twitterBatchProducer(
-	jobs chan<- *updateDeveloperJob,
+	jobs chan *updateDeveloperJob,
 	finishedJobs chan uuid.UUID,
 	producerDone chan<- struct{},
 	unscrapedDevelopers []*models.Developer,
@@ -425,14 +425,45 @@ func twitterBatchProducer(
 		}
 
 		// We wait until all the results have been processed by the consumer
+		noFinishedJobs := 0
 		for jobIds.Cardinality() != 0 {
 			log.INFO.Printf("Twitter Developers seen %d/%d", totalJobs-jobIds.Cardinality(), totalJobs)
 			select {
 			case id := <-finishedJobs:
 				log.INFO.Printf("Twitter consumer has been notified that job %s has finished. Ticking off...", id.String())
 				jobIds.Remove(id)
-			case <-time.After(2 * time.Second):
-				log.INFO.Printf("Twitter producer did not get any finished jobs in 2s, trying again...")
+				noFinishedJobs = 0
+			case <-time.After(globalConfig.Scrape.Constants.UpdateProducerFinishedJobTimeout.Duration):
+				noFinishedJobs++
+				if noFinishedJobs > globalConfig.Scrape.Constants.UpdateProducerFinishedJobMaxTimeouts {
+					log.ERROR.Printf(
+						"Twitter producer has not seen a new finished job in %d tries/%s. Dropping %d remaining jobs...",
+						globalConfig.Scrape.Constants.UpdateProducerFinishedJobMaxTimeouts,
+						(time.Duration(globalConfig.Scrape.Constants.UpdateProducerFinishedJobMaxTimeouts) * globalConfig.Scrape.Constants.UpdateProducerFinishedJobTimeout.Duration).String(),
+						jobIds.Cardinality(),
+					)
+
+					droppedJobs := 0
+				done:
+					for {
+						select {
+						case <-jobs:
+							droppedJobs++
+						default:
+							break done
+						}
+					}
+					log.ERROR.Printf(
+						"Twitter producer has dropped %d/%d jobs within the job queue",
+						droppedJobs, jobIds.Cardinality(),
+					)
+					break
+				} else {
+					log.INFO.Printf(
+						"Twitter producer did not get any finished jobs in %s, trying again...",
+						globalConfig.Scrape.Constants.UpdateProducerFinishedJobTimeout.Duration.String(),
+					)
+				}
 			}
 		}
 
@@ -457,7 +488,7 @@ func twitterBatchProducer(
 }
 
 func redditBatchProducer(
-	jobs chan<- *updateDeveloperJob,
+	jobs chan *updateDeveloperJob,
 	finishedJobs chan uuid.UUID,
 	producerDone chan<- struct{},
 	unscrapedDevelopers []*models.Developer,
@@ -491,14 +522,45 @@ func redditBatchProducer(
 		}
 
 		// We wait until all the results have been processed by the consumer
+		noFinishedJobs := 0
 		for jobIds.Cardinality() != 0 {
 			log.INFO.Printf("Reddit Developers seen %d/%d", totalJobs-jobIds.Cardinality(), totalJobs)
 			select {
 			case id := <-finishedJobs:
 				log.INFO.Printf("Reddit consumer has been notified that job %s has finished. Ticking off...", id.String())
 				jobIds.Remove(id)
-			case <-time.After(2 * time.Second):
-				log.INFO.Printf("Reddit producer did not get any finished jobs in 2s, trying again...")
+				noFinishedJobs = 0
+			case <-time.After(globalConfig.Scrape.Constants.UpdateProducerFinishedJobTimeout.Duration):
+				noFinishedJobs++
+				if noFinishedJobs > globalConfig.Scrape.Constants.UpdateProducerFinishedJobMaxTimeouts {
+					log.ERROR.Printf(
+						"Reddit producer has not seen a new finished job in %d tries/%s. Dropping %d remaining jobs...",
+						globalConfig.Scrape.Constants.UpdateProducerFinishedJobMaxTimeouts,
+						(time.Duration(globalConfig.Scrape.Constants.UpdateProducerFinishedJobMaxTimeouts) * globalConfig.Scrape.Constants.UpdateProducerFinishedJobTimeout.Duration).String(),
+						jobIds.Cardinality(),
+					)
+
+					droppedJobs := 0
+				done:
+					for {
+						select {
+						case <-jobs:
+							droppedJobs++
+						default:
+							break done
+						}
+					}
+					log.ERROR.Printf(
+						"Reddit producer has dropped %d/%d jobs within the job queue",
+						droppedJobs, jobIds.Cardinality(),
+					)
+					break
+				} else {
+					log.INFO.Printf(
+						"Reddit producer did not get any finished jobs in %s, trying again...",
+						globalConfig.Scrape.Constants.UpdateProducerFinishedJobTimeout.Duration.String(),
+					)
+				}
 			}
 		}
 		log.INFO.Printf("Reddit batchNo: %d) I'm awake", batchNo)

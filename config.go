@@ -654,6 +654,14 @@ type ScrapeConstants struct {
 	RedditPostsPerSubreddit int `json:"reddit_posts_per_subreddit"`
 	// UpdateDeveloperWorkers is the number of updateDeveloperWorker that will be spun up in the update phase.
 	UpdateDeveloperWorkers int `json:"update_developer_workers"`
+	// UpdateProducerFinishedJobTimeout is the amount of time that a producer within the Update Phase will wait after
+	// not receiving any new finished jobs.
+	UpdateProducerFinishedJobTimeout Duration `json:"update_producer_finished_job_timeout"`
+	// UpdateProducerFinishedJobMaxTimeouts is the number of timeouts that can occur within a producer in the Update
+	// Phase before dropping that batch of jobs. The total amount of time represented by this constant can be calculated
+	// using the following formula:
+	//  UpdateProducerFinishedJobTimeout * UpdateProducerFinishedJobMaxTimeouts
+	UpdateProducerFinishedJobMaxTimeouts int `json:"update_producer_finished_job_max_timeouts"`
 	// MaxUpdateTweets is the maximum number of tweets fetched per models.Developer in the update phase.
 	MaxUpdateTweets int `json:"max_update_tweets"`
 	// MaxUpdatePosts is the maximum number of Reddit posts fetched per models.Developer in the update phase.
