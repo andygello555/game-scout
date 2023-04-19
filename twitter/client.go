@@ -106,9 +106,12 @@ func (tc *TweetCap) CheckFresh() bool {
 }
 
 // RateLimit returns the latest twitter.RateLimit for the given BindingType. The bool represents whether there is a
-// twitter.RateLimit for the given BindingType.
+// twitter.RateLimit for the given BindingType, if this is false then the twitter.RateLimit returned will be nil.
 func (w *ClientWrapper) RateLimit(bindingType BindingType) (*twitter.RateLimit, bool) {
 	rateLimitAny, ok := w.RateLimits.Load(bindingType)
+	if !ok {
+		return nil, ok
+	}
 	return rateLimitAny.(*twitter.RateLimit), ok
 }
 
