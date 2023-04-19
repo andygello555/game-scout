@@ -157,6 +157,7 @@ func TestDiscoveryBatch(t *testing.T) {
 }
 
 var developers = flag.Int("developers", 465, "the number of developers to update in TestUpdatePhase")
+var ignoreRedditDevs = flag.Bool("ignoreRedditDevs", false, "whether to ignore Reddit developers in TestUpdatePhase")
 
 func TestUpdatePhase(t *testing.T) {
 	var (
@@ -203,6 +204,12 @@ func TestUpdatePhase(t *testing.T) {
 		devType := models.TwitterDeveloperType
 		if split := strings.Split(line, ","); len(split) > 1 {
 			id, username = split[0], split[1]
+			if *ignoreRedditDevs {
+				if testing.Verbose() {
+					fmt.Printf("Ignoring Reddit developer %q (%s), because \"ignoreRedditDevs\" was given\n", username, id)
+				}
+				continue
+			}
 			devType = models.RedditDeveloperType
 		}
 

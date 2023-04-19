@@ -685,9 +685,14 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 	// For each unscraped developer we will execute a query on RecentSearch for the developer for tweets after the
 	// latest developer snapshot's LastTweetTime. We decide how many tweets to request for each developer by dividing
 	// the remaining number of tweets for this day by the number of developers we need to update.
-	totalTweetsForEachDeveloper := (int(globalConfig.Twitter.RateLimits.TweetsPerDay) - discoveryTweets) / len(unscrapedTwitterDevelopers)
-	totalTweetsForEachDeveloper = numbers.Clamp(totalTweetsForEachDeveloper, globalConfig.Scrape.Constants.MaxUpdateTweets)
-	log.INFO.Printf("Initial number of tweets fetched for %d developers is %d", len(unscrapedTwitterDevelopers), totalTweetsForEachDeveloper)
+	totalTweetsForEachDeveloper := globalConfig.Scrape.Constants.MaxUpdateTweets
+	if len(unscrapedTwitterDevelopers) > 0 {
+		totalTweetsForEachDeveloper = (int(globalConfig.Twitter.RateLimits.TweetsPerDay) - discoveryTweets) / len(unscrapedTwitterDevelopers)
+		totalTweetsForEachDeveloper = numbers.Clamp(totalTweetsForEachDeveloper, globalConfig.Scrape.Constants.MaxUpdateTweets)
+		log.INFO.Printf("Initial number of tweets fetched for %d developers is %d", len(unscrapedTwitterDevelopers), totalTweetsForEachDeveloper)
+	} else {
+		log.WARNING.Printf("There are 0 Twitter developers to update")
+	}
 
 	// In the case that we can't get enough tweets to satisfy the minimum resources per-request for RecentSearch for
 	// any developers we will exclude developers one by one based on their latest developer snapshot
@@ -738,9 +743,14 @@ func UpdatePhase(developerIDs []string, state *ScoutState) (err error) {
 	// Because Reddit scraping is not limited to any particular maximum number of posts, so we need to find the
 	// number of requests made today using the default Reddit client's request counter.
 	redditRequestsMadeToday := int(reddit.API.Client.(*reddit.Client).RequestsMadeWithinPeriod(time.Hour * 24))
-	totalPostsForEachDeveloper := (int(globalConfig.Reddit.RateLimits.RequestsPerDay) - redditRequestsMadeToday) / len(unscrapedRedditDevelopers)
-	totalPostsForEachDeveloper = numbers.Clamp(totalPostsForEachDeveloper, globalConfig.Scrape.Constants.MaxUpdateTweets)
-	log.INFO.Printf("Number of Reddit posts to fetch for %d developers is %d", len(unscrapedRedditDevelopers), totalTweetsForEachDeveloper)
+	totalPostsForEachDeveloper := globalConfig.Scrape.Constants.MaxUpdatePosts
+	if len(unscrapedRedditDevelopers) > 0 {
+		totalPostsForEachDeveloper = (int(globalConfig.Reddit.RateLimits.RequestsPerDay) - redditRequestsMadeToday) / len(unscrapedRedditDevelopers)
+		totalPostsForEachDeveloper = numbers.Clamp(totalPostsForEachDeveloper, globalConfig.Scrape.Constants.MaxUpdatePosts)
+		log.INFO.Printf("Number of Reddit posts to fetch for %d developers is %d", len(unscrapedRedditDevelopers), totalTweetsForEachDeveloper)
+	} else {
+		log.WARNING.Printf("There are 0 Reddit developers to update")
+	}
 
 	// Start the workers for scraping games.
 	gameScrapers := models.NewStorefrontScrapers[string](
