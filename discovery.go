@@ -713,6 +713,7 @@ func RedditDiscoveryPhase(wg *sync.WaitGroup, state *ScoutState, gameScrapers *m
 		state.GetCachedField(StateType).SetOrAdd("Result", "DiscoveryStats", "TotalSnapshots", models.SetOrAddAdd.Func(scoutResult.DiscoveryStats.TotalSnapshots))
 	}
 	close(postResults)
+	log.INFO.Printf("Finished RedditDiscoveryPhase")
 	return
 }
 

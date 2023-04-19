@@ -361,19 +361,29 @@ func (w *ClientWrapper) SetTweetCap(used int, remaining int, total int, resets t
 		used, remaining, total, resets.String(), lastFetched.String(),
 	)
 
-	w.TweetCapMutex.Lock()
-	defer w.TweetCapMutex.Unlock()
-	if w.TweetCap == nil {
-		w.TweetCap = &TweetCap{}
-	}
-	w.TweetCap.Used = used
-	w.TweetCap.Remaining = remaining
-	w.TweetCap.Total = total
-	w.TweetCap.Resets = resets
-	w.TweetCap.LastFetched = lastFetched
+	// Set the TweetCap stored in memory as well as retrieving some variables for checks and logging
+	var (
+		fresh          bool
+		tweetCapString string
+	)
 
-	if !w.TweetCap.CheckFresh() {
-		log.WARNING.Printf("TweetCap (%s) is not fresh, fetching from web...", w.TweetCap.String())
+	func() {
+		w.TweetCapMutex.Lock()
+		defer w.TweetCapMutex.Unlock()
+		if w.TweetCap == nil {
+			w.TweetCap = &TweetCap{}
+		}
+		w.TweetCap.Used = used
+		w.TweetCap.Remaining = remaining
+		w.TweetCap.Total = total
+		w.TweetCap.Resets = resets
+		w.TweetCap.LastFetched = lastFetched
+		fresh = w.TweetCap.CheckFresh()
+		tweetCapString = w.TweetCap.String()
+	}()
+
+	if !fresh {
+		log.WARNING.Printf("TweetCap (%s) is not fresh, fetching from web...", tweetCapString)
 		if err = w.GetTweetCap(); err != nil {
 			return errors.Wrap(
 				err,
@@ -388,7 +398,7 @@ func (w *ClientWrapper) SetTweetCap(used int, remaining int, total int, resets t
 		// Otherwise, we just write the TweetCap to the cache file
 		log.INFO.Printf(
 			"TweetCap (%s) is fresh, writing to cache: %s",
-			w.TweetCap.String(), w.Config.TwitterTweetCapLocation(),
+			tweetCapString, w.Config.TwitterTweetCapLocation(),
 		)
 		if err = w.WriteTweetCap(); err != nil {
 			return errors.Wrap(err, "could not write TweetCap cache file")

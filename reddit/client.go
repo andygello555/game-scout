@@ -335,23 +335,20 @@ func (c *Client) Run(ctx context.Context, bindingName string, attrs map[string]a
 		c.incrementRequestPeriod()
 	}
 
-	i := 0
-	c.rateLimits.Range(func(key, value any) bool {
-		c.Log(fmt.Sprintf("%d: Binding %q - %q", i+1, key, value))
-		i++
+	latestRequestPeriodTime := time.Time{}
+	var latestRequestPeriodCount uint32
+	c.requestsPeriodCount.Range(func(key, value any) bool {
+		if currentPeriod := time.Unix(key.(int64), 0); currentPeriod.After(latestRequestPeriodTime) {
+			latestRequestPeriodTime = currentPeriod
+			latestRequestPeriodCount = value.(*atomic.Uint32).Load()
+		}
 		return true
 	})
 
-	i = 0
-	c.requestsPeriodCount.Range(func(key, value any) bool {
-		count := value.(*atomic.Uint32)
-		c.Log(fmt.Sprintf(
-			"%d: Period %q - %d", i+1,
-			time.Unix(key.(int64), 0).Format("15:04:05"), count.Load(),
-		))
-		i++
-		return true
-	})
+	c.Log(fmt.Sprintf(
+		"Latest Reddit request period is %s with a count of %d",
+		latestRequestPeriodTime.Format("15:04:05"), latestRequestPeriodCount,
+	))
 
 	return
 }
