@@ -76,6 +76,12 @@ func (state *ScoutState) GetCachedField(fieldType CachedFieldType) CachedField {
 	return state.cachedFields[fieldType]
 }
 
+// GetCachedFieldFromName will return the CachedField of the given name of a CachedFieldType using
+// CachedFieldTypeFromName.
+func (state *ScoutState) GetCachedFieldFromName(fieldTypeName string) CachedField {
+	return state.cachedFields[CachedFieldTypeFromName(fieldTypeName)]
+}
+
 // GetIterableCachedFields will return a mapping of all the CachedField that are IterableCachedField. The mapping will
 // have keys that are CachedFieldType.
 func (state *ScoutState) GetIterableCachedFields() map[CachedFieldType]IterableCachedField {
@@ -91,6 +97,12 @@ func (state *ScoutState) GetIterableCachedFields() map[CachedFieldType]IterableC
 // GetIterableCachedField will return the IterableCachedField of the given CachedFieldType.
 func (state *ScoutState) GetIterableCachedField(fieldType CachedFieldType) IterableCachedField {
 	return state.GetCachedField(fieldType).(IterableCachedField)
+}
+
+// GetIterableCachedFieldFromName will return the IterableCachedField of the given name of a CachedFieldType using
+// CachedFieldTypeFromName.
+func (state *ScoutState) GetIterableCachedFieldFromName(fieldTypeName string) IterableCachedField {
+	return state.GetCachedFieldFromName(fieldTypeName).(IterableCachedField)
 }
 
 // MergeIterableCachedFields will merge each IterableCachedField in the given ScoutState into the referred to ScoutState

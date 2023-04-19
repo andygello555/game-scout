@@ -1,7 +1,7 @@
-{{ $start := mustGet (.State.GetCachedField 4) "Start" }}
-{{ $batchSize := mustGet (.State.GetCachedField 4) "BatchSize" }}
-{{ $discoveryTweets := mustGet (.State.GetCachedField 4) "DiscoveryTweets" }}
-{{ $phase := mustGet (.State.GetCachedField 4) "Phase" }}
+{{ $start := mustGet (.State.GetCachedFieldFromName "State") "Start" }}
+{{ $batchSize := mustGet (.State.GetCachedFieldFromName "State") "BatchSize" }}
+{{ $discoveryTweets := mustGet (.State.GetCachedFieldFromName "State") "DiscoveryTweets" }}
+{{ $phase := mustGet (.State.GetCachedFieldFromName "State") "Phase" }}
 Robo-scout has encountered an error during the Scout procedure which started at {{ stamp $start }} with batchSize = {{ $batchSize }}, and discoveryTweets = {{ $discoveryTweets }}.
 
 The error occurred in the {{ $phase.String }} phase at {{ stamp .Time }}:

@@ -1057,3 +1057,23 @@ func (cft CachedFieldType) Types() []CachedFieldType {
 		StateType,
 	}
 }
+
+// CachedFieldTypeFromName returns the CachedFieldType whose name is the given string. This is a case-insensitive match.
+func CachedFieldTypeFromName(name string) CachedFieldType {
+	switch strings.ToLower(name) {
+	case "usertweettimestype":
+		return UserTweetTimesType
+	case "reddituserposttimestype":
+		return RedditUserPostTimesType
+	case "developersnapshotstype":
+		return DeveloperSnapshotsType
+	case "redditdevelopersnapshotstype":
+		return RedditDeveloperSnapshotsType
+	case "gameidstype":
+		return GameIDsType
+	case "deleteddeveloperstype":
+		return DeletedDevelopersType
+	default:
+		return StateType
+	}
+}
